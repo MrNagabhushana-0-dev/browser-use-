@@ -1,6 +1,7 @@
-from typing import Generic, TypeVar
+import json
+from typing import Annotated, Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
 
@@ -44,6 +45,41 @@ class FindElementsAction(BaseModel):
 	)
 	max_results: int = Field(default=50, description='Maximum elements to return')
 	include_text: bool = Field(default=True, description='Include text content of each element')
+
+
+def _coerce_tool_arguments(value: Any) -> Any:
+	"""Accept a dict from Python callers; the LLM sends a JSON string."""
+	if value is None:
+		return '{}'
+	if isinstance(value, dict):
+		return json.dumps(value)
+	return value
+
+
+def _require_json_object(value: str) -> str:
+	text = value.strip() or '{}'
+	try:
+		parsed = json.loads(text)
+	except json.JSONDecodeError as e:
+		raise ValueError(f'arguments must be a JSON object string, got {value!r} ({e.msg})') from e
+	if not isinstance(parsed, dict):
+		raise ValueError(f'arguments must be a JSON object, not a {type(parsed).__name__}')
+	return text
+
+
+# Arguments cross as a JSON *string* rather than an object: a free-form `dict` field
+# becomes `additionalProperties: false` under OpenAI strict structured output, which
+# would leave the model unable to name any key at all. A string sidesteps every
+# provider's object handling, and the validators below still guarantee it parses to
+# an object before any action sees it.
+class WebMCPCallAction(BaseModel):
+	"""Invoke a tool the current page declares for agents."""
+
+	name: str = Field(description='Tool name exactly as listed in <webmcp_tools>')
+	arguments: Annotated[str, BeforeValidator(_coerce_tool_arguments), AfterValidator(_require_json_object)] = Field(
+		default='{}',
+		description='Arguments as a JSON object string matching the tool signature, e.g. {"sku": "A-1", "qty": 2}',
+	)
 
 
 class SearchAction(BaseModel):

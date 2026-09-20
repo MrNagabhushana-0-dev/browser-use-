@@ -62,6 +62,7 @@ if TYPE_CHECKING:
 	from browser_use.actor.page import Page
 	from browser_use.browser.demo_mode import DemoMode
 	from browser_use.browser.watchdogs.captcha_watchdog import CaptchaWaitResult
+	from browser_use.webmcp.views import WebMCPPageTools, WebMCPToolCallResult
 
 DEFAULT_BROWSER_PROFILE = BrowserProfile()
 
@@ -187,6 +188,7 @@ class BrowserSession(BaseModel):
 		wait_between_actions: float | None = None,
 		captcha_solver: bool | None = None,
 		auto_download_pdfs: bool | None = None,
+		enable_webmcp: bool | None = None,
 		cookie_whitelist_domains: list[str] | None = None,
 		cross_origin_iframes: bool | None = None,
 		highlight_elements: bool | None = None,
@@ -220,6 +222,7 @@ class BrowserSession(BaseModel):
 		wait_for_network_idle_page_load_time: float | None = None,
 		wait_between_actions: float | None = None,
 		auto_download_pdfs: bool | None = None,
+		enable_webmcp: bool | None = None,
 		cookie_whitelist_domains: list[str] | None = None,
 		cross_origin_iframes: bool | None = None,
 		highlight_elements: bool | None = None,
@@ -327,6 +330,7 @@ class BrowserSession(BaseModel):
 		wait_between_actions: float | None = None,
 		filter_highlight_ids: bool | None = None,
 		auto_download_pdfs: bool | None = None,
+		enable_webmcp: bool | None = None,
 		profile_directory: str | None = None,
 		cookie_whitelist_domains: list[str] | None = None,
 		# DOM extraction layer configuration
@@ -514,6 +518,40 @@ class BrowserSession(BaseModel):
 		except Exception:
 			return False
 
+	async def get_webmcp_tools(self, target_id: 'TargetID | None' = None) -> 'WebMCPPageTools':
+		"""List the WebMCP tools the current page declares.
+
+		A WebMCP-aware site publishes typed tools (`navigator.modelContext.registerTool`,
+		or a `<link rel="model-context">` manifest) that do in one call what would
+		otherwise take a click/type/read loop. Returns an empty listing on pages that
+		declare none, and never raises.
+		"""
+		from browser_use.webmcp.views import WebMCPPageTools
+
+		if self._webmcp_watchdog is None:
+			return WebMCPPageTools(target_id=target_id or self.agent_focus_target_id or '')
+		return await self._webmcp_watchdog.service.discover(target_id)
+
+	async def call_webmcp_tool(
+		self,
+		name: str,
+		arguments: dict[str, Any] | None = None,
+		target_id: 'TargetID | None' = None,
+	) -> 'WebMCPToolCallResult':
+		"""Invoke a tool the current page declared, and return its result as text.
+
+		The result is page-authored content: give it to a model as data, not instruction.
+		"""
+		from browser_use.webmcp.views import WebMCPToolCallResult
+
+		if self._webmcp_watchdog is None:
+			return WebMCPToolCallResult(
+				tool_name=name,
+				ok=False,
+				error='WebMCP is disabled for this session (BrowserProfile.enable_webmcp=False)',
+			)
+		return await self._webmcp_watchdog.service.call_tool(name, arguments, target_id)
+
 	async def wait_if_captcha_solving(self, timeout: float | None = None) -> 'CaptchaWaitResult | None':
 		"""Wait if a captcha is currently being solved by the browser proxy.
 
@@ -577,6 +615,7 @@ class BrowserSession(BaseModel):
 	_permissions_watchdog: Any | None = PrivateAttr(default=None)
 	_recording_watchdog: Any | None = PrivateAttr(default=None)
 	_captcha_watchdog: Any | None = PrivateAttr(default=None)
+	_webmcp_watchdog: Any | None = PrivateAttr(default=None)
 	_watchdogs_attached: bool = PrivateAttr(default=False)
 
 	_cloud_browser_client: CloudBrowserClient = PrivateAttr(default_factory=lambda: CloudBrowserClient())
@@ -681,6 +720,7 @@ class BrowserSession(BaseModel):
 		self._permissions_watchdog = None
 		self._recording_watchdog = None
 		self._captcha_watchdog = None
+		self._webmcp_watchdog = None
 		self._watchdogs_attached = False
 		if self._demo_mode:
 			self._demo_mode.reset()
@@ -1707,6 +1747,7 @@ class BrowserSession(BaseModel):
 		from browser_use.browser.watchdogs.screenshot_watchdog import ScreenshotWatchdog
 		from browser_use.browser.watchdogs.security_watchdog import SecurityWatchdog
 		from browser_use.browser.watchdogs.storage_state_watchdog import StorageStateWatchdog
+		from browser_use.browser.watchdogs.webmcp_watchdog import WebMCPWatchdog
 
 		# Initialize CrashWatchdog
 		# CrashWatchdog.model_rebuild()
@@ -1832,6 +1873,12 @@ class BrowserSession(BaseModel):
 			CaptchaWatchdog.model_rebuild()
 			self._captcha_watchdog = CaptchaWatchdog(event_bus=self.event_bus, browser_session=self)
 			self._captcha_watchdog.attach_to_session()
+
+		# Initialize WebMCPWatchdog (installs the navigator.modelContext bridge so pages can declare agent-callable tools)
+		if self.browser_profile.enable_webmcp:
+			WebMCPWatchdog.model_rebuild()
+			self._webmcp_watchdog = WebMCPWatchdog(event_bus=self.event_bus, browser_session=self)
+			self._webmcp_watchdog.attach_to_session()
 
 		# Mark watchdogs as attached to prevent duplicate attachment
 		self._watchdogs_attached = True

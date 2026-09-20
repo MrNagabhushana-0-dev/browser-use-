@@ -58,6 +58,7 @@ from browser_use.tools.views import (
 	StructuredOutputAction,
 	SwitchTabAction,
 	UploadFileAction,
+	WebMCPCallAction,
 )
 from browser_use.utils import create_task_with_error_handling, sanitize_surrogates, time_execution_sync
 
@@ -606,6 +607,36 @@ class Tools(Generic[Context]):
 			logger.info(f'🕒 waited for {seconds} second{"" if seconds == 1 else "s"}')
 			await asyncio.sleep(actual_seconds)
 			return ActionResult(extracted_content=memory, long_term_memory=memory)
+
+		@self.registry.action(
+			'Call a tool the current page declares for agents, as listed in <webmcp_tools>. '
+			'One call does what a whole click/type/read sequence would, with typed arguments and a typed result. '
+			'Only tools named in <webmcp_tools> exist; everything else on the page still needs the UI.',
+			param_model=WebMCPCallAction,
+			# A site tool can navigate, mutate a cart, or re-render the page, which invalidates
+			# every element index queued behind it. Stop the batch and let the agent re-read state.
+			terminates_sequence=True,
+		)
+		async def call_webmcp_tool(params: WebMCPCallAction, browser_session: BrowserSession):
+			# Validated by WebMCPCallAction to be a JSON object.
+			arguments = json.loads(params.arguments)
+			result = await browser_session.call_webmcp_tool(params.name, arguments)
+
+			if not result.ok:
+				error = result.error or 'the page reported an error'
+				logger.warning(f'🧩 WebMCP tool {params.name} failed: {error}')
+				return ActionResult(error=f'WebMCP tool "{params.name}" failed: {error}')
+
+			memory = f'Called page tool {params.name}'
+			logger.info(f'🧩 {memory}')
+			content = result.content or '(the tool succeeded and returned no content)'
+			return ActionResult(
+				# Fenced and labelled: the body is page-authored text, and the model should read
+				# it as a tool result rather than as instructions that arrived from its operator.
+				extracted_content=f'<webmcp_result tool={params.name!r}>\n{content}\n</webmcp_result>',
+				long_term_memory=f'{memory} -> {content[:200]}',
+				include_extracted_content_only_once=True,
+			)
 
 		# Helper function for coordinate conversion
 		def _convert_llm_coordinates_to_viewport(llm_x: int, llm_y: int, browser_session: BrowserSession) -> tuple[int, int]:

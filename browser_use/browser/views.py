@@ -6,6 +6,7 @@ from cdp_use.cdp.target import TargetID
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer
 
 from browser_use.dom.views import DOMInteractedElement, SerializedDOMState
+from browser_use.webmcp.views import WebMCPTool
 
 # Known placeholder image data for about:blank pages - a 4x4 white PNG
 PLACEHOLDER_4PX_SCREENSHOT = (
@@ -110,6 +111,7 @@ class BrowserStateSummary:
 	pagination_buttons: list[PaginationButton] = field(default_factory=list)  # Detected pagination buttons
 	closed_popup_messages: list[str] = field(default_factory=list)  # Messages from auto-closed JavaScript dialogs
 	state_error: str | None = None  # Safe, model-visible explanation when the current state could not be captured
+	webmcp_tools: list[WebMCPTool] = field(default_factory=list)  # Tools the page declares for agents (see browser_use.webmcp)
 
 
 @dataclass

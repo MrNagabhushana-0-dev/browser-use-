@@ -153,6 +153,44 @@ The agent opens a browser, looks up the repository, and prints its answer.
 
 <br/>
 
+# WebMCP: call what a site declares
+
+Driving a UI is the fallback, not the goal. A site can hand an agent typed, callable
+tools directly, and browser-use will use them:
+
+```js
+// on the page
+navigator.modelContext.registerTool({
+  name: 'add_to_cart',
+  description: 'Add a product to the cart',
+  inputSchema: { type: 'object', properties: { sku: { type: 'string' } }, required: ['sku'] },
+  async execute({ sku }) { /* the site's own code */ },
+});
+```
+
+browser-use installs that API into every page *before* the page's own scripts run, so
+sites written as `if (navigator.modelContext) { ... }` actually register. Declared tools
+are discovered per page, listed to the model, and invoked in a single step with typed
+arguments and a typed result — no element index, no click, no re-read. Sites can also
+declare tools through a `<link rel="model-context">` manifest backed by a same-origin
+JSON-RPC endpoint, which is then called with the browser's own session.
+
+Straight from Python, no agent required:
+
+```python
+tools = await browser_session.get_webmcp_tools()
+result = await browser_session.call_webmcp_tool('add_to_cart', {'sku': 'SOCK-42'})
+```
+
+Tool metadata is page-authored, so it is treated as untrusted input: names must be plain
+identifiers, text is clipped and stripped of markup, cross-origin endpoints are refused,
+and a page gets a bounded share of the context window. Turn the whole layer off with
+`BrowserSession(enable_webmcp=False)`, which leaves page JS untouched.
+
+Runnable demo: [`examples/features/webmcp_tools.py`](examples/features/webmcp_tools.py)
+
+<br/>
+
 # Browser Use Benchmark v2
 
 <img alt="Browser Use Benchmark v2 - Mean rubric score by model and cost per task" src="static/hard_benchmark_v2.jpg" width="100%">

@@ -711,6 +711,13 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 	# --- Downloads ---
 	auto_download_pdfs: bool = Field(default=True, description='Automatically download PDFs when navigating to PDF viewer pages.')
 
+	# --- Agent-facing page APIs ---
+	enable_webmcp: bool = Field(
+		default=True,
+		description='Install the WebMCP bridge (navigator.modelContext) so pages can declare tools the agent calls '
+		'directly instead of being clicked through. Disable to leave page JS untouched.',
+	)
+
 	profile_directory: str = 'Default'  # e.g. 'Profile 1', 'Profile 2', 'Custom Profile', etc.
 
 	# these can be found in BrowserLaunchArgs, BrowserLaunchPersistentContextArgs, BrowserNewContextArgs, BrowserConnectArgs:

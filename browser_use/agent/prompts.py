@@ -7,6 +7,7 @@ from browser_use.dom.views import NodeType, SimplifiedNode
 from browser_use.llm.messages import ContentPartImageParam, ContentPartTextParam, ImageURL, SystemMessage, UserMessage
 from browser_use.observability import observe_debug
 from browser_use.utils import is_new_tab_page, sanitize_surrogates
+from browser_use.webmcp.views import render_webmcp_prompt
 
 if TYPE_CHECKING:
 	from browser_use.agent.views import AgentStepInfo
@@ -325,11 +326,21 @@ class AgentMessagePrompt:
 				closed_popups_text += f'  - {popup_msg}\n'
 			closed_popups_text += '\n'
 
+		# Tools the page itself declares. Rendered above the element dump so the model weighs
+		# a one-call option before it starts planning clicks; costs nothing on the vast
+		# majority of pages, which declare none.
+		webmcp_text = ''
+		webmcp_tools = getattr(self.browser_state, 'webmcp_tools', None)
+		if webmcp_tools:
+			webmcp_body = render_webmcp_prompt(webmcp_tools, self.browser_state.url)
+			if webmcp_body:
+				webmcp_text = f'<webmcp_tools>\n{webmcp_body}\n</webmcp_tools>\n'
+
 		browser_state = f"""{stats_text}{current_tab_text}
 Available tabs:
 {tabs_text}
 {page_info_text}
-{state_error_text}{recent_events_text}{closed_popups_text}{pdf_message}Interactive elements{truncated_text}:
+{state_error_text}{recent_events_text}{closed_popups_text}{pdf_message}{webmcp_text}Interactive elements{truncated_text}:
 {elements_text}
 """
 		return browser_state
