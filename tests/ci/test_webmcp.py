@@ -334,6 +334,26 @@ async def test_tools_do_not_leak_across_navigations(browser_session, webmcp_serv
 	assert not result.ok
 
 
+async def test_a_tab_opened_later_is_instrumented_too(browser_session, webmcp_server):
+	"""An init script is bound to a CDP target, so every new tab needs its own.
+
+	Installing once per session would leave any tab the agent opens mid-task running
+	WebMCP-aware sites that quietly register nothing.
+	"""
+	await _goto(browser_session, webmcp_server.url_for('/plain'))
+
+	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=webmcp_server.url_for('/shop'), new_tab=True))
+	await event
+	await event.event_result(raise_if_any=True, raise_if_none=False)
+
+	page_tools = await browser_session.get_webmcp_tools()
+	assert {tool.name for tool in page_tools.tools} == {'add_to_cart', 'search_products', 'explode'}
+
+	result = await browser_session.call_webmcp_tool('add_to_cart', {'sku': 'TAB-1'})
+	assert result.ok, result.error
+	assert result.content == 'added 1 x TAB-1'
+
+
 async def test_webmcp_can_be_turned_off_entirely(webmcp_server):
 	"""Opting out must leave page JS untouched, not merely hide the listing."""
 	session = BrowserSession(
