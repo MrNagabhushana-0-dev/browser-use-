@@ -191,6 +191,54 @@ Runnable demo: [`examples/features/webmcp_tools.py`](examples/features/webmcp_to
 
 <br/>
 
+# Use it from Claude Code, Codex or Antigravity
+
+browser-use runs as an MCP server over stdio, with no cloud account and no API key
+needed for the browser tools themselves:
+
+```bash
+uvx browser-use[cli] --mcp
+```
+
+Alongside the usual navigate/click/type tools, MCP clients get the two that do the most
+work per token: `browser_run_script` (read or act on many elements in one call, instead of
+one call per element) and `browser_list_page_tools` / `browser_call_page_tool` (call the
+tools a WebMCP-aware site declares). Read-only tools carry `readOnlyHint`, which Codex
+needs under `approval_policy = "never"` or it cancels them unprompted.
+
+**Claude Code** — `.mcp.json` in the project, or `~/.claude.json` for every project:
+
+```json
+{
+  "mcpServers": {
+    "browser-use": { "command": "uvx", "args": ["browser-use[cli]", "--mcp"] }
+  }
+}
+```
+
+**Codex** — `~/.codex/config.toml` (or `codex mcp add browser-use -- uvx "browser-use[cli]" --mcp`):
+
+```toml
+[mcp_servers.browser-use]
+command = "uvx"
+args = ["browser-use[cli]", "--mcp"]
+```
+
+**Antigravity** — `~/.gemini/config/mcp_config.json`, shared by the IDE and CLI:
+
+```json
+{
+  "mcpServers": {
+    "browser-use": { "command": "uvx", "args": ["browser-use[cli]", "--mcp"] }
+  }
+}
+```
+
+The server opens a headful browser by default, which is what you want on a desktop. For a
+headless box set `BROWSER_USE_HEADLESS=true` in the server's `env`.
+
+<br/>
+
 # Browser Use Benchmark v2
 
 <img alt="Browser Use Benchmark v2 - Mean rubric score by model and cost per task" src="static/hard_benchmark_v2.jpg" width="100%">

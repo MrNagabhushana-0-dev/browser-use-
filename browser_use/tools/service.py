@@ -48,6 +48,7 @@ from browser_use.tools.views import (
 	InputTextAction,
 	NavigateAction,
 	NoParamsAction,
+	RunPageScriptAction,
 	SaveAsPdfAction,
 	ScreenshotAction,
 	ScrollAction,
@@ -57,7 +58,6 @@ from browser_use.tools.views import (
 	SendKeysAction,
 	StructuredOutputAction,
 	SwitchTabAction,
-	RunPageScriptAction,
 	UploadFileAction,
 	WebMCPCallAction,
 )
