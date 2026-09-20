@@ -128,8 +128,29 @@ const visible = (el) => {
 	const r = el.getBoundingClientRect();
 	if (r.width < 2 || r.height < 2) return false;
 	const s = getComputedStyle(el);
-	return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+	if (s.visibility === 'hidden' || s.display === 'none' || s.opacity === '0') return false;
+	// Painted but not operable. Content behind a modal is usually marked one of these ways,
+	// and a tool bound to it would click something the user cannot reach.
+	if (el.closest('[inert], [aria-hidden="true"]')) return false;
+	return true;
 };
+
+// While a modal is open, it is the only thing a person can interact with. Synthesizing
+// tools for the page behind it produces tools that look fine and click nothing.
+const openModal = () => {
+	const candidates = deepQuery('dialog[open], [role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]');
+	for (let i = candidates.length - 1; i >= 0; i--) {
+		const el = candidates[i];
+		const r = el.getBoundingClientRect();
+		const s = getComputedStyle(el);
+		if (r.width > 2 && r.height > 2 && s.visibility !== 'hidden' && s.display !== 'none') return el;
+	}
+	return null;
+};
+
+const MODAL = openModal();
+// Everything below scans this root. With no modal it is the document, and nothing changes.
+const SCOPE = MODAL || document;
 
 // Never describe a field that holds a secret, and never read its value back.
 const sensitive = (el) => {
@@ -175,7 +196,7 @@ const formName = (form, submit) => {
 };
 
 const forms = [];
-for (const form of deepQuery('form').slice(0, MAX_FORMS)) {
+for (const form of deepQuery('form', SCOPE).slice(0, MAX_FORMS)) {
 	if (!visible(form)) continue;
 	const controls = deepQuery(CONTROL_SELECTOR, form)
 		.filter(visible).slice(0, MAX_CONTROLS).map(describeControl);
@@ -192,7 +213,7 @@ for (const form of deepQuery('form').slice(0, MAX_FORMS)) {
 
 // Buttons that are not inside a form: the standalone verbs of the page.
 const buttons = [];
-for (const el of deepQuery(BUTTON_SELECTOR).slice(0, 200)) {
+for (const el of deepQuery(BUTTON_SELECTOR, SCOPE).slice(0, 200)) {
 	if (buttons.length >= MAX_BUTTONS) break;
 	if (!visible(el) || el.closest('form')) continue;
 	const name = accessibleName(el);
@@ -202,7 +223,7 @@ for (const el of deepQuery(BUTTON_SELECTOR).slice(0, 200)) {
 
 // Controls outside any form — a site-wide search box usually lives here.
 const loose = [];
-for (const el of deepQuery(CONTROL_SELECTOR).slice(0, 120)) {
+for (const el of deepQuery(CONTROL_SELECTOR, SCOPE).slice(0, 120)) {
 	if (loose.length >= MAX_CONTROLS) break;
 	if (!visible(el) || el.closest('form')) continue;
 	loose.push(describeControl(el));
@@ -211,7 +232,7 @@ for (const el of deepQuery(CONTROL_SELECTOR).slice(0, 120)) {
 // Tables and repeated lists are where the page's *data* lives. Turning them into read
 // tools is what stops an agent paging a table into its context one screenshot at a time.
 const tables = [];
-for (const table of deepQuery('table, [role="table"], [role="grid"]').slice(0, 6)) {
+for (const table of deepQuery('table, [role="table"], [role="grid"]', SCOPE).slice(0, 6)) {
 	if (!visible(table)) continue;
 	const headerCells = [...table.querySelectorAll('thead th, thead td, tr:first-child th')]
 		.map(h => clean(h.innerText)).filter(Boolean).slice(0, 12);
@@ -228,7 +249,7 @@ for (const table of deepQuery('table, [role="table"], [role="grid"]').slice(0, 6
 
 // Tabs and in-page navigation: the verbs that move between views without a form.
 const views = [];
-for (const el of deepQuery('[role="tab"], nav a[href], [role="navigation"] a[href]').slice(0, 60)) {
+for (const el of deepQuery('[role="tab"], nav a[href], [role="navigation"] a[href]', SCOPE).slice(0, 60)) {
 	if (views.length >= 12) break;
 	if (!visible(el)) continue;
 	const name = accessibleName(el);
@@ -239,7 +260,7 @@ for (const el of deepQuery('[role="tab"], nav a[href], [role="navigation"] a[hre
 // Pagination, recognised by what the control says rather than by any particular markup.
 const PAGER = {next: /^(next|next page|\u203a|\u00bb|\u2192)$/i, previous: /^(prev|previous|previous page|\u2039|\u00ab|\u2190)$/i};
 const pagers = [];
-for (const el of deepQuery(BUTTON_SELECTOR).slice(0, 200)) {
+for (const el of deepQuery(BUTTON_SELECTOR, SCOPE).slice(0, 200)) {
 	if (!visible(el)) continue;
 	const name = accessibleName(el);
 	for (const kind of Object.keys(PAGER)) {
@@ -251,7 +272,7 @@ for (const el of deepQuery(BUTTON_SELECTOR).slice(0, 200)) {
 
 // Standalone checkboxes and switches: settings, filters, consent.
 const toggles = [];
-for (const el of deepQuery('input[type=checkbox], [role="switch"], [role="checkbox"]').slice(0, 40)) {
+for (const el of deepQuery('input[type=checkbox], [role="switch"], [role="checkbox"]', SCOPE).slice(0, 40)) {
 	if (toggles.length >= 12) break;
 	if (!visible(el) || el.closest('form')) continue;
 	const name = accessibleName(el);
@@ -260,6 +281,7 @@ for (const el of deepQuery('input[type=checkbox], [role="switch"], [role="checkb
 }
 
 return {url: location.href, origin: location.origin, title: document.title,
+        modal: MODAL ? (accessibleName(MODAL) || clean(MODAL.innerText).slice(0, 60)) : null,
         forms: forms, buttons: buttons, controls: loose,
         tables: tables, views: views, pagers: pagers, toggles: toggles};
 """

@@ -108,6 +108,8 @@ class SiteManifest(BaseModel):
 	# since been redesigned is worse than no cache: it fails in a way that reads as the
 	# agent being wrong rather than the cache being stale.
 	fingerprint: str = ''
+	# Set when these tools describe an open dialog rather than the page itself.
+	modal: str | None = None
 	created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 	def get(self, name: str) -> SynthesizedTool | None:

@@ -514,3 +514,74 @@ async def test_a_table_inside_a_web_component_reads(browser_session, shadow_serv
 	assert result.ok, result.error
 	rows = json.loads(result.content.split('\n')[0])
 	assert rows == [{'Ref': 'S-1', 'Status': 'shipped'}, {'Ref': 'S-2', 'Status': 'pending'}]
+
+
+# A page whose real controls sit behind an open modal. Everything underneath is painted
+# but unreachable, which is exactly the case where a plausible-looking tool clicks nothing.
+MODAL_PAGE = """<!DOCTYPE html>
+<html><head><title>Consent</title></head><body>
+	<main aria-hidden="true">
+		<button id="buy">Buy now</button>
+		<form><input aria-label="Search catalogue"><button type="submit">Search</button></form>
+	</main>
+	<dialog id="consent" open aria-label="Cookie choices">
+		<button id="accept">Accept all</button>
+		<button id="reject">Reject all</button>
+	</dialog>
+	<div id="said">idle</div>
+<script>
+	const say = t => document.getElementById('said').textContent = t;
+	accept.addEventListener('click', () => { say('accepted'); consent.close(); });
+	reject.addEventListener('click', () => { say('rejected'); consent.close(); });
+	buy.addEventListener('click', () => say('bought'));
+</script>
+</body></html>"""
+
+
+@pytest.fixture(scope='module')
+def modal_server():
+	server = HTTPServer()
+	server.start()
+	server.expect_request('/modal').respond_with_data(MODAL_PAGE, content_type='text/html')
+	yield server
+	server.stop()
+
+
+async def test_only_the_open_modal_is_offered(browser_session, modal_server):
+	"""Tools for the page behind a modal look fine and click nothing."""
+	await _goto(browser_session, modal_server.url_for('/modal'))
+
+	page_tools = await browser_session.get_webmcp_tools()
+	names = {tool.name for tool in page_tools.tools}
+
+	assert 'accept_all' in names and 'reject_all' in names, f'the dialog was missed: {sorted(names)}'
+	assert 'buy_now' not in names, 'a control behind the modal was offered'
+	assert 'search' not in names, 'a form behind the modal was offered'
+
+
+async def test_the_page_underneath_comes_back_once_the_modal_closes(browser_session, modal_server):
+	await _goto(browser_session, modal_server.url_for('/modal'))
+	await browser_session.get_webmcp_tools()
+
+	result = await browser_session.call_webmcp_tool('accept_all', {})
+	assert result.ok, result.error
+	said = await browser_session.run_page_script("return document.getElementById('said').textContent;")
+	assert json.loads(said.value) == 'accepted'
+
+	# The dialog closed and aria-hidden went with it, so the real page is operable again.
+	await browser_session.run_page_script("document.querySelector('main').removeAttribute('aria-hidden'); return 1;")
+	synthesizer = SiteToolSynthesizer(browser_session)
+	names = {tool.name for tool in (await synthesizer.synthesize()).tools}
+	assert 'buy_now' in names, f'the page did not come back: {sorted(names)}'
+
+
+async def test_a_modal_surface_is_never_cached_as_the_site(browser_session, modal_server, tmp_path):
+	"""It is correct now and wrong the moment the dialog closes."""
+	from browser_use.synthesis.store import ManifestStore
+
+	store = ManifestStore(path=tmp_path / 'site_tools.json', enabled=True)
+	await _goto(browser_session, modal_server.url_for('/modal'))
+
+	manifest = await SiteToolSynthesizer(browser_session, store=store).synthesize()
+	assert manifest.modal == 'Cookie choices'
+	assert store.origins == [], 'a transient dialog was written to the site cache'

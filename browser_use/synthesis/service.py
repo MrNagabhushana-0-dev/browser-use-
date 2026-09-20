@@ -354,8 +354,13 @@ class SiteToolSynthesizer:
 		if not origin:
 			return SiteManifest(origin='')
 
+		# A modal is transient state, not the site's tool surface. Its tools are correct
+		# right now and wrong the moment it closes, so they are neither served from cache nor
+		# written to it.
+		modal = affordances.get('modal')
+
 		shape = fingerprint(affordances)
-		if not refresh:
+		if not refresh and not modal:
 			if (in_memory := self._manifests.get(origin)) and in_memory.fingerprint == shape:
 				return in_memory
 			# Learned in an earlier session, and the page still looks the way it did.
@@ -411,9 +416,11 @@ class SiteToolSynthesizer:
 			title=str(affordances.get('title', ''))[:200],
 			tools=tools,
 			fingerprint=shape,
+			modal=str(modal)[:80] if modal else None,
 		)
 		self._manifests[origin] = manifest
-		self.store.put(manifest)
+		if not modal:
+			self.store.put(manifest)
 		if tools:
 			self.logger.debug(f'🔧 Synthesized {len(tools)} tool(s) for {origin}: {", ".join(t.name for t in tools)}')
 		return manifest
