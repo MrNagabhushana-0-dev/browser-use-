@@ -29,9 +29,46 @@ Context = TypeVar('Context')
 
 logger = logging.getLogger(__name__)
 
+
 # Actions that only look, report, or touch the agent's own files. These stay available
 # while the person is driving: an agent that cannot even read the page or finish its
 # task has not been paused, it has been broken.
+def _describe_action(action_name: str, params: Any) -> str:
+	"""One line a person can scan, without dumping every parameter.
+
+	Values are deliberately abridged: this log is shown to whoever takes over, and a
+	verbatim dump of what was typed would put form contents — including anything the agent
+	was given to fill in — into a record nobody thinks of as sensitive.
+	"""
+	verb = action_name.replace('_', ' ')
+	try:
+		fields = params.model_dump(exclude_none=True) if hasattr(params, 'model_dump') else {}
+	except Exception:
+		fields = {}
+
+	for key in ('url', 'query', 'name', 'purpose', 'reason', 'text'):
+		if value := fields.get(key):
+			return f'{verb}: {str(value)[:80]}'
+	if (index := fields.get('index')) is not None:
+		return f'{verb} element {index}'
+	return verb
+
+
+def _record_activity(browser_session: Any, action_name: str, params: Any, outcome: Any) -> None:
+	"""Append to the shared control log, never failing the action if it cannot."""
+	try:
+		control = getattr(browser_session, 'control', None)
+		if control is None:
+			return
+		line = _describe_action(action_name, params)
+		if getattr(outcome, 'error', None):
+			line += f' — failed: {str(outcome.error)[:80]}'
+		control.record(line)
+	except Exception:
+		# A logging failure must never turn a working action into a failed one.
+		pass
+
+
 READ_ONLY_ACTIONS = frozenset(
 	{
 		'done',
@@ -424,9 +461,16 @@ class Registry(Generic[Context]):
 			# All functions are now normalized to accept kwargs only
 			# Call with params and unpacked special context
 			try:
-				return await action.function(params=validated_params, **special_context)
+				outcome = await action.function(params=validated_params, **special_context)
 			except Exception as e:
 				raise
+
+			# Keep a plain-language record of what the agent did, so whoever takes the wheel
+			# back can see it. Written here rather than in each action because this is the
+			# one place every action passes through.
+			if browser_session is not None:
+				_record_activity(browser_session, action_name, validated_params, outcome)
+			return outcome
 
 		except BrowserError as e:
 			# BrowserError can carry structured short/long-term memory for the LLM

@@ -111,3 +111,55 @@ def test_the_handover_summary_says_what_the_agent_did():
 	assert 'Control is with the human' in summary
 	assert 'I want to check something' in summary
 	assert 'filtered to last 30 days' in summary
+
+
+async def test_the_agent_logs_what_it_did_for_whoever_takes_over(browser_session, shared_server):
+	"""The log existed but nothing wrote to it, which made handover guesswork."""
+	await _goto(browser_session, shared_server.url_for('/shared'))
+	tools = Tools()
+
+	await tools.registry.execute_action(
+		'run_page_script',
+		{'script': "document.getElementById('b').click(); return 1;", 'purpose': 'press the button once'},
+		browser_session=browser_session,
+	)
+	await tools.registry.execute_action(
+		'watch_page', {'seconds': 1.0, 'reason': 'confirm the counter moved'}, browser_session=browser_session
+	)
+
+	recent = browser_session.control.recent()
+	assert len(recent) >= 2, f'nothing was recorded: {recent}'
+	assert any('press the button once' in line for line in recent)
+	assert any('confirm the counter moved' in line for line in recent)
+
+	summary = browser_session.control.summary()
+	assert 'Last' in summary and 'press the button once' in summary
+
+
+async def test_a_failed_action_says_so_in_the_log(browser_session, shared_server):
+	await _goto(browser_session, shared_server.url_for('/shared'))
+	tools = Tools()
+
+	await tools.registry.execute_action(
+		'run_page_script',
+		{'script': 'return definitelyNotDefined();', 'purpose': 'break something'},
+		browser_session=browser_session,
+	)
+
+	recent = browser_session.control.recent()
+	assert any('failed' in line for line in recent), f'a failure was logged as a success: {recent}'
+
+
+async def test_the_log_does_not_transcribe_what_was_typed(browser_session, shared_server):
+	"""The log is shown to a person on handover; it is not a place for form contents."""
+	await _goto(browser_session, shared_server.url_for('/shared'))
+	tools = Tools()
+
+	await tools.registry.execute_action(
+		'run_page_script',
+		{'script': "return 'ok';", 'purpose': 'a' * 400},
+		browser_session=browser_session,
+	)
+
+	line = browser_session.control.recent()[-1]
+	assert len(line) < 160, f'the log entry is a dump, not a summary: {len(line)} chars'
