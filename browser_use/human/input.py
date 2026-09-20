@@ -94,11 +94,19 @@ class HumanInput:
 
 	# -- pointer ---------------------------------------------------------------------
 
-	async def move_to(self, x: float, y: float, target_id=None) -> None:
-		"""Glide the pointer to (x, y), emitting the moves along the way."""
+	async def move_to(self, x: float, y: float, target_id=None, haste: float = 1.0) -> None:
+		"""Glide the pointer to (x, y), emitting the moves along the way.
+
+		`haste` divides the travel time. It is not a cheat around looking human: people do
+		not move at one speed. A considered click on a link in a paragraph is slow; slapping
+		the Retry button you have hit forty times, or reacting in a game, is fast, and a
+		hand that took 700ms to reach a known button every single time would be the
+		strange-looking one. The path shape and the per-step jitter are unchanged.
+		"""
+		assert haste > 0, 'move_to() haste must be positive'
 		cdp = await self._session(target_id)
 		path = bezier_path((self.x, self.y), (x, y), self.rng)
-		total_ms = move_duration_ms(((x - self.x) ** 2 + (y - self.y) ** 2) ** 0.5, self.rng)
+		total_ms = move_duration_ms(((x - self.x) ** 2 + (y - self.y) ** 2) ** 0.5, self.rng) / haste
 		per_step = (total_ms / max(1, len(path))) / 1000.0
 
 		for px, py in path:
@@ -115,13 +123,14 @@ class HumanInput:
 		button: MouseButton = 'left',
 		click_count: int = 1,
 		target_id=None,
+		haste: float = 1.0,
 	) -> None:
 		"""Move to the point, settle, press, hold briefly, release."""
-		await self.move_to(x, y, target_id=target_id)
+		await self.move_to(x, y, target_id=target_id, haste=haste)
 		cdp = await self._session(target_id)
 
 		# A hand pauses on arrival before committing. Hover handlers need this too.
-		await asyncio.sleep(self.rng.uniform(0.03, 0.12))
+		await asyncio.sleep(self.rng.uniform(0.03, 0.12) / haste)
 
 		await self._mouse(cdp, 'mousePressed', self.x, self.y, button=button, clickCount=click_count)
 		await asyncio.sleep(click_dwell_ms(self.rng) / 1000.0)

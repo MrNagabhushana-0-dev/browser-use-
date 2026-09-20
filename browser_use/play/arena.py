@@ -30,7 +30,14 @@ logger = logging.getLogger(__name__)
 
 # How long to wait after an input before judging what it did. Human reaction time is
 # around 250ms; this is the same idea pointed the other way.
-REACTION = 0.18
+REACTION = 0.12
+
+# Pointer speed multipliers. A considered click on a link is slow; a player reacting, or
+# slapping a Retry button they have hit forty times, is not — and at default speed a
+# single probe pass cost more than ten seconds, which measured out as 25-59 seconds of a
+# 95 second session spent looking for buttons rather than playing.
+PROBE_HASTE = 4.0
+PLAY_HASTE = 3.0
 
 # How often the picture is sampled, independent of the player's pace.
 SAMPLE = 0.1
@@ -210,7 +217,7 @@ class GameArena:
 		elif action.kind == 'tap_key' and action.key:
 			await self.human.press(action.key)
 		elif action.kind == 'click':
-			await self.human.click_box(self._box(action.where))
+			await self.human.click_box(self._box(action.where), haste=PLAY_HASTE)
 		elif action.kind == 'hold_click':
 			await self.human.press_and_hold(self._box(action.where), action.seconds)
 
@@ -252,7 +259,7 @@ class GameArena:
 			if len(keyframes) < 8 and timeline and timeline[-1] >= 6 and (not keyframes or at - keyframes[-1][0] > 8):
 				keyframes.append((at, newest.data))
 
-	async def _recover(self, timeline: list[int], limit: int = 7) -> bool:
+	async def _recover(self, timeline: list[int], limit: int = 5) -> bool:
 		"""Get out of a game-over card, and know whether it worked.
 
 		Clicking the middle of the play surface is the obvious move and it is wrong: a
@@ -268,8 +275,8 @@ class GameArena:
 		"""
 		for spot in BUTTON_SPOTS[:limit]:
 			before = len(timeline)
-			await self.human.click_box(self._spot(*spot))
-			await asyncio.sleep(0.4)
+			await self.human.click_box(self._spot(*spot), haste=PROBE_HASTE)
+			await asyncio.sleep(0.28)
 			window = timeline[before:]
 			if window and (sum(window) / len(window)) >= ACTIVE_THRESHOLD:
 				return True
@@ -277,7 +284,7 @@ class GameArena:
 		for key in ('Space', 'Enter', 'r'):
 			before = len(timeline)
 			await self.human.press(key)
-			await asyncio.sleep(0.35)
+			await asyncio.sleep(0.25)
 			window = timeline[before:]
 			if window and (sum(window) / len(window)) >= ACTIVE_THRESHOLD:
 				return True
@@ -325,7 +332,11 @@ class GameArena:
 					last_moved = time.monotonic()
 				elif time.monotonic() - last_moved > STALL_SECONDS:
 					report.stalls += 1
-					if await self._recover(timeline):
+					# Back off. If the first few spots have not worked three times running, the
+					# button is somewhere this does not know about, and re-running the whole
+					# search every 2.5 seconds spends the session on it.
+					budget = 5 if report.stalls <= 3 else 2
+					if await self._recover(timeline, limit=budget):
 						report.restarts += 1
 					last_moved = time.monotonic()
 		finally:
