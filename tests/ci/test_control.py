@@ -163,3 +163,21 @@ async def test_the_log_does_not_transcribe_what_was_typed(browser_session, share
 
 	line = browser_session.control.recent()[-1]
 	assert len(line) < 160, f'the log entry is a dump, not a summary: {len(line)} chars'
+
+
+def test_the_takeover_log_does_not_record_what_was_typed():
+	"""_replace_sensitive_data has already put the real password into the action by the
+	time the log is written, so dumping the typed string here undoes the care taken to log
+	only placeholder names — into a record shown to whoever takes the wheel back."""
+	from browser_use.tools.registry.service import _describe_action
+	from browser_use.tools.views import InputTextAction
+
+	line = _describe_action('input', InputTextAction(index=3, text='hunter2'))
+
+	assert 'hunter2' not in line
+	assert '3' in line, 'it should still say which field was filled'
+
+	# Things that are addresses rather than contents stay: they are how a person follows along.
+	from browser_use.tools.views import SearchAction
+
+	assert 'cat pictures' in _describe_action('search', SearchAction(query='cat pictures'))

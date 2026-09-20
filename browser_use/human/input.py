@@ -39,6 +39,31 @@ MouseButton = Literal['left', 'right', 'middle']
 WHEEL_NOTCH_PX = 100.0
 
 
+# What a real keyboard sends for the keys an agent actually presses: DOM code, virtual key
+# code, and the text the key produces (None for keys that produce none). Chrome derives
+# keyCode from this; dispatching a named key without it yields keyCode 0 and no keypress
+# event at all, which is why "press Enter" quietly did nothing on much of the web.
+NAMED_KEYS: dict[str, tuple[str, int, str | None]] = {
+	'Enter': ('Enter', 13, '\r'),
+	'Tab': ('Tab', 9, '\t'),
+	'Escape': ('Escape', 27, None),
+	'Backspace': ('Backspace', 8, None),
+	'Delete': ('Delete', 46, None),
+	'ArrowUp': ('ArrowUp', 38, None),
+	'ArrowDown': ('ArrowDown', 40, None),
+	'ArrowLeft': ('ArrowLeft', 37, None),
+	'ArrowRight': ('ArrowRight', 39, None),
+	'Home': ('Home', 36, None),
+	'End': ('End', 35, None),
+	'PageUp': ('PageUp', 33, None),
+	'PageDown': ('PageDown', 34, None),
+	'Space': ('Space', 32, ' '),
+}
+
+# Characters inside a typed string that are really key presses.
+_CHAR_KEYS = {'\n': 'Enter', '\r': 'Enter', '\t': 'Tab'}
+
+
 class HumanInput:
 	"""Synthesizes the input a person would produce, over CDP.
 
@@ -136,6 +161,12 @@ class HumanInput:
 		"""Type character by character with human cadence."""
 		cdp = await self._session(target_id)
 		for char, delay_ms in zip(text, keystroke_delays(text, self.rng, wpm=wpm)):
+			# A newline or tab dispatched as a bare character has no key code behind it, so
+			# Blink treats it as text alone: no new line in a <textarea>, no focus move.
+			if named := _CHAR_KEYS.get(char):
+				await self.press(named, target_id=target_id)
+				await asyncio.sleep(max(0.004, delay_ms / 1000.0))
+				continue
 			await cdp.cdp_client.send.Input.dispatchKeyEvent(
 				params={'type': 'keyDown', 'text': char, 'key': char, 'unmodifiedText': char},
 				session_id=cdp.session_id,
@@ -150,12 +181,21 @@ class HumanInput:
 	async def press(self, key: str, code: str | None = None, key_code: int | None = None, target_id=None) -> None:
 		"""Press and release a named key such as Enter, Tab, ArrowDown or Escape."""
 		cdp = await self._session(target_id)
+		known_code, known_key_code, text = NAMED_KEYS.get(key, (None, None, None))
 		params: dict[str, Any] = {'key': key}
-		if code:
-			params['code'] = code
-		if key_code is not None:
-			params['windowsVirtualKeyCode'] = key_code
-			params['nativeVirtualKeyCode'] = key_code
+		if code or known_code:
+			params['code'] = code or known_code
+		resolved = key_code if key_code is not None else known_key_code
+		if resolved is not None:
+			params['windowsVirtualKeyCode'] = resolved
+			params['nativeVirtualKeyCode'] = resolved
+		# Enter and Tab carry text. Without it Blink emits no keypress, so implicit form
+		# submission — the only way a search box with no submit button ever sends — never
+		# fires. That is most of what pressing Enter is for.
+		if text is not None:
+			params['text'] = text
+			params['unmodifiedText'] = text
+		up = {k: v for k, v in params.items() if k not in ('text', 'unmodifiedText')}
 
 		await cdp.cdp_client.send.Input.dispatchKeyEvent(
 			params={'type': 'keyDown', **params},  # type: ignore[arg-type]
@@ -163,6 +203,6 @@ class HumanInput:
 		)
 		await asyncio.sleep(self.rng.uniform(0.04, 0.11))
 		await cdp.cdp_client.send.Input.dispatchKeyEvent(
-			params={'type': 'keyUp', **params},  # type: ignore[arg-type]
+			params={'type': 'keyUp', **up},  # type: ignore[arg-type]
 			session_id=cdp.session_id,
 		)

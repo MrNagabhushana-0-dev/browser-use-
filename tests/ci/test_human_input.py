@@ -7,6 +7,7 @@ and whether a site that scores automation lets you through — so these tests as
 event stream a page actually observes, not just that a click "worked".
 """
 
+import asyncio
 import json
 
 import pytest
@@ -185,3 +186,52 @@ async def test_the_agents_own_scroll_action_produces_real_wheel_events(browser_s
 	log = await _log(browser_session)
 	assert log['wheels'], 'the agent scroll produced no wheel events at all'
 	assert all(w[1] is True for w in log['wheels']), 'scroll events must be trusted'
+
+
+NO_BUTTON_FORM = """<html><body>
+<form action="/landed" method="get">
+	<input type="search" name="q" aria-label="Search the docs" autofocus>
+</form>
+<textarea aria-label="Notes"></textarea>
+</body></html>"""
+
+
+async def test_pressing_enter_submits_a_form_that_has_no_submit_button(browser_session):
+	"""Implicit form submission needs a keypress, and Blink emits none for a key dispatched
+	without a virtual key code. A search box with no button is the commonest form on the
+	web, so this path silently doing nothing was most of what 'press Enter' was for."""
+	server = HTTPServer()
+	server.start()
+	try:
+		server.expect_request('/form').respond_with_data(NO_BUTTON_FORM, content_type='text/html')
+		server.expect_request('/landed').respond_with_data('<html><body>arrived</body></html>', content_type='text/html')
+		await _goto(browser_session, server.url_for('/form'))
+
+		human = browser_session.human
+		await human.type_text('typed by a person')
+		await human.press('Enter')
+		await asyncio.sleep(1.0)
+
+		url = await browser_session.run_page_script('return location.pathname + location.search;')
+		assert '/landed' in json.loads(url.value), 'Enter did not submit the form'
+		assert 'q=typed+by+a+person' in json.loads(url.value)
+	finally:
+		server.stop()
+
+
+async def test_a_newline_inside_typed_text_is_a_real_key_press(browser_session):
+	"""Dispatched as a bare character it is text with no key behind it, so a <textarea>
+	never gets its new line."""
+	server = HTTPServer()
+	server.start()
+	try:
+		server.expect_request('/form').respond_with_data(NO_BUTTON_FORM, content_type='text/html')
+		await _goto(browser_session, server.url_for('/form'))
+		await browser_session.run_page_script("document.querySelector('textarea').focus(); return 1;")
+
+		await browser_session.human.type_text('first\nsecond')
+
+		value = await browser_session.run_page_script("return document.querySelector('textarea').value;")
+		assert json.loads(value.value) == 'first\nsecond'
+	finally:
+		server.stop()

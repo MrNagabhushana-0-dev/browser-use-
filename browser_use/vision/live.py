@@ -39,6 +39,9 @@ DEFAULT_BUFFER = 300
 # catches a scroll, a navigation or a scene cut; below 2 it fires on JPEG noise alone.
 CHANGE_THRESHOLD = 4
 
+# The one CDP event a screencast delivers on. Named because two subsystems want it.
+_SCREENCAST_EVENT = 'Page.screencastFrame'
+
 # Thumbnail edge length. Small enough that layout noise averages away, large enough that a
 # change confined to one region of the page still moves the number.
 _THUMB = 8
@@ -53,6 +56,20 @@ def frame_signature(jpeg_bytes: bytes) -> bytes:
 	except Exception:
 		return b''
 	return image.tobytes()
+
+
+def comparison_available() -> bool:
+	"""Whether frames can be compared at all.
+
+	Without Pillow every signature is empty, every distance is zero, and a watch reports
+	that the page was static — which is a confident wrong answer to the model rather than
+	a missing one. Callers say so instead.
+	"""
+	try:
+		from PIL import Image  # noqa: F401
+	except Exception:
+		return False
+	return True
 
 
 def signature_distance(a: bytes, b: bytes) -> int:
@@ -85,6 +102,8 @@ class WatchResult:
 	# Change score per captured frame, so a caller can see *when* things moved even for
 	# frames it chose not to keep.
 	motion: list[int] = field(default_factory=list)
+	# False when frames were captured but none could be decoded, i.e. nothing was compared.
+	comparable: bool = True
 
 	@property
 	def changed(self) -> bool:
@@ -93,6 +112,11 @@ class WatchResult:
 	def describe(self) -> str:
 		if not self.frames_captured:
 			return 'Captured nothing: the page produced no frames.'
+		if not self.comparable:
+			return (
+				f'Watched {self.seconds:.1f}s over {self.frames_captured} frames, but frames could not be '
+				'compared (Pillow is not installed), so whether the page changed is unknown.'
+			)
 		if not self.changed:
 			return f'Watched {self.seconds:.1f}s over {self.frames_captured} frames: the page was static.'
 		moments = ', '.join(f'{f.at:.1f}s' for f in self.keyframes)
@@ -108,6 +132,14 @@ class LiveView:
 	def __init__(self, browser_session: 'BrowserSession', buffer: int = DEFAULT_BUFFER) -> None:
 		self.browser_session = browser_session
 		self._frames: deque[Frame] = deque(maxlen=buffer)
+		# Set while running: the frame handler we displaced, and whether the stream is
+		# someone else's (the video recorder's) rather than ours to start and stop.
+		self._incumbent = None
+		self._shared = False
+		# Bound once. `self._on_frame` builds a fresh bound method on every attribute access,
+		# so `self._on_frame is self._on_frame` is False and an identity check against the
+		# registry would never match — which silently skipped the unregister on stop.
+		self._handler = self._on_frame
 		self._started_at: float = 0.0
 		self._session_id: str | None = None
 		self._running = False
@@ -134,23 +166,62 @@ class LiveView:
 		self._frames.clear()
 		self._started_at = time.monotonic()
 
-		self.browser_session.cdp_client.register.Page.screencastFrame(self._on_frame)
-		await cdp.cdp_client.send.Page.startScreencast(
-			params={
-				'format': 'jpeg',
-				'quality': quality,
-				'maxWidth': max_width,
-				'everyNthFrame': every_nth,
-			},
-			session_id=cdp.session_id,
-		)
+		# cdp-use's event registry is one slot per method: register() overwrites whatever was
+		# there. The video recorder listens on this same event, so registering blind would
+		# take its frames away — and because it also takes over acking, Chrome would stop
+		# sending frames to it entirely, silently truncating the recording for the rest of
+		# the session. Chain onto the incumbent instead and leave its stream alone.
+		self._incumbent = self._frame_handler()
+		# Sharing is about the *stream*, not the handler slot: only the video recorder runs a
+		# screencast of its own, and stopping or re-parameterising it would truncate the
+		# recording. A handler registered by anything else says nothing about whether frames
+		# are already flowing, so we still start our own.
+		recorder = getattr(self.browser_session, '_recording_watchdog', None)
+		self._shared = bool(recorder is not None and recorder.is_recording)
+		self.browser_session.cdp_client.register.Page.screencastFrame(self._handler)
+		if not self._shared:
+			await cdp.cdp_client.send.Page.startScreencast(
+				params={
+					'format': 'jpeg',
+					'quality': quality,
+					'maxWidth': max_width,
+					'everyNthFrame': every_nth,
+				},
+				session_id=cdp.session_id,
+			)
 		self._running = True
 		self.logger.debug(f'🎥 Live view started on {cdp.target_id[-4:]}')
+
+	@property
+	def _registry(self):
+		"""cdp-use's EventRegistry: one callback slot per CDP method, last writer wins."""
+		return getattr(self.browser_session.cdp_client, '_event_registry', None)
+
+	def _frame_handler(self):
+		"""Whoever is currently registered for screencast frames, if anyone."""
+		handlers = getattr(self._registry, '_handlers', None)
+		return handlers.get(_SCREENCAST_EVENT) if isinstance(handlers, dict) else None
 
 	async def stop(self) -> None:
 		if not self._running:
 			return
 		self._running = False
+
+		# Only hand the slot back if it is still ours; something registered after us owns it.
+		if self._frame_handler() is self._handler:
+			if self._incumbent is not None:
+				self.browser_session.cdp_client.register.Page.screencastFrame(self._incumbent)
+			elif self._registry is not None:
+				try:
+					self._registry.unregister(_SCREENCAST_EVENT)
+				except Exception:
+					pass
+		self._incumbent = None
+
+		if self._shared:
+			# The stream was not ours to start, so it is not ours to stop.
+			self._shared = False
+			return
 		try:
 			await self.browser_session.cdp_client.send.Page.stopScreencast(session_id=self._session_id)
 		except Exception as e:
@@ -169,6 +240,16 @@ class LiveView:
 		except Exception:
 			return
 		self._frames.append(Frame(at=time.monotonic() - self._started_at, data=data, signature=frame_signature(data)))
+
+		if self._incumbent is not None:
+			try:
+				self._incumbent(event, session_id)
+			except Exception as e:
+				self.logger.debug(f'🎥 Forwarding a frame failed: {type(e).__name__}: {e}')
+		if self._shared:
+			# The recorder owns this stream and does its own acking; a second ack would ask
+			# Chrome for frames it has already queued.
+			return
 
 		from browser_use.utils import create_task_with_error_handling
 
@@ -194,6 +275,7 @@ class LiveView:
 		answer — then any frame that differs enough from the last one kept. If more
 		survive than asked for, keep the biggest changes, restored to time order.
 		"""
+		assert max_keyframes >= 1, 'keyframes() keeps at least the first frame'
 		frames = self.frames
 		if not frames:
 			return [], []
@@ -230,10 +312,21 @@ class LiveView:
 			self._frames.clear()
 			self._started_at = time.monotonic()
 
-		await asyncio.sleep(seconds)
-		captured = len(self._frames)
-		keyframes, motion = self.keyframes(max_keyframes=max_keyframes, threshold=threshold)
-
-		if not already_running:
-			await self.stop()
-		return WatchResult(seconds=seconds, frames_captured=captured, keyframes=keyframes, motion=motion)
+		try:
+			await asyncio.sleep(seconds)
+			captured = len(self._frames)
+			keyframes, motion = self.keyframes(max_keyframes=max_keyframes, threshold=threshold)
+			comparable = any(frame.signature for frame in self._frames)
+		finally:
+			# A step timeout cancels us mid-sleep. Without this the screencast runs for the
+			# rest of the session, decoding frames nobody asked for and holding the frame
+			# handler away from the recorder.
+			if not already_running:
+				await self.stop()
+		return WatchResult(
+			seconds=seconds,
+			frames_captured=captured,
+			keyframes=keyframes,
+			motion=motion,
+			comparable=comparable or not captured,
+		)

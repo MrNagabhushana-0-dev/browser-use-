@@ -5,6 +5,8 @@ in a loop is the most expensive thing an agent can do. These tests pin the barga
 stream continuously and cost nothing, and only the ones that differ are kept.
 """
 
+import asyncio
+
 import pytest
 from pytest_httpserver import HTTPServer
 
@@ -179,3 +181,42 @@ async def test_a_watch_cannot_park_the_run(browser_session, motion_server):
 		browser_session=browser_session,
 	)
 	assert _time.monotonic() - started < 25, 'watch_page ignored its upper bound'
+
+
+async def test_watching_does_not_steal_frames_from_whoever_was_already_listening(browser_session, motion_server):
+	"""cdp-use's event registry is one slot per method. The video recorder listens on
+	Page.screencastFrame too, so registering blind took its frames away — and with them the
+	acks Chrome waits for, silently truncating the recording for the rest of the session."""
+	await _goto(browser_session, motion_server.url_for('/moving'))
+	registry = browser_session.cdp_client.register
+	handlers = browser_session.cdp_client._event_registry._handlers
+	seen: list[str] = []
+
+	def incumbent(event, session_id):
+		seen.append(event['sessionId'])
+
+	registry.Page.screencastFrame(incumbent)
+	live = LiveView(browser_session)
+	result = await live.watch(seconds=2.0)
+
+	assert result.frames_captured > 0
+	assert seen, 'the handler that was already registered stopped receiving frames'
+
+	assert handlers.get('Page.screencastFrame') is incumbent, 'the slot was not handed back'
+	browser_session.cdp_client._event_registry.unregister('Page.screencastFrame')
+
+
+async def test_a_cancelled_watch_does_not_leave_the_screencast_running(browser_session, motion_server):
+	"""A step timeout cancels watch() mid-sleep. Without cleanup the stream runs for the
+	rest of the session, decoding frames nobody asked for."""
+	await _goto(browser_session, motion_server.url_for('/moving'))
+	live = LiveView(browser_session)
+
+	task = asyncio.create_task(live.watch(seconds=30.0))
+	await asyncio.sleep(1.0)
+	task.cancel()
+	with pytest.raises(asyncio.CancelledError):
+		await task
+
+	assert live._running is False
+	assert browser_session.cdp_client._event_registry._handlers.get('Page.screencastFrame') is None

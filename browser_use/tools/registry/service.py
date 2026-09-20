@@ -46,7 +46,10 @@ def _describe_action(action_name: str, params: Any) -> str:
 	except Exception:
 		fields = {}
 
-	for key in ('url', 'query', 'name', 'purpose', 'reason', 'text'):
+	# Deliberately no 'text': that is the typed string, and _replace_sensitive_data has
+	# already substituted the real password into it by the time we are called. The index
+	# below says which field was filled without saying what went in it.
+	for key in ('url', 'query', 'name', 'purpose', 'reason'):
 		if value := fields.get(key):
 			return f'{verb}: {str(value)[:80]}'
 	if (index := fields.get('index')) is not None:
