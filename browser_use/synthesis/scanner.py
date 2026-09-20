@@ -173,7 +173,10 @@ const describeControl = (el) => ({
 });
 
 const CONTROL_SELECTOR = 'input, textarea, select, [contenteditable="true"], [role="textbox"], [role="searchbox"], [role="combobox"]';
-const BUTTON_SELECTOR = 'button, input[type=submit], input[type=button], [role="button"], a[href]';
+// Deliberately excludes a[href] unless it is marked up as a button. A link changes the
+// page's location, which `navigate` already does; treating anchors as tools turned a news
+// front page into two dozen 'tools' named after its headlines.
+const BUTTON_SELECTOR = 'button, input[type=submit], input[type=button], [role="button"]';
 
 // Deliberately NOT accessibleName(form): a form's innerText is every label, option and
 // hint inside it, which yields names like "Email Password Sign in". What a person would
@@ -249,7 +252,7 @@ for (const table of deepQuery('table, [role="table"], [role="grid"]', SCOPE).sli
 
 // Tabs and in-page navigation: the verbs that move between views without a form.
 const views = [];
-for (const el of deepQuery('[role="tab"], nav a[href], [role="navigation"] a[href]', SCOPE).slice(0, 60)) {
+for (const el of deepQuery('[role="tab"]', SCOPE).slice(0, 60)) {
 	if (views.length >= 12) break;
 	if (!visible(el)) continue;
 	const name = accessibleName(el);

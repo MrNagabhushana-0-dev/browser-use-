@@ -19,6 +19,7 @@ what it is.
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from browser_use.synthesis.scanner import SCAN_JS
@@ -44,6 +45,28 @@ _SEARCH_HINTS = ('search', 'find', 'query', 'lookup')
 
 # Rows a single read tool will return. A cap is what makes it a tool rather than a dump.
 MAX_ROWS_PER_READ = 100
+
+# Labels that are page content wearing a control's clothes. Running synthesis over real
+# sites turned a news front page into tools named after its headlines and usernames, and
+# a package index into external_link_1 through external_link_10 — all of which crowded the
+# genuine affordances out of the budget.
+_CONTENT_PATTERNS = (
+	re.compile(r'\b\d+\s*(second|minute|hour|day|week|month|year)s?\s+ago\b', re.I),
+	re.compile(r'\b\d+\s+(comment|point|vote|repl(y|ies)|answer|view)s?\b', re.I),
+	re.compile(r'^\s*\d[\d.,]*\s*$'),
+)
+
+# A label repeated more than this is boilerplate ("external link", "read more"), not a verb.
+MAX_SAME_LABEL = 2
+
+
+def looks_like_content(label: str) -> bool:
+	"""True when a label reads as something on the page rather than something to do."""
+	text = label.strip()
+	if len(text) > 60 or len(text.split()) > 8:
+		return True
+	return any(pattern.search(text) for pattern in _CONTENT_PATTERNS)
+
 
 # Resolve a stored locator back to a live element and report where it is. Mirrors the
 # preference order in Locator: the handles authors keep stable come first.
@@ -159,6 +182,7 @@ class SiteToolSynthesizer:
 	def __init__(self, browser_session: 'BrowserSession', store: 'ManifestStore | None' = None) -> None:
 		self.browser_session = browser_session
 		self._manifests: dict[str, SiteManifest] = {}
+		self._seen_labels: dict[str, int] = {}
 		# Persists across sessions, so the second agent to visit a site inherits what the
 		# first one worked out — including which tools have actually been run.
 		self.store = store if store is not None else ManifestStore()
@@ -243,9 +267,15 @@ class SiteToolSynthesizer:
 			# No submit button: Enter on the last field is how a person sends it.
 			steps.append(ToolStep(action='press', locator=steps[-1].locator, key='Enter'))
 
-		# The commonest affordance on the web deserves a predictable name.
+		# The commonest affordance on the web deserves a predictable name. Recognise it by
+		# the markup as well as the wording: a bare <input name="q"> with no label and no
+		# submit button is still a search box, and is exactly what large sites ship.
 		text = f'{label} {" ".join(properties)}'.lower()
-		is_search = any(hint in text for hint in _SEARCH_HINTS)
+		roles = {c.get('role') for c in controls}
+		types = {c.get('type') for c in controls}
+		is_search = (
+			any(hint in text for hint in _SEARCH_HINTS) or 'searchbox' in roles or 'search' in types or set(properties) == {'q'}
+		)
 		name = 'search' if is_search and len(properties) == 1 else to_identifier(label, fallback='submit_form')
 		name = self._unique(name, used)
 
@@ -265,9 +295,15 @@ class SiteToolSynthesizer:
 
 	def _tool_from_button(self, button: dict, used: set[str]) -> SynthesizedTool | None:
 		label = button.get('name') or ''
-		if not label:
+		if not label or looks_like_content(label):
 			return None
-		name = self._unique(to_identifier(label, fallback='press'), used)
+		base = to_identifier(label, fallback='press')
+		if self._seen_labels.get(base, 0) >= MAX_SAME_LABEL:
+			# The third "External link" on a page is boilerplate, and numbering them
+			# produces tools nobody can choose between.
+			return None
+		self._seen_labels[base] = self._seen_labels.get(base, 0) + 1
+		name = self._unique(base, used)
 		return SynthesizedTool(
 			name=name,
 			description=f'{label.strip()} — synthesized from a control on this page',
@@ -300,7 +336,7 @@ class SiteToolSynthesizer:
 
 	def _tool_from_view(self, view: dict, used: set[str]) -> SynthesizedTool | None:
 		label = view.get('name') or ''
-		if not label:
+		if not label or looks_like_content(label):
 			return None
 		verb = 'switch_to' if view.get('role') == 'tab' else 'open'
 		name = self._unique(f'{verb}_{to_identifier(label, fallback="view")}', used)
@@ -370,6 +406,7 @@ class SiteToolSynthesizer:
 				return cached
 
 		used: set[str] = set()
+		self._seen_labels = {}
 		tools: list[SynthesizedTool] = []
 
 		for form in affordances.get('forms') or []:

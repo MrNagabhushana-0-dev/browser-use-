@@ -624,3 +624,62 @@ async def test_the_prompt_separates_proven_tools_from_untried_ones(browser_sessi
 	assert 'have not been run yet' in rendered
 	proven_at = rendered.index('run successfully before')
 	assert rendered.index('- search(', proven_at) < rendered.index('have not been run yet')
+
+
+# What a real news front page looks like: a search box buried among headlines, usernames
+# and timestamps, all of them anchors. Running synthesis over the live web turned pages
+# like this into two dozen "tools" named after their content.
+NOISY_PAGE = """<!DOCTYPE html><html><head><title>Feed</title></head><body>
+	<form><input name="q"><button type="submit">Go</button></form>
+	<a href="/a">Pirate face rescues LLM from a very long headline that keeps going on and on</a>
+	<a href="/b">skepticalgenius</a>
+	<a href="/c">3 hours ago</a>
+	<a href="/d">82 comments</a>
+	<a href="/e">External link</a>
+	<a href="/f">External link</a>
+	<a href="/g">External link</a>
+	<a href="/h">External link</a>
+	<button id="real">Add comment</button>
+</body></html>"""
+
+
+@pytest.fixture(scope='module')
+def noisy_server():
+	server = HTTPServer()
+	server.start()
+	server.expect_request('/noisy').respond_with_data(NOISY_PAGE, content_type='text/html')
+	yield server
+	server.stop()
+
+
+async def test_page_content_does_not_become_tools(browser_session, noisy_server):
+	"""Measured against the live web: this is what filled the budget with junk."""
+	await _goto(browser_session, noisy_server.url_for('/noisy'))
+	page_tools = await browser_session.get_webmcp_tools()
+	names = {tool.name for tool in page_tools.tools}
+
+	# Headlines, usernames, timestamps and comment counts are content, not verbs.
+	assert not any('pirate' in n for n in names), f'a headline became a tool: {sorted(names)}'
+	assert not any('skepticalgenius' in n for n in names), f'a username became a tool: {sorted(names)}'
+	assert not any('hours_ago' in n or 'comments' in n for n in names), f'metadata became a tool: {sorted(names)}'
+
+	# Repeated boilerplate is not four different tools either.
+	assert len([n for n in names if n.startswith('external_link')]) == 0, f'boilerplate links: {sorted(names)}'
+
+	# What genuinely is actionable survives.
+	assert 'search' in names, f'the search form was lost: {sorted(names)}'
+	assert 'add_comment' in names, f'a real button was lost: {sorted(names)}'
+
+
+async def test_a_bare_search_input_is_still_recognised_as_search(browser_session, noisy_server):
+	"""Large sites ship <input name="q"> with no label and no obvious submit.
+
+	Recognising search only by the words around it named this submit_form(q) — correct and
+	useless, because a model looking for a way to search will not find it under that name.
+	"""
+	await _goto(browser_session, noisy_server.url_for('/noisy'))
+	page_tools = await browser_session.get_webmcp_tools()
+
+	search = next((t for t in page_tools.tools if t.name == 'search'), None)
+	assert search is not None
+	assert 'query' in search.input_schema['properties'], search.input_schema
