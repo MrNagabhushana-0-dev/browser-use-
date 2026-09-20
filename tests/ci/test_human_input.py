@@ -163,3 +163,25 @@ async def test_the_pointer_does_not_teleport_between_clicks(browser_session, rec
 	first = log['moves'][0]
 	# The track begins near the previous resting point, not at the target.
 	assert abs(first[0] - 50) < 80 and abs(first[1] - 50) < 80, f'path started at {first[:2]}, expected near (50, 50)'
+
+
+async def test_the_agents_own_scroll_action_produces_real_wheel_events(browser_session, recorder_server):
+	"""Pins a property the codebase already has, so a refactor cannot quietly lose it.
+
+	The agent's scroll goes through Input.synthesizeScrollGesture rather than
+	window.scrollBy. The difference is invisible in a screenshot and decisive on any page
+	that implements its own scrolling on top of `wheel` — swapping one for the other would
+	break short-form feeds and virtualized lists with every test still green.
+	"""
+	from browser_use.browser.events import ScrollEvent
+
+	await _goto(browser_session, recorder_server.url_for('/recorder'))
+	await browser_session.run_page_script('window.log.wheels = []; return 1;')
+
+	event = browser_session.event_bus.dispatch(ScrollEvent(direction='down', amount=500))
+	await event
+	await event.event_result(raise_if_any=False, raise_if_none=False)
+
+	log = await _log(browser_session)
+	assert log['wheels'], 'the agent scroll produced no wheel events at all'
+	assert all(w[1] is True for w in log['wheels']), 'scroll events must be trusted'

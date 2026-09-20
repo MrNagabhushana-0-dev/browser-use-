@@ -191,6 +191,55 @@ Runnable demo: [`examples/features/webmcp_tools.py`](examples/features/webmcp_to
 
 <br/>
 
+# You sign in. The agent takes over.
+
+Google, Instagram and most of the interesting web will not admit a fresh automated
+profile — no session, a datacenter IP, and a login that escalates to a device prompt the
+moment it sees one. So don't automate the login. Sign in yourself, and hand over the live
+browser:
+
+```bash
+python -m browser_use.cobrowse      # sign in here, leave it open
+```
+
+```python
+from browser_use.cobrowse import attach, focus_human_tab
+
+session = await attach(cdp_url)     # the URL the command printed
+await focus_human_tab(session)      # lands on the tab you left
+```
+
+Same profile, same cookies, same IP, same tab. Attaching opens no tab and steals no
+focus. The profile is persistent, so you sign in once, not once per run. Closing the
+command shuts Chrome down cleanly over CDP — which matters more than it sounds, because
+Chrome only commits cookies to disk on its normal shutdown path, and a killed browser
+loses the session while leaving localStorage behind to make it look fine.
+
+# Driving the UI, not scripting the DOM
+
+`element.click()` produces `isTrusted === false`, emits no movement, and bypasses hit
+testing. Every hover menu that never opens and every feed that never advances traces back
+to that. `session.human` produces the event stream a hand would:
+
+```python
+await session.human.click_box((x, y, w, h))   # curved approach, hover, hold, release
+await session.human.wheel(900)                # real wheel notches, not window.scrollBy
+await session.human.type_text('hello')        # per-character, human cadence
+```
+
+# Watching, instead of guessing when to screenshot
+
+One screenshot is the wrong instrument for anything in motion. Screenshotting in a loop is
+the most expensive thing an agent can do. `watch_page` streams frames over CDP, where they
+cost nothing, and keeps only the ones that differ — a static page costs a single frame.
+
+```python
+result = await session.live_view.watch(seconds=5)
+result.describe()   # 'Watched 5.0s over 47 frames and kept 4 that differ, at 0.0s, 1.2s, ...'
+```
+
+<br/>
+
 # It remembers the route that worked
 
 The second time an agent does something on a site, it should not re-derive the
