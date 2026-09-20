@@ -51,6 +51,10 @@ def setup_test_environment():
 	test_env_vars = {
 		'SKIP_LLM_API_KEY_VERIFICATION': 'true',
 		'ANONYMIZED_TELEMETRY': 'false',
+		# Tests must not write learned site tools into the developer's real config dir, nor
+		# inherit a manifest from a previous run. Persistence is covered explicitly, with a
+		# store pointed at tmp_path.
+		'BROWSER_USE_SITE_TOOLS_CACHE': 'false',
 		'BROWSER_USE_CLOUD_SYNC': 'true',
 		'BROWSER_USE_CLOUD_API_URL': 'http://placeholder-will-be-replaced-by-specific-test-fixtures',
 		'BROWSER_USE_CLOUD_UI_URL': 'http://placeholder-will-be-replaced-by-specific-test-fixtures',

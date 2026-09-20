@@ -582,6 +582,69 @@ class ProxySettings(BaseModel):
 		return getattr(self, key)
 
 
+# A proxy presents one CA. More than a handful means someone pointed this at a full trust
+# bundle, which Chromium already has and which would produce an unusable command line.
+MAX_PROXY_CA_CERTS = 4
+
+
+def proxy_ca_pins(cert_path: str | Path) -> list[str]:
+	"""SHA-256 SPKI pins for the certificates in a PEM file.
+
+	Chromium has no --cacert. The nearest equivalent that is not "turn TLS off" is
+	--ignore-certificate-errors-spki-list, which accepts exactly the public keys you name
+	and nothing else — so a corporate or agent proxy that re-terminates TLS can be trusted
+	without weakening verification for anything on the open internet.
+
+	Returns [] on anything unreadable: a browser that fails to launch because a CA file
+	moved is worse than one that launches and reports a certificate error you can read.
+	"""
+	import base64
+	import hashlib
+	import re
+	import subprocess
+
+	try:
+		pem = Path(cert_path).expanduser().read_text()
+	except OSError:
+		return []
+
+	blocks = re.findall(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', pem, re.S)
+	if not blocks:
+		return []
+	# A full trust bundle is hundreds of public CAs that Chromium already trusts; pinning
+	# them adds nothing and produces an unusable command line. Point this at the one cert
+	# your proxy presents.
+	if len(blocks) > MAX_PROXY_CA_CERTS:
+		logger.warning(f'{cert_path} holds {len(blocks)} certificates; expected a single proxy CA. Ignoring it.')
+		return []
+
+	pins: list[str] = []
+	for block in blocks:
+		try:
+			der = subprocess.run(
+				['openssl', 'x509', '-pubkey', '-noout'],
+				input=block,
+				capture_output=True,
+				text=True,
+				timeout=10,
+				check=True,
+			).stdout
+			key_der = subprocess.run(
+				['openssl', 'pkey', '-pubin', '-outform', 'der'],
+				# Bytes, not text: DER is binary, and passing the str straight through raised
+				# a TypeError that the except below then swallowed into "no pins found".
+				input=der.encode(),
+				capture_output=True,
+				timeout=10,
+				check=True,
+			).stdout
+		except Exception as e:
+			logger.debug(f'Could not read a certificate from {cert_path}: {type(e).__name__}: {e}')
+			continue
+		pins.append(base64.b64encode(hashlib.sha256(key_der).digest()).decode())
+	return pins
+
+
 class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, BrowserLaunchArgs, BrowserNewContextArgs):
 	"""
 	A BrowserProfile is a static template collection of kwargs that can be passed to:
@@ -710,6 +773,24 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 
 	# --- Downloads ---
 	auto_download_pdfs: bool = Field(default=True, description='Automatically download PDFs when navigating to PDF viewer pages.')
+
+	# --- Agent-facing page APIs ---
+	proxy_ca_cert: str | None = Field(
+		default_factory=lambda: os.environ.get('BROWSER_USE_PROXY_CA_CERT'),
+		description='PEM file holding the CA of a TLS-terminating proxy. Chromium has no --cacert, so its '
+		'public key is pinned via --ignore-certificate-errors-spki-list: that one key is accepted and '
+		'verification stays on for everything else. Defaults to $BROWSER_USE_PROXY_CA_CERT.',
+	)
+	synthesize_site_tools: bool = Field(
+		default=True,
+		description="Induce a typed tool surface from a page's own affordances when the site publishes no "
+		'WebMCP tools of its own. Set False to only ever use tools a site actually declares.',
+	)
+	enable_webmcp: bool = Field(
+		default=True,
+		description='Install the WebMCP bridge (navigator.modelContext) so pages can declare tools the agent calls '
+		'directly instead of being clicked through. Disable to leave page JS untouched.',
+	)
 
 	profile_directory: str = 'Default'  # e.g. 'Profile 1', 'Profile 2', 'Custom Profile', etc.
 
@@ -903,6 +984,28 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 
 		self.user_data_dir = temp_dir
 
+	def _headful_user_agent(self) -> str:
+		"""This Chrome's own UA with the headless marker taken out.
+
+		Derived from the running binary rather than hardcoded, so it never claims a Chrome
+		version that is not the one actually rendering the page — a mismatch between the UA
+		string and the engine's real behaviour is itself a signal.
+		"""
+		import re
+		import subprocess
+
+		version = ''
+		try:
+			path = self.executable_path or os.environ.get('BROWSERUSE_CHROME_PATH')
+			if path:
+				out = subprocess.run([str(path), '--version'], capture_output=True, text=True, timeout=10).stdout
+				if match := re.search(r'(\d+\.\d+\.\d+\.\d+)', out):
+					version = match.group(1)
+		except Exception:
+			version = ''
+		version = version or '141.0.0.0'
+		return f'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36'
+
 	def get_args(self) -> list[str]:
 		"""Get the list of all Chrome CLI launch args for this profile (compiled from defaults, user-provided, and system-specific)."""
 
@@ -923,13 +1026,27 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 			f'--user-data-dir={self.user_data_dir}',
 			f'--profile-directory={self.profile_directory}',
 			*(CHROME_DOCKER_ARGS if (CONFIG.IN_DOCKER or not self.chromium_sandbox) else []),
+			*(
+				[f'--ignore-certificate-errors-spki-list={",".join(pins)}']
+				if self.proxy_ca_cert and (pins := proxy_ca_pins(self.proxy_ca_cert))
+				else []
+			),
 			*(CHROME_HEADLESS_ARGS if self.headless else []),
+			# Chromium writes "HeadlessChrome" into the UA purely because of how it was
+			# launched. It is the same binary rendering the same pages, and the string is the
+			# single loudest automation signal a site can read — so unless the caller has set
+			# a UA of their own, keep the one this Chrome would otherwise send.
+			*([f'--user-agent={self._headful_user_agent()}'] if self.headless and not self.user_agent else []),
 			*(CHROME_DISABLE_SECURITY_ARGS if self.disable_security else []),
 			*(CHROME_DETERMINISTIC_RENDERING_ARGS if self.deterministic_rendering else []),
 			*(
 				[f'--window-size={self.window_size["width"]},{self.window_size["height"]}']
 				if self.window_size
-				else (['--start-maximized'] if not self.headless else [])
+				# Headless still needs an explicit window: without one the OS window stays at
+				# Chrome's 780x580 default while the viewport is overridden to whatever was
+				# asked for, leaving window.outerWidth smaller than window.innerWidth. No real
+				# browser can be in that state, and it is trivial for a page to check.
+				else (['--start-maximized'] if not self.headless else ['--window-size=1280,800'])
 			),
 			*(
 				[f'--window-position={self.window_position["width"]},{self.window_position["height"]}']

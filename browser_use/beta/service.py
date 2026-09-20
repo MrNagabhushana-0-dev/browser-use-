@@ -4732,10 +4732,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		if judgement.failure_reason:
 			judge_log += f'   Failure Reason: {judgement.failure_reason}\n'
 		if judgement.reached_captcha:
-			self.logger.warning(
-				'Agent was blocked by a captcha. Cloud browsers include stealth fingerprinting and proxy rotation to avoid this.\n'
-				'         Try: Browser(use_cloud=True)  |  Get an API key: https://cloud.browser-use.com?utm_source=oss&utm_medium=captcha_nudge'
-			)
+			self.logger.warning('Agent was blocked by a captcha.')
 		judge_log += f'   {judgement.reasoning}\n'
 		self.logger.info(judge_log)
 

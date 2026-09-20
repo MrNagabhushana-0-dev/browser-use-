@@ -18,6 +18,7 @@ from browser_use.dom.views import (
 )
 from browser_use.observability import observe_debug
 from browser_use.utils import create_task_with_error_handling, time_execution_async
+from browser_use.webmcp.views import WebMCPTool
 
 if TYPE_CHECKING:
 	from browser_use.browser.views import BrowserStateSummary, NetworkRequest, PageInfo, PaginationButton
@@ -500,6 +501,7 @@ class DOMWatchdog(BaseWatchdog):
 				pending_network_requests=pending_requests,
 				pagination_buttons=pagination_buttons_data,
 				closed_popup_messages=self.browser_session._closed_popup_messages.copy(),
+				webmcp_tools=await self._collect_webmcp_tools(page_url),
 			)
 
 			# Cache the state
@@ -720,6 +722,24 @@ class DOMWatchdog(BaseWatchdog):
 		except Exception as e:
 			self.logger.warning(f'📸 Clean screenshot failed: {type(e).__name__}: {e}')
 			raise
+
+	async def _collect_webmcp_tools(self, page_url: str) -> list[WebMCPTool]:
+		"""Tools the current page declares for agents, or [] when it declares none.
+
+		This sits on the per-step critical path, so it must never raise and never block:
+		discovery is one Runtime.evaluate over an in-page Map under its own timeout, and a
+		page that stalls yields its previous listing instead of holding up browser state.
+		"""
+		watchdog = self.browser_session._webmcp_watchdog
+		# Only http(s) documents can declare tools; about:blank and chrome:// cannot.
+		if watchdog is None or not page_url.lower().startswith(('http://', 'https://')):
+			return []
+		try:
+			page_tools = await watchdog.service.discover()
+		except Exception as e:
+			self.logger.debug(f'🧩 WebMCP discovery skipped: {type(e).__name__}: {e}')
+			return []
+		return page_tools.tools
 
 	def _detect_pagination_buttons(self, selector_map: dict[int, EnhancedDOMTreeNode]) -> list['PaginationButton']:
 		"""Detect pagination buttons from the DOM selector map.

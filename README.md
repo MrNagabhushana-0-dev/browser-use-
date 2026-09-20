@@ -153,6 +153,227 @@ The agent opens a browser, looks up the repository, and prints its answer.
 
 <br/>
 
+# WebMCP: call what a site declares
+
+Driving a UI is the fallback, not the goal. A site can hand an agent typed, callable
+tools directly, and browser-use will use them:
+
+```js
+// on the page
+navigator.modelContext.registerTool({
+  name: 'add_to_cart',
+  description: 'Add a product to the cart',
+  inputSchema: { type: 'object', properties: { sku: { type: 'string' } }, required: ['sku'] },
+  async execute({ sku }) { /* the site's own code */ },
+});
+```
+
+browser-use installs that API into every page *before* the page's own scripts run, so
+sites written as `if (navigator.modelContext) { ... }` actually register. Declared tools
+are discovered per page, listed to the model, and invoked in a single step with typed
+arguments and a typed result — no element index, no click, no re-read. Sites can also
+declare tools through a `<link rel="model-context">` manifest backed by a same-origin
+JSON-RPC endpoint, which is then called with the browser's own session.
+
+Straight from Python, no agent required:
+
+```python
+tools = await browser_session.get_webmcp_tools()
+result = await browser_session.call_webmcp_tool('add_to_cart', {'sku': 'SOCK-42'})
+```
+
+Tool metadata is page-authored, so it is treated as untrusted input: names must be plain
+identifiers, text is clipped and stripped of markup, cross-origin endpoints are refused,
+and a page gets a bounded share of the context window. Turn the whole layer off with
+`BrowserSession(enable_webmcp=False)`, which leaves page JS untouched.
+
+Runnable demo: [`examples/features/webmcp_tools.py`](examples/features/webmcp_tools.py)
+
+<br/>
+
+# Every site gets a typed tool surface, whether it built one or not
+
+WebMCP is the right shape and almost nothing ships it. The standard asks the long tail of
+the web to adopt a protocol, which twenty years of metadata history says it will not do —
+one write-up calls it [shipping a 0% adoption
+standard](https://www.freecodecamp.org/news/a-developers-guide-to-webmcp/). The conclusion
+people keep reaching is that the browser should synthesize the layer itself from what it
+already computes. This does that.
+
+On a site that declares nothing, browser-use reads the affordances a screen reader would
+see — role, accessible name, value, state — and induces typed tools in the same shape a
+declaring site would have published:
+
+```
+Site publishes ZERO agent tools. Synthesized 4:
+  - search(query?: string)        — Search
+  - sign_in(email: string)        — Sign in
+  - apply_filter(size?: string)   — Apply filter
+  - add_to_cart()                 — Add to cart
+```
+
+Those flow straight into `call_webmcp_tool`, into the MCP tools that Claude Code, Codex and
+Antigravity consume, and into the `<webmcp_tools>` prompt block. Nothing downstream needed
+changing, because the shape is the one WebMCP already defined.
+
+Why this beats the three things it replaces: pixels carry no semantics and cost a fortune
+per step; a DOM dump buries the four things you can actually do under ten thousand nodes
+and misses anything canvas-rendered; and real WebMCP is excellent on the vanishing number
+of sites that implement it. This is the same interface as the third, available on the
+first two's territory.
+
+Measured over the eleven public sites the benchmark script visits (September 2026): tools
+induced on ten of them at a **median of 10ms**, costing **1,027 tokens against 28,340
+tokens** of serialized page for the same information — **28x less to tell a model what it
+can do**. Ten of the ten produced a correctly named, required `search(query: string)`;
+elsewhere the same pass yields table read tools and real pagination. These will drift as
+the sites change, which is the point of shipping the script rather than the number:
+
+```bash
+python -m browser_use.synthesis https://news.ycombinator.com   # one site
+uv run examples/features/site_tool_surface.py                  # the whole set
+```
+
+Three things keep it honest:
+
+- **A declared tool always wins.** A published tool is a contract; a synthesized one is
+  our reading of the markup. Synthesis only runs when the site offered nothing.
+- **The prompt says which is which**, so a model does not trust a guess like a contract.
+- **Password and payment fields never become parameters.** Synthesizing
+  `sign_in(password)` would invite a model to invent credentials and put them in a trace.
+
+Tools execute through real trusted input, resolved by accessible name rather than
+coordinates — so a locator survives the element moving, and nothing depends on a vision
+model guessing pixels. Turn it off with `BrowserSession(synthesize_site_tools=False)`.
+
+<br/>
+
+# You sign in. The agent takes over.
+
+Google, Instagram and most of the interesting web will not admit a fresh automated
+profile — no session, a datacenter IP, and a login that escalates to a device prompt the
+moment it sees one. So don't automate the login. Sign in yourself, and hand over the live
+browser:
+
+```bash
+python -m browser_use.cobrowse      # sign in here, leave it open
+```
+
+```python
+from browser_use.cobrowse import attach, focus_human_tab
+
+session = await attach(cdp_url)     # the URL the command printed
+await focus_human_tab(session)      # lands on the tab you left
+```
+
+Same profile, same cookies, same IP, same tab. Attaching opens no tab and steals no
+focus. The profile is persistent, so you sign in once, not once per run. Closing the
+command shuts Chrome down cleanly over CDP — which matters more than it sounds, because
+Chrome only commits cookies to disk on its normal shutdown path, and a killed browser
+loses the session while leaving localStorage behind to make it look fine.
+
+# Driving the UI, not scripting the DOM
+
+`element.click()` produces `isTrusted === false`, emits no movement, and bypasses hit
+testing. Every hover menu that never opens and every feed that never advances traces back
+to that. `session.human` produces the event stream a hand would:
+
+```python
+await session.human.click_box((x, y, w, h))   # curved approach, hover, hold, release
+await session.human.wheel(900)                # real wheel notches, not window.scrollBy
+await session.human.type_text('hello')        # per-character, human cadence
+```
+
+# Watching, instead of guessing when to screenshot
+
+One screenshot is the wrong instrument for anything in motion. Screenshotting in a loop is
+the most expensive thing an agent can do. `watch_page` streams frames over CDP, where they
+cost nothing, and keeps only the ones that differ — a static page costs a single frame.
+
+```python
+result = await session.live_view.watch(seconds=5)
+result.describe()   # 'Watched 5.0s over 47 frames and kept 4 that differ, at 0.0s, 1.2s, ...'
+```
+
+<br/>
+
+# It remembers the route that worked
+
+The second time an agent does something on a site, it should not re-derive the
+navigation it already solved. After a successful run, browser-use induces a compact
+workflow from the actions it actually took, keyed by domain, and offers it back on the
+next task for that site. [Agent Workflow Memory](https://arxiv.org/abs/2409.07429)
+(ICML 2025) reports +24.6% to +51.1% relative success on Mind2Web from this.
+
+Induction is deterministic — it compacts the real trajectory, so it costs nothing per run
+and cannot invent a step that never happened. Three rules keep it safe:
+
+- **Typed values are never stored.** A login run remembers `input into password`, never
+  the password. Memory lives in a plain JSON file; it must not become a secret store.
+- **Elements are remembered by label, not index.** Indices are per-snapshot, so
+  `click 17` is worse than useless on the next visit.
+- **Failed runs are not remembered.** A route that did not work would mislead the retry.
+
+It is on by default, writes to `~/.config/browseruse/workflows.json`, and degrades
+silently if that file is unreadable. Turn it off with `BROWSER_USE_WORKFLOW_MEMORY=false`,
+or point it elsewhere:
+
+```python
+from browser_use.memory import WorkflowMemory
+
+agent.workflow_memory = WorkflowMemory(path='./workflows.json')
+```
+
+<br/>
+
+# Use it from Claude Code, Codex or Antigravity
+
+browser-use runs as an MCP server over stdio, with no cloud account and no API key
+needed for the browser tools themselves:
+
+```bash
+uvx browser-use[cli] --mcp
+```
+
+Alongside the usual navigate/click/type tools, MCP clients get the two that do the most
+work per token: `browser_run_script` (read or act on many elements in one call, instead of
+one call per element) and `browser_list_page_tools` / `browser_call_page_tool` (call the
+tools a WebMCP-aware site declares). Read-only tools carry `readOnlyHint`, which Codex
+needs under `approval_policy = "never"` or it cancels them unprompted.
+
+**Claude Code** — `.mcp.json` in the project, or `~/.claude.json` for every project:
+
+```json
+{
+  "mcpServers": {
+    "browser-use": { "command": "uvx", "args": ["browser-use[cli]", "--mcp"] }
+  }
+}
+```
+
+**Codex** — `~/.codex/config.toml` (or `codex mcp add browser-use -- uvx "browser-use[cli]" --mcp`):
+
+```toml
+[mcp_servers.browser-use]
+command = "uvx"
+args = ["browser-use[cli]", "--mcp"]
+```
+
+**Antigravity** — `~/.gemini/config/mcp_config.json`, shared by the IDE and CLI:
+
+```json
+{
+  "mcpServers": {
+    "browser-use": { "command": "uvx", "args": ["browser-use[cli]", "--mcp"] }
+  }
+}
+```
+
+The server opens a headful browser by default, which is what you want on a desktop. For a
+headless box set `BROWSER_USE_HEADLESS=true` in the server's `env`.
+
+<br/>
+
 # Browser Use Benchmark v2
 
 <img alt="Browser Use Benchmark v2 - Mean rubric score by model and cost per task" src="static/hard_benchmark_v2.jpg" width="100%">

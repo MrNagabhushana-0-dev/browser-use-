@@ -6,6 +6,7 @@ from cdp_use.cdp.target import TargetID
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer
 
 from browser_use.dom.views import DOMInteractedElement, SerializedDOMState
+from browser_use.webmcp.views import WebMCPTool
 
 # Known placeholder image data for about:blank pages - a 4x4 white PNG
 PLACEHOLDER_4PX_SCREENSHOT = (
@@ -110,6 +111,7 @@ class BrowserStateSummary:
 	pagination_buttons: list[PaginationButton] = field(default_factory=list)  # Detected pagination buttons
 	closed_popup_messages: list[str] = field(default_factory=list)  # Messages from auto-closed JavaScript dialogs
 	state_error: str | None = None  # Safe, model-visible explanation when the current state could not be captured
+	webmcp_tools: list[WebMCPTool] = field(default_factory=list)  # Tools the page declares for agents (see browser_use.webmcp)
 
 
 @dataclass
@@ -149,6 +151,20 @@ class BrowserStateHistory:
 		data['url'] = self.url
 		data['title'] = self.title
 		return data
+
+
+class PageScriptResult(BaseModel):
+	"""Outcome of running agent-authored JavaScript against the live page."""
+
+	model_config = ConfigDict(extra='forbid')
+
+	ok: bool
+	value: str = ''
+	error: str | None = None
+	# Set when the result was clipped in-page; full_length says by how much, so the
+	# agent can re-run with a slice instead of guessing.
+	truncated: bool = False
+	full_length: int = 0
 
 
 class BrowserError(Exception):

@@ -7,6 +7,7 @@ from browser_use.dom.views import NodeType, SimplifiedNode
 from browser_use.llm.messages import ContentPartImageParam, ContentPartTextParam, ImageURL, SystemMessage, UserMessage
 from browser_use.observability import observe_debug
 from browser_use.utils import is_new_tab_page, sanitize_surrogates
+from browser_use.webmcp.views import render_webmcp_prompt
 
 if TYPE_CHECKING:
 	from browser_use.agent.views import AgentStepInfo
@@ -125,6 +126,7 @@ class AgentMessagePrompt:
 		llm_screenshot_size: tuple[int, int] | None = None,
 		unavailable_skills_info: str | None = None,
 		plan_description: str | None = None,
+		workflow_memory_description: str | None = None,
 	):
 		self.browser_state: 'BrowserStateSummary' = browser_state_summary
 		self.file_system: 'FileSystem | None' = file_system
@@ -144,6 +146,7 @@ class AgentMessagePrompt:
 		self.read_state_images = read_state_images or []
 		self.unavailable_skills_info: str | None = unavailable_skills_info
 		self.plan_description: str | None = plan_description
+		self.workflow_memory_description: str | None = workflow_memory_description
 		self.llm_screenshot_size = llm_screenshot_size
 		assert self.browser_state
 
@@ -325,11 +328,21 @@ class AgentMessagePrompt:
 				closed_popups_text += f'  - {popup_msg}\n'
 			closed_popups_text += '\n'
 
+		# Tools the page itself declares. Rendered above the element dump so the model weighs
+		# a one-call option before it starts planning clicks; costs nothing on the vast
+		# majority of pages, which declare none.
+		webmcp_text = ''
+		webmcp_tools = getattr(self.browser_state, 'webmcp_tools', None)
+		if webmcp_tools:
+			webmcp_body = render_webmcp_prompt(webmcp_tools, self.browser_state.url)
+			if webmcp_body:
+				webmcp_text = f'<webmcp_tools>\n{webmcp_body}\n</webmcp_tools>\n'
+
 		browser_state = f"""{stats_text}{current_tab_text}
 Available tabs:
 {tabs_text}
 {page_info_text}
-{state_error_text}{recent_events_text}{closed_popups_text}{pdf_message}Interactive elements{truncated_text}:
+{state_error_text}{recent_events_text}{closed_popups_text}{pdf_message}{webmcp_text}Interactive elements{truncated_text}:
 {elements_text}
 """
 		return browser_state
@@ -349,6 +362,11 @@ Available tabs:
 """
 		if self.plan_description:
 			agent_state += f'<plan>\n{self.plan_description}\n</plan>\n'
+
+		# Routes that already worked on this site. A hint, not an instruction: sites change,
+		# and a stale route the model follows blindly is worse than no memory at all.
+		if self.workflow_memory_description:
+			agent_state += f'<workflow_memory>\n{self.workflow_memory_description}\n</workflow_memory>\n'
 
 		if self.sensitive_data:
 			agent_state += f'<sensitive_data>{self.sensitive_data}</sensitive_data>\n'

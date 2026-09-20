@@ -12,6 +12,7 @@ with an ActionResult(error=...) instead of hanging.
 """
 
 import asyncio
+import os
 import time
 from typing import Any
 
@@ -132,45 +133,51 @@ def test_default_action_timeout_accommodates_extract_action():
 	)
 
 
-@pytest.fixture
-def _restore_service_module():
-	"""Reload browser_use.tools.service without any env override on teardown.
-
-	Tests in this file intentionally reload the module with BROWSER_USE_ACTION_TIMEOUT_S
-	set to various values; without this fixture, the last reload's default leaks into
-	every later test in the same worker.
-	"""
-	import importlib
-	import os
-
-	import browser_use.tools.service as svc_module
-
-	yield svc_module
-	os.environ.pop('BROWSER_USE_ACTION_TIMEOUT_S', None)
-	importlib.reload(svc_module)
-
-
-def test_malformed_env_timeout_does_not_break_import(monkeypatch, _restore_service_module):
+def test_malformed_env_timeout_values_fall_back(monkeypatch):
 	"""Bad BROWSER_USE_ACTION_TIMEOUT_S values must fall back, not crash or misbehave.
 
-	Covers three failure modes:
-	- Non-numeric / empty (ValueError from float()): would crash module import.
-	- NaN: parses fine but makes asyncio.wait_for time out immediately for every action.
-	- Infinity / negative / zero: parses fine but effectively disables the hang guard.
+	Three distinct failure modes:
+	- Non-numeric / empty: float() raises, which used to crash module import.
+	- NaN: parses fine, then makes asyncio.wait_for time out immediately for every action.
+	- Infinity / negative / zero: parses fine, then disables the hang guard entirely.
+
+	This drives the parser directly rather than reimporting the module with the env set.
+	That indirection used to be the point — and it was also a trap: importlib.reload()
+	rebinds every class the module defines, so `Tools` became a *different* class object
+	while every module that had already imported it kept the old one. Two unrelated tests
+	in test_beta_agent.py then failed on `isinstance` and `get_origin(...) is Tools`, with
+	the uniquely unhelpful message `assert <class Tools> is <class Tools>`.
 	"""
-	import importlib
+	from browser_use.tools.service import _parse_env_action_timeout
 
-	svc_module = _restore_service_module
+	for bad_value in ('', 'not-a-number', 'abc', 'nan', 'NaN', 'inf', '-inf', '0', '-5'):
+		assert _parse_env_action_timeout(bad_value) == 180.0, f'expected the fallback for {bad_value!r}'
 
-	bad_values = ('', 'not-a-number', 'abc', 'nan', 'NaN', 'inf', '-inf', '0', '-5')
-	for bad_value in bad_values:
-		monkeypatch.setenv('BROWSER_USE_ACTION_TIMEOUT_S', bad_value)
-		reloaded = importlib.reload(svc_module)
-		assert reloaded._DEFAULT_ACTION_TIMEOUT_S == 180.0, (
-			f'Expected fallback 180.0 for bad env {bad_value!r}, got {reloaded._DEFAULT_ACTION_TIMEOUT_S}'
-		)
+	assert _parse_env_action_timeout(None) == 180.0, 'an unset variable must fall back'
+	assert _parse_env_action_timeout('45') == 45.0, 'a valid value must take effect'
+	assert _parse_env_action_timeout('0.5') == 0.5
 
-	# Valid finite positive values still take effect.
-	monkeypatch.setenv('BROWSER_USE_ACTION_TIMEOUT_S', '45')
-	reloaded = importlib.reload(svc_module)
-	assert reloaded._DEFAULT_ACTION_TIMEOUT_S == 45.0
+
+def test_a_bad_env_value_cannot_break_importing_the_module():
+	"""Import must survive a hostile value, checked in a real fresh interpreter.
+
+	A subprocess is the only honest way to test import-time behaviour: reloading in-process
+	both fails to exercise a true first import and corrupts class identity for whatever
+	runs next in the same worker.
+	"""
+	import subprocess
+	import sys
+
+	result = subprocess.run(
+		[
+			sys.executable,
+			'-c',
+			'from browser_use.tools.service import _DEFAULT_ACTION_TIMEOUT_S; print(_DEFAULT_ACTION_TIMEOUT_S)',
+		],
+		env={**os.environ, 'BROWSER_USE_ACTION_TIMEOUT_S': 'not-a-number'},
+		capture_output=True,
+		text=True,
+		timeout=120,
+	)
+	assert result.returncode == 0, f'import crashed on a bad env value:\n{result.stderr[-2000:]}'
+	assert result.stdout.strip() == '180.0', f'expected the fallback, got {result.stdout.strip()!r}'

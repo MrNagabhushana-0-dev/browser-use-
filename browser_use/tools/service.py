@@ -48,6 +48,7 @@ from browser_use.tools.views import (
 	InputTextAction,
 	NavigateAction,
 	NoParamsAction,
+	RunPageScriptAction,
 	SaveAsPdfAction,
 	ScreenshotAction,
 	ScrollAction,
@@ -58,6 +59,8 @@ from browser_use.tools.views import (
 	StructuredOutputAction,
 	SwitchTabAction,
 	UploadFileAction,
+	WatchPageAction,
+	WebMCPCallAction,
 )
 from browser_use.utils import create_task_with_error_handling, sanitize_surrogates, time_execution_sync
 
@@ -473,10 +476,19 @@ class Tools(Generic[Context]):
 				'bing': f'https://www.bing.com/search?q={encoded_query}',
 			}
 
-			if params.engine.lower() not in search_engines:
-				return ActionResult(error=f'Unsupported search engine: {params.engine}. Options: duckduckgo, google, bing')
-
-			search_url = search_engines[params.engine.lower()]
+			# A URL template lets you point at whatever you actually search with — a
+			# self-hosted SearxNG, an intranet search, Kagi — instead of the three names
+			# hardcoded here. It also lets tests exercise this action without the internet.
+			engine = params.engine.strip()
+			if '{query}' in engine and engine.lower().startswith(('http://', 'https://')):
+				search_url = engine.replace('{query}', encoded_query)
+			elif engine.lower() in search_engines:
+				search_url = search_engines[engine.lower()]
+			else:
+				return ActionResult(
+					error=f'Unsupported search engine: {params.engine}. '
+					'Options: duckduckgo, google, bing, or a URL template containing {query}'
+				)
 
 			# Simple tab logic: use current tab by default
 			use_new_tab = False
@@ -491,7 +503,8 @@ class Tools(Generic[Context]):
 				)
 				await event
 				await event.event_result(raise_if_any=True, raise_if_none=False)
-				memory = f"Searched {params.engine.title()} for '{params.query}'"
+				engine_label = urllib.parse.urlparse(search_url).hostname or engine if '{query}' in engine else engine.title()
+				memory = f"Searched {engine_label} for '{params.query}'"
 				msg = f'🔍  {memory}'
 				logger.info(msg)
 				return ActionResult(extracted_content=memory, long_term_memory=memory)
@@ -606,6 +619,103 @@ class Tools(Generic[Context]):
 			logger.info(f'🕒 waited for {seconds} second{"" if seconds == 1 else "s"}')
 			await asyncio.sleep(actual_seconds)
 			return ActionResult(extracted_content=memory, long_term_memory=memory)
+
+		@self.registry.action(
+			'Call a tool the current page declares for agents, as listed in <webmcp_tools>. '
+			'One call does what a whole click/type/read sequence would, with typed arguments and a typed result. '
+			'Only tools named in <webmcp_tools> exist; everything else on the page still needs the UI.',
+			param_model=WebMCPCallAction,
+			# A site tool can navigate, mutate a cart, or re-render the page, which invalidates
+			# every element index queued behind it. Stop the batch and let the agent re-read state.
+			terminates_sequence=True,
+		)
+		async def call_webmcp_tool(params: WebMCPCallAction, browser_session: BrowserSession):
+			# Validated by WebMCPCallAction to be a JSON object.
+			arguments = json.loads(params.arguments)
+			result = await browser_session.call_webmcp_tool(params.name, arguments)
+
+			if not result.ok:
+				error = result.error or 'the page reported an error'
+				logger.warning(f'🧩 WebMCP tool {params.name} failed: {error}')
+				return ActionResult(error=f'WebMCP tool "{params.name}" failed: {error}')
+
+			memory = f'Called page tool {params.name}'
+			logger.info(f'🧩 {memory}')
+			content = result.content or '(the tool succeeded and returned no content)'
+			return ActionResult(
+				# Fenced and labelled: the body is page-authored text, and the model should read
+				# it as a tool result rather than as instructions that arrived from its operator.
+				extracted_content=f'<webmcp_result tool={params.name!r}>\n{content}\n</webmcp_result>',
+				long_term_memory=f'{memory} -> {content[:200]}',
+				include_extracted_content_only_once=True,
+			)
+
+		@self.registry.action(
+			'Run JavaScript against the current page and get its result back. Use this instead of many '
+			'clicks or reads when you need data from many elements at once (every row of a table, every '
+			'search result, every link), or need to act on many elements at once. One call replaces the '
+			'whole loop. Return only the fields you need, and slice long lists.',
+			param_model=RunPageScriptAction,
+			# A script can click, submit or navigate, which invalidates every element index
+			# queued behind it. Stop the batch and let the agent re-read state.
+			terminates_sequence=True,
+		)
+		async def run_page_script(params: RunPageScriptAction, browser_session: BrowserSession):
+			result = await browser_session.run_page_script(params.script)
+
+			if not result.ok:
+				error = result.error or 'the script failed'
+				logger.warning(f'📜 Page script failed: {error}')
+				# Hand back the message verbatim: the agent's next move is to rewrite the
+				# script, and it can only do that from the actual error.
+				return ActionResult(error=f'Script failed: {error}')
+
+			memory = f'Ran page script: {params.purpose}'
+			logger.info(f'📜 {memory}')
+			body = result.value or 'null'
+			if result.truncated:
+				body += (
+					f'\n[truncated: {len(result.value)} of {result.full_length} chars. '
+					'Re-run returning fewer fields, or slice the list.]'
+				)
+			return ActionResult(
+				extracted_content=f'<script_result>\n{body}\n</script_result>',
+				long_term_memory=f'{memory} -> {body[:200]}',
+				include_extracted_content_only_once=True,
+			)
+
+		@self.registry.action(
+			'Watch the page for a few seconds and get back only the frames that changed. Use this when '
+			'something is in motion or in progress — a video, a feed loading, an upload, a spinner that '
+			'resolves — where one screenshot would catch the wrong instant. A page that does not move '
+			'costs a single frame.',
+			param_model=WatchPageAction,
+		)
+		async def watch_page(params: WatchPageAction, browser_session: BrowserSession):
+			# Bounded so a model cannot park the run on a ten minute watch.
+			seconds = max(1.0, min(15.0, params.seconds))
+			result = await browser_session.live_view.watch(seconds=seconds)
+
+			memory = f'Watched the page for {seconds:.0f}s: {params.reason}'
+			logger.info(f'🎥 {memory}')
+
+			# What moved, as text: tracked objects with headings, about forty tokens a
+			# moment against roughly 1,400 for the equivalent picture — and the picture
+			# would not carry the velocities at all.
+			narration = browser_session.live_view.narrate()
+			body = result.describe() + (f'\n{narration}' if narration else '')
+
+			# Two pictures, not eight. The stream says what moved and where it went; images
+			# are for the thing text cannot do, which is recognising what something *is*.
+			keyframes = result.keyframes
+			shown = [keyframes[0], keyframes[-1]] if len(keyframes) > 1 else keyframes
+			images = [{'name': f'frame_at_{frame.at:.1f}s.jpg', 'data': frame.to_base64()} for frame in shown]
+			return ActionResult(
+				extracted_content=body,
+				long_term_memory=f'{memory} -> {result.describe()}',
+				images=images or None,
+				include_extracted_content_only_once=True,
+			)
 
 		# Helper function for coordinate conversion
 		def _convert_llm_coordinates_to_viewport(llm_x: int, llm_y: int, browser_session: BrowserSession) -> tuple[int, int]:

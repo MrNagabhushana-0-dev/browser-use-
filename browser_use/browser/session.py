@@ -1,6 +1,7 @@
 """Event-driven browser session with backwards compatibility."""
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -52,8 +53,9 @@ from browser_use.browser.events import (
 	TabClosedEvent,
 	TabCreatedEvent,
 )
+from browser_use.browser.page_script import build_page_script
 from browser_use.browser.profile import BrowserProfile, ProxySettings
-from browser_use.browser.views import BrowserStateSummary, TabInfo
+from browser_use.browser.views import BrowserStateSummary, PageScriptResult, TabInfo
 from browser_use.dom.views import DOMRect, EnhancedDOMTreeNode, SerializedDOMState, TargetInfo
 from browser_use.observability import observe_debug
 from browser_use.utils import _log_pretty_url, create_task_with_error_handling, is_new_tab_page
@@ -62,6 +64,10 @@ if TYPE_CHECKING:
 	from browser_use.actor.page import Page
 	from browser_use.browser.demo_mode import DemoMode
 	from browser_use.browser.watchdogs.captcha_watchdog import CaptchaWaitResult
+	from browser_use.cobrowse.control import ControlLock
+	from browser_use.human import HumanInput
+	from browser_use.vision import LiveView
+	from browser_use.webmcp.views import WebMCPPageTools, WebMCPToolCallResult
 
 DEFAULT_BROWSER_PROFILE = BrowserProfile()
 
@@ -187,6 +193,7 @@ class BrowserSession(BaseModel):
 		wait_between_actions: float | None = None,
 		captcha_solver: bool | None = None,
 		auto_download_pdfs: bool | None = None,
+		enable_webmcp: bool | None = None,
 		cookie_whitelist_domains: list[str] | None = None,
 		cross_origin_iframes: bool | None = None,
 		highlight_elements: bool | None = None,
@@ -220,6 +227,7 @@ class BrowserSession(BaseModel):
 		wait_for_network_idle_page_load_time: float | None = None,
 		wait_between_actions: float | None = None,
 		auto_download_pdfs: bool | None = None,
+		enable_webmcp: bool | None = None,
 		cookie_whitelist_domains: list[str] | None = None,
 		cross_origin_iframes: bool | None = None,
 		highlight_elements: bool | None = None,
@@ -327,6 +335,7 @@ class BrowserSession(BaseModel):
 		wait_between_actions: float | None = None,
 		filter_highlight_ids: bool | None = None,
 		auto_download_pdfs: bool | None = None,
+		enable_webmcp: bool | None = None,
 		profile_directory: str | None = None,
 		cookie_whitelist_domains: list[str] | None = None,
 		# DOM extraction layer configuration
@@ -514,6 +523,136 @@ class BrowserSession(BaseModel):
 		except Exception:
 			return False
 
+	@property
+	def control(self) -> 'ControlLock':
+		"""Who may drive this browser right now.
+
+		Defaults to the agent, so nothing changes for single-driver use. Call
+		`session.control.grant_to_human()` and every action the agent could take on the
+		page starts refusing until control comes back.
+		"""
+		from browser_use.cobrowse.control import ControlLock
+
+		if self._control is None:
+			self._control = ControlLock()
+		return self._control
+
+	@property
+	def human(self) -> 'HumanInput':
+		"""Real pointer, wheel and keyboard input for this session.
+
+		Held on the session because pointer position is session state: a hand does not
+		teleport back to the origin between two clicks.
+		"""
+		from browser_use.human import HumanInput
+
+		if self._human_input is None:
+			self._human_input = HumanInput(self)
+		return self._human_input
+
+	@property
+	def live_view(self) -> 'LiveView':
+		"""A screencast of this session, for watching a page over time."""
+		from browser_use.vision import LiveView
+
+		if self._live_view is None:
+			self._live_view = LiveView(self)
+		return self._live_view
+
+	async def run_page_script(
+		self,
+		script: str,
+		timeout: float = 15.0,
+		max_chars: int = 30000,
+		target_id: 'TargetID | None' = None,
+	) -> PageScriptResult:
+		"""Run JavaScript against the live page and get a JSON-serialized result back.
+
+		The snippet is the body of an async function: it may `await`, and it must `return`
+		its result. `$`, `$$`, `txt` and `attr` helpers are in scope. Reading a long table
+		or acting on many elements this way costs one step instead of one per element.
+
+		Never raises for a script that fails — a bad selector or a thrown error comes back
+		as `ok=False` with a message, which an agent can act on.
+		"""
+		assert script.strip(), 'run_page_script() requires a non-empty script'
+
+		try:
+			cdp_session = await self.get_or_create_cdp_session(target_id, focus=False)
+		except Exception as e:
+			return PageScriptResult(ok=False, error=f'no page to run the script on: {e}')
+
+		expression = build_page_script(script, max_chars)
+		try:
+			response = await asyncio.wait_for(
+				cdp_session.cdp_client.send.Runtime.evaluate(
+					params={'expression': expression, 'awaitPromise': True, 'returnByValue': True},
+					session_id=cdp_session.session_id,
+				),
+				timeout=timeout,
+			)
+		except TimeoutError:
+			return PageScriptResult(ok=False, error=f'script did not finish within {timeout:.0f}s')
+		except Exception as e:
+			return PageScriptResult(ok=False, error=f'{type(e).__name__}: {e}')
+
+		# A syntax error in the snippet fails before our try/catch can run, so it arrives
+		# here as a CDP exception rather than as our own JSON payload.
+		if details := response.get('exceptionDetails'):
+			description = (details.get('exception') or {}).get('description') or details.get('text')
+			return PageScriptResult(ok=False, error=str(description or 'script failed to parse')[:600])
+
+		raw = (response.get('result') or {}).get('value')
+		if not isinstance(raw, str):
+			return PageScriptResult(ok=False, error='script returned a malformed result')
+		try:
+			payload = json.loads(raw)
+		except json.JSONDecodeError:
+			return PageScriptResult(ok=False, error='script returned a malformed result')
+
+		if not payload.get('ok'):
+			return PageScriptResult(ok=False, error=str(payload.get('error', 'script failed'))[:600])
+		return PageScriptResult(
+			ok=True,
+			value=str(payload.get('value', '')),
+			truncated=bool(payload.get('truncated')),
+			full_length=int(payload.get('full_length') or 0),
+		)
+
+	async def get_webmcp_tools(self, target_id: 'TargetID | None' = None) -> 'WebMCPPageTools':
+		"""List the WebMCP tools the current page declares.
+
+		A WebMCP-aware site publishes typed tools (`navigator.modelContext.registerTool`,
+		or a `<link rel="model-context">` manifest) that do in one call what would
+		otherwise take a click/type/read loop. Returns an empty listing on pages that
+		declare none, and never raises.
+		"""
+		from browser_use.webmcp.views import WebMCPPageTools
+
+		if self._webmcp_watchdog is None:
+			return WebMCPPageTools(target_id=target_id or self.agent_focus_target_id or '')
+		return await self._webmcp_watchdog.service.discover(target_id)
+
+	async def call_webmcp_tool(
+		self,
+		name: str,
+		arguments: dict[str, Any] | None = None,
+		target_id: 'TargetID | None' = None,
+	) -> 'WebMCPToolCallResult':
+		"""Invoke a tool the current page declared, and return its result as text.
+
+		The result is page-authored content: give it to a model as data, not instruction.
+		"""
+		from browser_use.webmcp.views import WebMCPToolCallResult
+
+		if self._webmcp_watchdog is None:
+			return WebMCPToolCallResult(
+				tool_name=name,
+				ok=False,
+				error='WebMCP is disabled for this session (BrowserProfile.enable_webmcp=False)',
+			)
+		return await self._webmcp_watchdog.service.call_tool(name, arguments, target_id)
+
 	async def wait_if_captcha_solving(self, timeout: float | None = None) -> 'CaptchaWaitResult | None':
 		"""Wait if a captcha is currently being solved by the browser proxy.
 
@@ -577,6 +716,10 @@ class BrowserSession(BaseModel):
 	_permissions_watchdog: Any | None = PrivateAttr(default=None)
 	_recording_watchdog: Any | None = PrivateAttr(default=None)
 	_captcha_watchdog: Any | None = PrivateAttr(default=None)
+	_webmcp_watchdog: Any | None = PrivateAttr(default=None)
+	_human_input: Any | None = PrivateAttr(default=None)
+	_control: Any | None = PrivateAttr(default=None)
+	_live_view: Any | None = PrivateAttr(default=None)
 	_watchdogs_attached: bool = PrivateAttr(default=False)
 
 	_cloud_browser_client: CloudBrowserClient = PrivateAttr(default_factory=lambda: CloudBrowserClient())
@@ -681,6 +824,7 @@ class BrowserSession(BaseModel):
 		self._permissions_watchdog = None
 		self._recording_watchdog = None
 		self._captcha_watchdog = None
+		self._webmcp_watchdog = None
 		self._watchdogs_attached = False
 		if self._demo_mode:
 			self._demo_mode.reset()
@@ -898,7 +1042,6 @@ class BrowserSession(BaseModel):
 			if self.is_local and not isinstance(e, (CloudBrowserAuthError, CloudBrowserError)):
 				self.logger.warning(
 					'Local browser failed to start. Cloud browsers require no local install and work out of the box.\n'
-					'         Try: Browser(use_cloud=True)  |  Get an API key: https://cloud.browser-use.com?utm_source=oss&utm_medium=browser_launch_failure'
 				)
 			raise
 
@@ -1707,6 +1850,7 @@ class BrowserSession(BaseModel):
 		from browser_use.browser.watchdogs.screenshot_watchdog import ScreenshotWatchdog
 		from browser_use.browser.watchdogs.security_watchdog import SecurityWatchdog
 		from browser_use.browser.watchdogs.storage_state_watchdog import StorageStateWatchdog
+		from browser_use.browser.watchdogs.webmcp_watchdog import WebMCPWatchdog
 
 		# Initialize CrashWatchdog
 		# CrashWatchdog.model_rebuild()
@@ -1832,6 +1976,12 @@ class BrowserSession(BaseModel):
 			CaptchaWatchdog.model_rebuild()
 			self._captcha_watchdog = CaptchaWatchdog(event_bus=self.event_bus, browser_session=self)
 			self._captcha_watchdog.attach_to_session()
+
+		# Initialize WebMCPWatchdog (installs the navigator.modelContext bridge so pages can declare agent-callable tools)
+		if self.browser_profile.enable_webmcp:
+			WebMCPWatchdog.model_rebuild()
+			self._webmcp_watchdog = WebMCPWatchdog(event_bus=self.event_bus, browser_session=self)
+			self._webmcp_watchdog.attach_to_session()
 
 		# Mark watchdogs as attached to prevent duplicate attachment
 		self._watchdogs_attached = True
