@@ -82,6 +82,13 @@ class WebMCPCallAction(BaseModel):
 	)
 
 
+class WatchPageAction(BaseModel):
+	"""Watch the page for a few seconds and see only the moments that changed."""
+
+	seconds: float = Field(default=4.0, description='How long to watch, 1-15')
+	reason: str = Field(description='What you are waiting to see, e.g. "whether the upload finishes"')
+
+
 class RunPageScriptAction(BaseModel):
 	"""Run JavaScript against the live page."""
 

@@ -59,6 +59,7 @@ from browser_use.tools.views import (
 	StructuredOutputAction,
 	SwitchTabAction,
 	UploadFileAction,
+	WatchPageAction,
 	WebMCPCallAction,
 )
 from browser_use.utils import create_task_with_error_handling, sanitize_surrogates, time_execution_sync
@@ -670,6 +671,28 @@ class Tools(Generic[Context]):
 			return ActionResult(
 				extracted_content=f'<script_result>\n{body}\n</script_result>',
 				long_term_memory=f'{memory} -> {body[:200]}',
+				include_extracted_content_only_once=True,
+			)
+
+		@self.registry.action(
+			'Watch the page for a few seconds and get back only the frames that changed. Use this when '
+			'something is in motion or in progress — a video, a feed loading, an upload, a spinner that '
+			'resolves — where one screenshot would catch the wrong instant. A page that does not move '
+			'costs a single frame.',
+			param_model=WatchPageAction,
+		)
+		async def watch_page(params: WatchPageAction, browser_session: BrowserSession):
+			# Bounded so a model cannot park the run on a ten minute watch.
+			seconds = max(1.0, min(15.0, params.seconds))
+			result = await browser_session.live_view.watch(seconds=seconds)
+
+			memory = f'Watched the page for {seconds:.0f}s: {params.reason}'
+			logger.info(f'🎥 {memory}')
+			images = [{'name': f'frame_at_{frame.at:.1f}s.jpg', 'data': frame.to_base64()} for frame in result.keyframes]
+			return ActionResult(
+				extracted_content=result.describe(),
+				long_term_memory=f'{memory} -> {result.describe()}',
+				images=images or None,
 				include_extracted_content_only_once=True,
 			)
 

@@ -64,6 +64,8 @@ if TYPE_CHECKING:
 	from browser_use.actor.page import Page
 	from browser_use.browser.demo_mode import DemoMode
 	from browser_use.browser.watchdogs.captcha_watchdog import CaptchaWaitResult
+	from browser_use.human import HumanInput
+	from browser_use.vision import LiveView
 	from browser_use.webmcp.views import WebMCPPageTools, WebMCPToolCallResult
 
 DEFAULT_BROWSER_PROFILE = BrowserProfile()
@@ -520,6 +522,28 @@ class BrowserSession(BaseModel):
 		except Exception:
 			return False
 
+	@property
+	def human(self) -> 'HumanInput':
+		"""Real pointer, wheel and keyboard input for this session.
+
+		Held on the session because pointer position is session state: a hand does not
+		teleport back to the origin between two clicks.
+		"""
+		from browser_use.human import HumanInput
+
+		if self._human_input is None:
+			self._human_input = HumanInput(self)
+		return self._human_input
+
+	@property
+	def live_view(self) -> 'LiveView':
+		"""A screencast of this session, for watching a page over time."""
+		from browser_use.vision import LiveView
+
+		if self._live_view is None:
+			self._live_view = LiveView(self)
+		return self._live_view
+
 	async def run_page_script(
 		self,
 		script: str,
@@ -678,6 +702,8 @@ class BrowserSession(BaseModel):
 	_recording_watchdog: Any | None = PrivateAttr(default=None)
 	_captcha_watchdog: Any | None = PrivateAttr(default=None)
 	_webmcp_watchdog: Any | None = PrivateAttr(default=None)
+	_human_input: Any | None = PrivateAttr(default=None)
+	_live_view: Any | None = PrivateAttr(default=None)
 	_watchdogs_attached: bool = PrivateAttr(default=False)
 
 	_cloud_browser_client: CloudBrowserClient = PrivateAttr(default_factory=lambda: CloudBrowserClient())
