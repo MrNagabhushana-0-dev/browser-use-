@@ -424,3 +424,93 @@ def test_a_corrupt_cache_is_ignored_not_fatal(tmp_path):
 
 	path.write_text(json.dumps({'https://x.example': {'nonsense': True}}))
 	assert ManifestStore(path=path, enabled=True).origins == []
+
+
+# A site built out of web components. querySelectorAll stops at the shadow boundary, so
+# without piercing, every control below is invisible — this is the "UI you can't even see"
+# case that makes DOM scraping fail on modern sites.
+SHADOW_PAGE = """<!DOCTYPE html>
+<html><head><title>Component Shop</title></head><body>
+	<search-box></search-box>
+	<order-table></order-table>
+	<div id="out">idle</div>
+<script>
+	const say = t => document.getElementById('out').textContent = t;
+
+	customElements.define('search-box', class extends HTMLElement {
+		connectedCallback() {
+			const root = this.attachShadow({mode: 'open'});
+			root.innerHTML = `
+				<form>
+					<input type="search" id="needle" aria-label="Search orders">
+					<button type="submit">Find</button>
+				</form>`;
+			root.querySelector('form').addEventListener('submit', e => {
+				e.preventDefault();
+				say('found ' + root.getElementById('needle').value);
+			});
+		}
+	});
+
+	customElements.define('order-table', class extends HTMLElement {
+		connectedCallback() {
+			this.attachShadow({mode: 'open'}).innerHTML = `
+				<table>
+					<caption>Shadow orders</caption>
+					<thead><tr><th>Ref</th><th>Status</th></tr></thead>
+					<tbody>
+						<tr><td>S-1</td><td>shipped</td></tr>
+						<tr><td>S-2</td><td>pending</td></tr>
+					</tbody>
+				</table>`;
+		}
+	});
+</script>
+</body></html>"""
+
+
+@pytest.fixture(scope='module')
+def shadow_server():
+	server = HTTPServer()
+	server.start()
+	server.expect_request('/shadow').respond_with_data(SHADOW_PAGE, content_type='text/html')
+	yield server
+	server.stop()
+
+
+async def test_controls_inside_web_components_are_found(browser_session, shadow_server):
+	"""querySelectorAll stops at the shadow boundary; the scanner must not."""
+	await _goto(browser_session, shadow_server.url_for('/shadow'))
+
+	# Confirm the premise rather than assuming it: a plain query really does see nothing.
+	plain = await browser_session.run_page_script(
+		"return {forms: document.querySelectorAll('form').length, inputs: document.querySelectorAll('input').length};"
+	)
+	assert json.loads(plain.value) == {'forms': 0, 'inputs': 0}, 'the fixture is not actually using shadow DOM'
+
+	page_tools = await browser_session.get_webmcp_tools()
+	names = {tool.name for tool in page_tools.tools}
+	assert 'search' in names, f'the shadow search form was missed: {sorted(names)}'
+	assert any(n.startswith('read_') for n in names), f'the shadow table was missed: {sorted(names)}'
+
+
+async def test_a_tool_inside_a_web_component_actually_runs(browser_session, shadow_server):
+	await _goto(browser_session, shadow_server.url_for('/shadow'))
+	await browser_session.get_webmcp_tools()
+
+	result = await browser_session.call_webmcp_tool('search', {'query': 'S-2'})
+	assert result.ok, result.error
+
+	out = await browser_session.run_page_script("return document.getElementById('out').textContent;")
+	assert json.loads(out.value) == 'found S-2'
+
+
+async def test_a_table_inside_a_web_component_reads(browser_session, shadow_server):
+	await _goto(browser_session, shadow_server.url_for('/shadow'))
+	page_tools = await browser_session.get_webmcp_tools()
+	read_tool = next(t for t in page_tools.tools if t.name.startswith('read_'))
+
+	result = await browser_session.call_webmcp_tool(read_tool.name, {})
+	assert result.ok, result.error
+	rows = json.loads(result.content.split('\n')[0])
+	assert rows == [{'Ref': 'S-1', 'Status': 'shipped'}, {'Ref': 'S-2', 'Status': 'pending'}]

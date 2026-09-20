@@ -51,6 +51,22 @@ RESOLVE_JS = r"""
 const loc = JSON.parse(LOCATOR_JSON);
 const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
+// Must pierce open shadow roots for the same reason the scanner does: a locator recorded
+// inside a web component is unreachable through plain querySelector.
+const deepQuery = (selector, root) => {
+	root = root || document;
+	const out = [...root.querySelectorAll(selector)];
+	let budget = 400;
+	const descend = (node) => {
+		for (const el of node.querySelectorAll('*')) {
+			if (budget <= 0) return;
+			if (el.shadowRoot) { budget--; out.push(...el.shadowRoot.querySelectorAll(selector)); descend(el.shadowRoot); }
+		}
+	};
+	descend(root);
+	return out;
+};
+
 // Must match the scanner's rule exactly, or a locator recorded there will not resolve
 // here. Visible text names a control, never a container: a <form> wrapping one button
 // has that button's text as its own innerText, and would otherwise win the name match.
@@ -63,6 +79,11 @@ const accName = (el) => {
 	if (el.id) { const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if (l) return clean(l.innerText); }
 	const w = el.closest('label'); if (w) return clean(w.innerText);
 	for (const a of ['placeholder', 'title', 'alt', 'name']) { const v = el.getAttribute(a); if (v) return clean(v); }
+	const tag = el.tagName.toLowerCase();
+	if (tag === 'table' || tag === 'fieldset' || ['table', 'grid'].includes(el.getAttribute('role'))) {
+		const cap = el.querySelector('caption, legend');
+		if (cap) return clean(cap.innerText || cap.textContent);
+	}
 	if (el.matches(INTERACTIVE)) return clean(el.innerText || el.value || '');
 	return '';
 };
@@ -87,11 +108,12 @@ const roleOf = (el) => {
 };
 
 let el = null;
-if (loc.testid) el = document.querySelector(`[data-testid="${CSS.escape(loc.testid)}"]`)
-	|| document.querySelector(`[data-test-id="${CSS.escape(loc.testid)}"]`);
-if (!el && loc.id) el = document.getElementById(loc.id);
+if (loc.testid) el = deepQuery(`[data-testid="${CSS.escape(loc.testid)}"]`)[0]
+	|| deepQuery(`[data-test-id="${CSS.escape(loc.testid)}"]`)[0];
+// Not getElementById: it does not see into shadow roots.
+if (!el && loc.id) el = deepQuery(`#${CSS.escape(loc.id)}`)[0] || document.getElementById(loc.id);
 if (!el && loc.name) {
-	const all = [...document.querySelectorAll('input, textarea, select, button, a[href], [role], table, form, nav')];
+	const all = deepQuery('input, textarea, select, button, a[href], [role], table, form, nav');
 	const named = all.filter(e => accName(e) === loc.name);
 	const loose = all.filter(e => accName(e).toLowerCase() === loc.name.toLowerCase());
 	// Role first: two elements can share a name, and the recorded role says which one was

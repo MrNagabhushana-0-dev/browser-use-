@@ -23,6 +23,29 @@ const MAX_BUTTONS = 25;
 
 const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 120);
 
+
+// querySelectorAll stops at a shadow boundary, which makes every control inside a web
+// component invisible — and web components are exactly where the interesting custom UI
+// lives. Walk open roots too. Closed roots are unreachable by design and stay so.
+const MAX_SHADOW_ROOTS = 400;
+const deepQuery = (selector, root) => {
+	root = root || document;
+	const out = [...root.querySelectorAll(selector)];
+	let budget = MAX_SHADOW_ROOTS;
+	const descend = (node) => {
+		for (const el of node.querySelectorAll('*')) {
+			if (budget <= 0) return;
+			if (el.shadowRoot) {
+				budget--;
+				out.push(...el.shadowRoot.querySelectorAll(selector));
+				descend(el.shadowRoot);
+			}
+		}
+	};
+	descend(root);
+	return out;
+};
+
 const INTERACTIVE = 'a[href], button, input, select, textarea, option, label, [role="button"], [role="link"], [role="tab"], [role="checkbox"], [role="switch"], [role="menuitem"]';
 
 const accessibleName = (el) => {
@@ -43,6 +66,14 @@ const accessibleName = (el) => {
 	for (const attr of ['placeholder', 'title', 'alt', 'name']) {
 		const v = el.getAttribute && el.getAttribute(attr);
 		if (v) return clean(v);
+	}
+	// A <caption> names its table and a <legend> names its fieldset — that is the accessible
+	// name per spec, not a fallback. Without this a table inside a web component has no
+	// handle at all: no id, no visible-text name, and no CSS path across the boundary.
+	const tag = el.tagName.toLowerCase();
+	if (tag === 'table' || tag === 'fieldset' || el.getAttribute('role') === 'table' || el.getAttribute('role') === 'grid') {
+		const cap = el.querySelector('caption, legend');
+		if (cap) return clean(cap.innerText || cap.textContent);
 	}
 	// Visible text names a control; it does not name a container. Falling back to innerText
 	// for a <table> or <form> yields its entire subtree as the "name", which is both useless
@@ -78,7 +109,8 @@ const roleOf = (el) => {
 const locatorFor = (el) => {
 	const testid = el.getAttribute('data-testid') || el.getAttribute('data-test-id') || el.getAttribute('data-test');
 	const loc = {testid: testid || null, id: el.id || null, role: roleOf(el), name: accessibleName(el), css: null};
-	if (!testid && !el.id && !loc.name) {
+	const inShadow = el.getRootNode() !== document;
+	if (!testid && !el.id && !loc.name && !inShadow) {
 		const parts = [];
 		let node = el;
 		for (let depth = 0; node && node.nodeType === 1 && depth < 4; depth++) {
@@ -143,9 +175,9 @@ const formName = (form, submit) => {
 };
 
 const forms = [];
-for (const form of [...document.querySelectorAll('form')].slice(0, MAX_FORMS)) {
+for (const form of deepQuery('form').slice(0, MAX_FORMS)) {
 	if (!visible(form)) continue;
-	const controls = [...form.querySelectorAll(CONTROL_SELECTOR)]
+	const controls = deepQuery(CONTROL_SELECTOR, form)
 		.filter(visible).slice(0, MAX_CONTROLS).map(describeControl);
 	if (!controls.length) continue;
 	const submit = form.querySelector('button[type=submit], input[type=submit], button:not([type])');
@@ -160,7 +192,7 @@ for (const form of [...document.querySelectorAll('form')].slice(0, MAX_FORMS)) {
 
 // Buttons that are not inside a form: the standalone verbs of the page.
 const buttons = [];
-for (const el of [...document.querySelectorAll(BUTTON_SELECTOR)].slice(0, 200)) {
+for (const el of deepQuery(BUTTON_SELECTOR).slice(0, 200)) {
 	if (buttons.length >= MAX_BUTTONS) break;
 	if (!visible(el) || el.closest('form')) continue;
 	const name = accessibleName(el);
@@ -170,7 +202,7 @@ for (const el of [...document.querySelectorAll(BUTTON_SELECTOR)].slice(0, 200)) 
 
 // Controls outside any form — a site-wide search box usually lives here.
 const loose = [];
-for (const el of [...document.querySelectorAll(CONTROL_SELECTOR)].slice(0, 120)) {
+for (const el of deepQuery(CONTROL_SELECTOR).slice(0, 120)) {
 	if (loose.length >= MAX_CONTROLS) break;
 	if (!visible(el) || el.closest('form')) continue;
 	loose.push(describeControl(el));
@@ -179,7 +211,7 @@ for (const el of [...document.querySelectorAll(CONTROL_SELECTOR)].slice(0, 120))
 // Tables and repeated lists are where the page's *data* lives. Turning them into read
 // tools is what stops an agent paging a table into its context one screenshot at a time.
 const tables = [];
-for (const table of [...document.querySelectorAll('table, [role="table"], [role="grid"]')].slice(0, 6)) {
+for (const table of deepQuery('table, [role="table"], [role="grid"]').slice(0, 6)) {
 	if (!visible(table)) continue;
 	const headerCells = [...table.querySelectorAll('thead th, thead td, tr:first-child th')]
 		.map(h => clean(h.innerText)).filter(Boolean).slice(0, 12);
@@ -196,7 +228,7 @@ for (const table of [...document.querySelectorAll('table, [role="table"], [role=
 
 // Tabs and in-page navigation: the verbs that move between views without a form.
 const views = [];
-for (const el of [...document.querySelectorAll('[role="tab"], nav a[href], [role="navigation"] a[href]')].slice(0, 60)) {
+for (const el of deepQuery('[role="tab"], nav a[href], [role="navigation"] a[href]').slice(0, 60)) {
 	if (views.length >= 12) break;
 	if (!visible(el)) continue;
 	const name = accessibleName(el);
@@ -207,7 +239,7 @@ for (const el of [...document.querySelectorAll('[role="tab"], nav a[href], [role
 // Pagination, recognised by what the control says rather than by any particular markup.
 const PAGER = {next: /^(next|next page|\u203a|\u00bb|\u2192)$/i, previous: /^(prev|previous|previous page|\u2039|\u00ab|\u2190)$/i};
 const pagers = [];
-for (const el of [...document.querySelectorAll(BUTTON_SELECTOR)].slice(0, 200)) {
+for (const el of deepQuery(BUTTON_SELECTOR).slice(0, 200)) {
 	if (!visible(el)) continue;
 	const name = accessibleName(el);
 	for (const kind of Object.keys(PAGER)) {
@@ -219,7 +251,7 @@ for (const el of [...document.querySelectorAll(BUTTON_SELECTOR)].slice(0, 200)) 
 
 // Standalone checkboxes and switches: settings, filters, consent.
 const toggles = [];
-for (const el of [...document.querySelectorAll('input[type=checkbox], [role="switch"], [role="checkbox"]')].slice(0, 40)) {
+for (const el of deepQuery('input[type=checkbox], [role="switch"], [role="checkbox"]').slice(0, 40)) {
 	if (toggles.length >= 12) break;
 	if (!visible(el) || el.closest('form')) continue;
 	const name = accessibleName(el);
