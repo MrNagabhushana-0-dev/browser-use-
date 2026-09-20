@@ -64,6 +64,7 @@ if TYPE_CHECKING:
 	from browser_use.actor.page import Page
 	from browser_use.browser.demo_mode import DemoMode
 	from browser_use.browser.watchdogs.captcha_watchdog import CaptchaWaitResult
+	from browser_use.cobrowse.control import ControlLock
 	from browser_use.human import HumanInput
 	from browser_use.vision import LiveView
 	from browser_use.webmcp.views import WebMCPPageTools, WebMCPToolCallResult
@@ -523,6 +524,20 @@ class BrowserSession(BaseModel):
 			return False
 
 	@property
+	def control(self) -> 'ControlLock':
+		"""Who may drive this browser right now.
+
+		Defaults to the agent, so nothing changes for single-driver use. Call
+		`session.control.grant_to_human()` and every action the agent could take on the
+		page starts refusing until control comes back.
+		"""
+		from browser_use.cobrowse.control import ControlLock
+
+		if self._control is None:
+			self._control = ControlLock()
+		return self._control
+
+	@property
 	def human(self) -> 'HumanInput':
 		"""Real pointer, wheel and keyboard input for this session.
 
@@ -703,6 +718,7 @@ class BrowserSession(BaseModel):
 	_captcha_watchdog: Any | None = PrivateAttr(default=None)
 	_webmcp_watchdog: Any | None = PrivateAttr(default=None)
 	_human_input: Any | None = PrivateAttr(default=None)
+	_control: Any | None = PrivateAttr(default=None)
 	_live_view: Any | None = PrivateAttr(default=None)
 	_watchdogs_attached: bool = PrivateAttr(default=False)
 

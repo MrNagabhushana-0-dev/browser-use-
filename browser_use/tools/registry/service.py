@@ -29,6 +29,26 @@ Context = TypeVar('Context')
 
 logger = logging.getLogger(__name__)
 
+# Actions that only look, report, or touch the agent's own files. These stay available
+# while the person is driving: an agent that cannot even read the page or finish its
+# task has not been paused, it has been broken.
+READ_ONLY_ACTIONS = frozenset(
+	{
+		'done',
+		'extract',
+		'screenshot',
+		'watch_page',
+		'find_elements',
+		'find_text',
+		'search_page',
+		'dropdown_options',
+		'read_file',
+		'write_file',
+		'replace_file',
+		'wait',
+	}
+)
+
 
 class Registry(Generic[Context]):
 	"""Service for registering and managing actions"""
@@ -342,6 +362,18 @@ class Registry(Generic[Context]):
 		"""Execute a registered action with simplified parameter handling"""
 		if action_name not in self.registry.actions:
 			raise ValueError(f'Action {action_name} not found')
+
+		# Every agent action funnels through here, which makes this the one place worth
+		# gating on who is driving. Gating the event bus instead would only report an
+		# error after the click had already landed.
+		if browser_session is not None and action_name not in READ_ONLY_ACTIONS:
+			control = getattr(browser_session, 'control', None)
+			if control is not None and not control.agent_may_act:
+				# Imported here: agent.views imports this module's views, so a module-level
+				# import would close a cycle.
+				from browser_use.agent.views import ActionResult
+
+				return ActionResult(error=control.refusal(action_name.replace('_', ' ')))
 
 		action = self.registry.actions[action_name]
 		try:
