@@ -1028,7 +1028,15 @@ class BrowserUseServer:
 			return 'This page declares no WebMCP tools. Drive it through the UI instead.'
 		return json.dumps(
 			[
-				{'name': tool.name, 'description': tool.description, 'input_schema': tool.input_schema}
+				{
+					'name': tool.name,
+					'description': tool.description,
+					'input_schema': tool.input_schema,
+					# 'js'/'manifest' means the site published it. 'synthesized' means it was
+					# worked out from the page, and `verified` says whether it has ever run.
+					'source': tool.source,
+					'verified': tool.verified,
+				}
 				for tool in page_tools.tools
 			],
 			indent=1,

@@ -585,3 +585,40 @@ async def test_a_modal_surface_is_never_cached_as_the_site(browser_session, moda
 	manifest = await SiteToolSynthesizer(browser_session, store=store).synthesize()
 	assert manifest.modal == 'Cookie choices'
 	assert store.origins == [], 'a transient dialog was written to the site cache'
+
+
+async def test_the_prompt_separates_proven_tools_from_untried_ones(browser_session, shop_server, tmp_path):
+	"""A tool that has run before is a different proposition from one never tried."""
+	from browser_use.agent.prompts import AgentMessagePrompt
+	from browser_use.filesystem.file_system import FileSystem
+	from browser_use.synthesis.store import ManifestStore
+
+	await _goto(browser_session, shop_server.url_for('/ordinary'))
+
+	# Prove one tool, leave the rest inferred.
+	store = ManifestStore(path=tmp_path / 'site_tools.json', enabled=True)
+	synthesizer = SiteToolSynthesizer(browser_session, store=store)
+	manifest = await synthesizer.synthesize()
+	ok, _ = await synthesizer.call(manifest.get('search'), {'query': 'boots'})
+	assert ok
+
+	# Feed that state through the same path the agent's prompt uses.
+	if browser_session._webmcp_watchdog:
+		service = browser_session._webmcp_watchdog.service
+		service._cache.clear()
+		service._synthesizer = synthesizer
+
+	state = await browser_session.get_browser_state_summary(include_screenshot=False)
+	rendered = str(
+		AgentMessagePrompt(
+			browser_state_summary=state,
+			file_system=FileSystem(base_dir=tmp_path / 'fs', create_default_files=False),
+		)
+		.get_user_message(use_vision=False)
+		.content
+	)
+
+	assert 'run successfully before' in rendered
+	assert 'have not been run yet' in rendered
+	proven_at = rendered.index('run successfully before')
+	assert rendered.index('- search(', proven_at) < rendered.index('have not been run yet')

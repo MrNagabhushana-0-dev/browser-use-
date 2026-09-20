@@ -159,6 +159,7 @@ class WebMCPService:
 				description=tool.description,
 				inputSchema=tool.input_schema,
 				source='synthesized',
+				verified=tool.verified,
 			)
 			for tool in manifest.tools
 		]

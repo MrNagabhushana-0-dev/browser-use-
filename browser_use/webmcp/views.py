@@ -94,6 +94,9 @@ class WebMCPTool(BaseModel):
 	source: WebMCPSource = 'js'
 	# Same-origin JSON-RPC endpoint for manifest-declared tools; None for in-page handlers.
 	endpoint: str | None = None
+	# For synthesized tools: whether this one has actually been run and worked. A tool that
+	# has succeeded before is a different proposition from one inferred and never tried.
+	verified: bool = False
 
 	def signature(self) -> str:
 		"""Render `name(arg: type, optional?: type)` from the tool's JSON Schema."""
@@ -177,11 +180,19 @@ def render_webmcp_prompt(tools: list[WebMCPTool], location: str) -> str:
 		# The distinction is not pedantry. A declared tool is a contract the site offered; a
 		# synthesized one is this agent's reading of the markup, and can be wrong about what
 		# a control does. A model that cannot tell them apart will trust both equally.
-		blocks.append(
-			'These were worked out from the page itself, not published by the site, so they may be '
-			'incomplete or misread a control. Prefer them over clicking, and check the result.'
-		)
-		blocks.extend(tool.prompt_line() for tool in synthesized)
+		proven = [tool for tool in synthesized if tool.verified]
+		untried = [tool for tool in synthesized if not tool.verified]
+
+		if proven:
+			blocks.append('These were worked out from the page, and have been run successfully before:')
+			blocks.extend(tool.prompt_line() for tool in proven)
+		if untried:
+			blocks.append(
+				'These were worked out from the page itself, not published by the site, and have not been '
+				'run yet, so they may be incomplete or misread a control. Prefer them over clicking, and '
+				'check the result.'
+			)
+			blocks.extend(tool.prompt_line() for tool in untried)
 
 	return '\n'.join(blocks)
 
