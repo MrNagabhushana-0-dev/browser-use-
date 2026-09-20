@@ -22,6 +22,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from browser_use.synthesis.scanner import SCAN_JS
+from browser_use.synthesis.store import ManifestStore, fingerprint
 from browser_use.synthesis.views import (
 	MAX_STEPS_PER_TOOL,
 	MAX_TOOLS_PER_SITE,
@@ -133,9 +134,12 @@ return {found: true, headers: headerCells, rows: out, truncated: rows.length < (
 class SiteToolSynthesizer:
 	"""Induces, caches and runs a tool surface for sites that publish none."""
 
-	def __init__(self, browser_session: 'BrowserSession') -> None:
+	def __init__(self, browser_session: 'BrowserSession', store: 'ManifestStore | None' = None) -> None:
 		self.browser_session = browser_session
 		self._manifests: dict[str, SiteManifest] = {}
+		# Persists across sessions, so the second agent to visit a site inherits what the
+		# first one worked out — including which tools have actually been run.
+		self.store = store if store is not None else ManifestStore()
 
 	@property
 	def logger(self):
@@ -327,8 +331,16 @@ class SiteToolSynthesizer:
 		origin = affordances.get('origin') or ''
 		if not origin:
 			return SiteManifest(origin='')
-		if not refresh and origin in self._manifests:
-			return self._manifests[origin]
+
+		shape = fingerprint(affordances)
+		if not refresh:
+			if (in_memory := self._manifests.get(origin)) and in_memory.fingerprint == shape:
+				return in_memory
+			# Learned in an earlier session, and the page still looks the way it did.
+			if cached := self.store.get(origin, expected_fingerprint=shape):
+				self._manifests[origin] = cached
+				self.logger.debug(f'🔧 Reused {len(cached.tools)} learned tool(s) for {origin}')
+				return cached
 
 		used: set[str] = set()
 		tools: list[SynthesizedTool] = []
@@ -376,8 +388,10 @@ class SiteToolSynthesizer:
 			url=str(affordances.get('url', ''))[:2048],
 			title=str(affordances.get('title', ''))[:200],
 			tools=tools,
+			fingerprint=shape,
 		)
 		self._manifests[origin] = manifest
+		self.store.put(manifest)
 		if tools:
 			self.logger.debug(f'🔧 Synthesized {len(tools)} tool(s) for {origin}: {", ".join(t.name for t in tools)}')
 		return manifest
@@ -444,9 +458,23 @@ class SiteToolSynthesizer:
 					await human.click_box(rect, target_id=target_id)
 					await human.type_text(str(value), target_id=target_id)
 
+		# It ran end to end, so it is no longer just a reading of the markup.
+		self._mark_verified(tool)
+
 		if outputs:
 			return True, '\n'.join(outputs)
 		return True, f'ran {tool.name} ({len(tool.steps)} steps)'
+
+	def _mark_verified(self, tool: SynthesizedTool) -> None:
+		"""Record that a tool has really worked, and keep that across sessions."""
+		if tool.verified:
+			return
+		tool.verified = True
+		for origin, manifest in self._manifests.items():
+			if manifest.get(tool.name) is tool:
+				self.store.put(manifest)
+				self.logger.debug(f'🔧 {tool.name} verified on {origin}')
+				return
 
 	async def _read_rows(self, step: ToolStep, arguments: dict[str, Any], target_id=None) -> str | None:
 		"""Rows from a table, as JSON records, capped."""

@@ -336,3 +336,91 @@ async def test_a_toggle_is_set_not_flipped(browser_session, dashboard_server):
 
 	assert (await browser_session.call_webmcp_tool(toggle.name, {'on': False})).ok
 	assert await _state_text(browser_session) == 'only open: false'
+
+
+async def test_a_site_is_learned_once_and_reused_next_session(browser_session, shop_server, tmp_path):
+	"""The second agent to visit a site inherits what the first one worked out."""
+	from browser_use.synthesis.store import ManifestStore
+
+	store_path = tmp_path / 'site_tools.json'
+	await _goto(browser_session, shop_server.url_for('/ordinary'))
+
+	first = SiteToolSynthesizer(browser_session, store=ManifestStore(path=store_path, enabled=True))
+	learned = await first.synthesize()
+	assert learned.tools and learned.fingerprint
+	assert store_path.exists(), 'nothing was written to disk'
+
+	# A brand new synthesizer, as a later session would have.
+	second = SiteToolSynthesizer(browser_session, store=ManifestStore(path=store_path, enabled=True))
+	reused = await second.synthesize()
+
+	assert [t.name for t in reused.tools] == [t.name for t in learned.tools]
+	assert reused.created_at == learned.created_at, 'it re-derived instead of reusing'
+
+
+async def test_verification_survives_the_session_that_proved_it(browser_session, shop_server, tmp_path):
+	"""Whether a tool has really run is the most valuable thing to carry forward."""
+	from browser_use.synthesis.store import ManifestStore
+
+	store_path = tmp_path / 'site_tools.json'
+	await _goto(browser_session, shop_server.url_for('/ordinary'))
+
+	first = SiteToolSynthesizer(browser_session, store=ManifestStore(path=store_path, enabled=True))
+	manifest = await first.synthesize()
+	search = manifest.get('search')
+	assert search is not None and search.verified is False, 'a fresh tool is a guess, not a fact'
+
+	ok, _ = await first.call(search, {'query': 'boots'})
+	assert ok
+
+	second = SiteToolSynthesizer(browser_session, store=ManifestStore(path=store_path, enabled=True))
+	reloaded = (await second.synthesize()).get('search')
+	assert reloaded is not None
+	assert reloaded.verified is True, 'the proof that it works was lost'
+
+
+async def test_a_redesigned_page_is_relearned_not_trusted(browser_session, shop_server, tmp_path):
+	"""A stale surface fails in a way that reads as the agent being wrong."""
+	from browser_use.synthesis.store import ManifestStore
+
+	store_path = tmp_path / 'site_tools.json'
+	await _goto(browser_session, shop_server.url_for('/ordinary'))
+
+	store = ManifestStore(path=store_path, enabled=True)
+	before = await SiteToolSynthesizer(browser_session, store=store).synthesize()
+	assert 'add_to_cart' in {t.name for t in before.tools}
+
+	# The site ships a redesign: the control is renamed.
+	await browser_session.run_page_script(
+		"const b = document.getElementById('cart');"
+		"b.setAttribute('aria-label', 'Buy it now'); b.textContent = 'Buy it now'; return 1;"
+	)
+
+	after = await SiteToolSynthesizer(browser_session, store=ManifestStore(path=store_path, enabled=True)).synthesize()
+	names = {t.name for t in after.tools}
+	assert 'buy_it_now' in names, f'the rename was not picked up: {sorted(names)}'
+	assert 'add_to_cart' not in names, 'the stale tool was served from cache'
+	assert after.fingerprint != before.fingerprint
+
+
+def test_the_fingerprint_tracks_names_not_volume():
+	"""Adding a row is not a redesign; renaming a control is."""
+	from browser_use.synthesis.store import fingerprint
+
+	base = {'tables': [{'name': 'Orders', 'headers': ['A', 'B'], 'rows': 3}], 'buttons': [{'name': 'Sign in'}]}
+	more_rows = {'tables': [{'name': 'Orders', 'headers': ['A', 'B'], 'rows': 900}], 'buttons': [{'name': 'Sign in'}]}
+	renamed = {'tables': [{'name': 'Orders', 'headers': ['A', 'B'], 'rows': 3}], 'buttons': [{'name': 'Log in'}]}
+
+	assert fingerprint(base) == fingerprint(more_rows), 'more data is not a new tool surface'
+	assert fingerprint(base) != fingerprint(renamed), 'a renamed control breaks its locator'
+
+
+def test_a_corrupt_cache_is_ignored_not_fatal(tmp_path):
+	from browser_use.synthesis.store import ManifestStore
+
+	path = tmp_path / 'site_tools.json'
+	path.write_text('{ this is not json')
+	assert ManifestStore(path=path, enabled=True).origins == []
+
+	path.write_text(json.dumps({'https://x.example': {'nonsense': True}}))
+	assert ManifestStore(path=path, enabled=True).origins == []

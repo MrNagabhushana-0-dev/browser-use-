@@ -59,6 +59,11 @@ class OldConfig:
 		return os.getenv('ANONYMIZED_TELEMETRY', 'true').lower()[:1] in 'ty1'
 
 	@property
+	def BROWSER_USE_SITE_TOOLS_CACHE(self) -> bool:
+		"""Persist synthesized site tool surfaces across sessions."""
+		return os.getenv('BROWSER_USE_SITE_TOOLS_CACHE', 'true').lower()[:1] in 'ty1'
+
+	@property
 	def BROWSER_USE_WORKFLOW_MEMORY(self) -> bool:
 		"""Remember routes that worked and replay them on later tasks for the same site."""
 		return os.getenv('BROWSER_USE_WORKFLOW_MEMORY', 'true').lower()[:1] in 'ty1'
@@ -206,6 +211,7 @@ class FlatEnvConfig(BaseSettings):
 	ANONYMIZED_TELEMETRY: bool = Field(default=True)
 	BROWSER_USE_CLOUD_SYNC: bool | None = Field(default=None)
 	BROWSER_USE_WORKFLOW_MEMORY: bool | None = Field(default=None)
+	BROWSER_USE_SITE_TOOLS_CACHE: bool | None = Field(default=None)
 	BROWSER_USE_CLOUD_API_URL: str = Field(default='https://api.browser-use.com')
 	BROWSER_USE_CLOUD_UI_URL: str = Field(default='')
 	BROWSER_USE_MODEL_PRICING_URL: str = Field(default='')

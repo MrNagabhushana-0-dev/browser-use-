@@ -1687,9 +1687,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				if judgement.failure_reason:
 					judge_log += f'   Failure Reason: {judgement.failure_reason}\n'
 				if judgement.reached_captcha:
-					self.logger.warning(
-						'Agent was blocked by a captcha.'
-					)
+					self.logger.warning('Agent was blocked by a captcha.')
 				judge_log += f'   {judgement.reasoning}\n'
 				self.logger.info(judge_log)
 
@@ -2202,9 +2200,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			has_captcha_issue = any(keyword in final_result_str for keyword in captcha_keywords)
 
 			if has_captcha_issue:
-				self.logger.warning(
-					'Agent was blocked by a captcha.'
-				)
+				self.logger.warning('Agent was blocked by a captcha.')
 
 			# General failure message
 			self.logger.info('')

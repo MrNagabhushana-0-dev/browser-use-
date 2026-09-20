@@ -104,6 +104,10 @@ class SiteManifest(BaseModel):
 	url: str = ''
 	title: str = ''
 	tools: list[SynthesizedTool] = Field(default_factory=list)
+	# Hash of the affordances this was built from. A cached surface for a page that has
+	# since been redesigned is worse than no cache: it fails in a way that reads as the
+	# agent being wrong rather than the cache being stale.
+	fingerprint: str = ''
 	created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 	def get(self, name: str) -> SynthesizedTool | None:
