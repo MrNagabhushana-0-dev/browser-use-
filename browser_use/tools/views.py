@@ -82,6 +82,19 @@ class WebMCPCallAction(BaseModel):
 	)
 
 
+class RunPageScriptAction(BaseModel):
+	"""Run JavaScript against the live page."""
+
+	script: str = Field(
+		description=(
+			'Async function body run in the page. Must `return` its result; may `await`. '
+			'Helpers in scope: $(sel), $$(sel) -> array, txt(el) -> trimmed text, attr(el, name). '
+			"Example: return $$('table tr').slice(1).map(r => ({name: txt($('td', r)), price: txt(r.cells[1])}));"
+		)
+	)
+	purpose: str = Field(description='One short line on what this script is for, e.g. "read all result rows"')
+
+
 class SearchAction(BaseModel):
 	query: str
 	engine: str = Field(

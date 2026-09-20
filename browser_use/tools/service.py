@@ -57,6 +57,7 @@ from browser_use.tools.views import (
 	SendKeysAction,
 	StructuredOutputAction,
 	SwitchTabAction,
+	RunPageScriptAction,
 	UploadFileAction,
 	WebMCPCallAction,
 )
@@ -635,6 +636,40 @@ class Tools(Generic[Context]):
 				# it as a tool result rather than as instructions that arrived from its operator.
 				extracted_content=f'<webmcp_result tool={params.name!r}>\n{content}\n</webmcp_result>',
 				long_term_memory=f'{memory} -> {content[:200]}',
+				include_extracted_content_only_once=True,
+			)
+
+		@self.registry.action(
+			'Run JavaScript against the current page and get its result back. Use this instead of many '
+			'clicks or reads when you need data from many elements at once (every row of a table, every '
+			'search result, every link), or need to act on many elements at once. One call replaces the '
+			'whole loop. Return only the fields you need, and slice long lists.',
+			param_model=RunPageScriptAction,
+			# A script can click, submit or navigate, which invalidates every element index
+			# queued behind it. Stop the batch and let the agent re-read state.
+			terminates_sequence=True,
+		)
+		async def run_page_script(params: RunPageScriptAction, browser_session: BrowserSession):
+			result = await browser_session.run_page_script(params.script)
+
+			if not result.ok:
+				error = result.error or 'the script failed'
+				logger.warning(f'📜 Page script failed: {error}')
+				# Hand back the message verbatim: the agent's next move is to rewrite the
+				# script, and it can only do that from the actual error.
+				return ActionResult(error=f'Script failed: {error}')
+
+			memory = f'Ran page script: {params.purpose}'
+			logger.info(f'📜 {memory}')
+			body = result.value or 'null'
+			if result.truncated:
+				body += (
+					f'\n[truncated: {len(result.value)} of {result.full_length} chars. '
+					'Re-run returning fewer fields, or slice the list.]'
+				)
+			return ActionResult(
+				extracted_content=f'<script_result>\n{body}\n</script_result>',
+				long_term_memory=f'{memory} -> {body[:200]}',
 				include_extracted_content_only_once=True,
 			)
 

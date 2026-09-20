@@ -1,6 +1,7 @@
 """Event-driven browser session with backwards compatibility."""
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -53,7 +54,8 @@ from browser_use.browser.events import (
 	TabCreatedEvent,
 )
 from browser_use.browser.profile import BrowserProfile, ProxySettings
-from browser_use.browser.views import BrowserStateSummary, TabInfo
+from browser_use.browser.page_script import build_page_script
+from browser_use.browser.views import BrowserStateSummary, PageScriptResult, TabInfo
 from browser_use.dom.views import DOMRect, EnhancedDOMTreeNode, SerializedDOMState, TargetInfo
 from browser_use.observability import observe_debug
 from browser_use.utils import _log_pretty_url, create_task_with_error_handling, is_new_tab_page
@@ -517,6 +519,66 @@ class BrowserSession(BaseModel):
 			return self._cdp_client_root.ws.state is State.OPEN
 		except Exception:
 			return False
+
+	async def run_page_script(
+		self,
+		script: str,
+		timeout: float = 15.0,
+		max_chars: int = 30000,
+		target_id: 'TargetID | None' = None,
+	) -> PageScriptResult:
+		"""Run JavaScript against the live page and get a JSON-serialized result back.
+
+		The snippet is the body of an async function: it may `await`, and it must `return`
+		its result. `$`, `$$`, `txt` and `attr` helpers are in scope. Reading a long table
+		or acting on many elements this way costs one step instead of one per element.
+
+		Never raises for a script that fails — a bad selector or a thrown error comes back
+		as `ok=False` with a message, which an agent can act on.
+		"""
+		assert script.strip(), 'run_page_script() requires a non-empty script'
+
+		try:
+			cdp_session = await self.get_or_create_cdp_session(target_id, focus=False)
+		except Exception as e:
+			return PageScriptResult(ok=False, error=f'no page to run the script on: {e}')
+
+		expression = build_page_script(script, max_chars)
+		try:
+			response = await asyncio.wait_for(
+				cdp_session.cdp_client.send.Runtime.evaluate(
+					params={'expression': expression, 'awaitPromise': True, 'returnByValue': True},
+					session_id=cdp_session.session_id,
+				),
+				timeout=timeout,
+			)
+		except TimeoutError:
+			return PageScriptResult(ok=False, error=f'script did not finish within {timeout:.0f}s')
+		except Exception as e:
+			return PageScriptResult(ok=False, error=f'{type(e).__name__}: {e}')
+
+		# A syntax error in the snippet fails before our try/catch can run, so it arrives
+		# here as a CDP exception rather than as our own JSON payload.
+		if details := response.get('exceptionDetails'):
+			description = (details.get('exception') or {}).get('description') or details.get('text')
+			return PageScriptResult(ok=False, error=str(description or 'script failed to parse')[:600])
+
+		raw = (response.get('result') or {}).get('value')
+		if not isinstance(raw, str):
+			return PageScriptResult(ok=False, error='script returned a malformed result')
+		try:
+			payload = json.loads(raw)
+		except json.JSONDecodeError:
+			return PageScriptResult(ok=False, error='script returned a malformed result')
+
+		if not payload.get('ok'):
+			return PageScriptResult(ok=False, error=str(payload.get('error', 'script failed'))[:600])
+		return PageScriptResult(
+			ok=True,
+			value=str(payload.get('value', '')),
+			truncated=bool(payload.get('truncated')),
+			full_length=int(payload.get('full_length') or 0),
+		)
 
 	async def get_webmcp_tools(self, target_id: 'TargetID | None' = None) -> 'WebMCPPageTools':
 		"""List the WebMCP tools the current page declares.

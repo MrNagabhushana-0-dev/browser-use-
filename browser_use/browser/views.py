@@ -153,6 +153,20 @@ class BrowserStateHistory:
 		return data
 
 
+class PageScriptResult(BaseModel):
+	"""Outcome of running agent-authored JavaScript against the live page."""
+
+	model_config = ConfigDict(extra='forbid')
+
+	ok: bool
+	value: str = ''
+	error: str | None = None
+	# Set when the result was clipped in-page; full_length says by how much, so the
+	# agent can re-run with a slice instead of guessing.
+	truncated: bool = False
+	full_length: int = 0
+
+
 class BrowserError(Exception):
 	"""Browser error with structured memory for LLM context management.
 
