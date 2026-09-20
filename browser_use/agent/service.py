@@ -67,6 +67,7 @@ from browser_use.browser.views import BrowserStateSummary
 from browser_use.config import CONFIG
 from browser_use.dom.views import DOMInteractedElement, MatchLevel
 from browser_use.filesystem.file_system import FileSystem
+from browser_use.memory import WorkflowMemory
 from browser_use.observability import observe, observe_debug
 from browser_use.telemetry.service import ProductTelemetry
 from browser_use.telemetry.views import AgentTelemetryEvent
@@ -587,6 +588,11 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		# Telemetry
 		self.telemetry = ProductTelemetry()
+
+		# Routes that worked before on the same site. Attached rather than taken as a
+		# constructor argument because BetaAgent's signature is asserted to match this
+		# one exactly; swap in your own store with agent.workflow_memory = WorkflowMemory(...).
+		self.workflow_memory = WorkflowMemory(enabled=CONFIG.BROWSER_USE_WORKFLOW_MEMORY)
 
 		# Event bus with WAL persistence
 		# Default to ~/.config/browseruse/events/{agent_session_id}.jsonl
@@ -1125,6 +1131,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		# Render plan description for injection into agent context
 		plan_description = self._render_plan_description()
+		workflow_memory_description = self._render_workflow_memory(browser_state_summary)
 
 		self._message_manager.prepare_step_state(
 			browser_state_summary=browser_state_summary,
@@ -1147,6 +1154,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			available_file_paths=self.available_file_paths,  # Always pass current available_file_paths
 			unavailable_skills_info=unavailable_skills_info,
 			plan_description=plan_description,
+			workflow_memory_description=workflow_memory_description,
 			skip_state_update=True,
 		)
 
@@ -1448,6 +1456,25 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				self.state.plan[new_idx].status = 'current'
 
 			self.state.current_plan_item_index = new_idx
+
+	def _render_workflow_memory(self, browser_state_summary) -> str | None:
+		"""Routes that already worked on this site, or None.
+
+		Never raises: memory is an optimization, and a broken store must not stop a step.
+		"""
+		try:
+			block = self.workflow_memory.describe(self.task, getattr(browser_state_summary, 'url', None))
+		except Exception as e:
+			self.logger.debug(f'🧠 Workflow recall skipped: {type(e).__name__}: {e}')
+			return None
+		return block or None
+
+	def _remember_successful_run(self) -> None:
+		"""Induce a workflow from this run, if it succeeded. Never raises."""
+		try:
+			self.workflow_memory.record(self.task, self.history)
+		except Exception as e:
+			self.logger.debug(f'🧠 Workflow induction skipped: {type(e).__name__}: {e}')
 
 	def _render_plan_description(self) -> str | None:
 		"""Render the current plan as a text description for injection into agent context."""
@@ -2654,6 +2681,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			# set the model output schema and call it on the fly
 			if self.history._output_model_schema is None and self.output_model_schema is not None:
 				self.history._output_model_schema = self.output_model_schema
+
+			self._remember_successful_run()
 
 			return self.history
 

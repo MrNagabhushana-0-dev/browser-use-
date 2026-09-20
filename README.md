@@ -191,6 +191,35 @@ Runnable demo: [`examples/features/webmcp_tools.py`](examples/features/webmcp_to
 
 <br/>
 
+# It remembers the route that worked
+
+The second time an agent does something on a site, it should not re-derive the
+navigation it already solved. After a successful run, browser-use induces a compact
+workflow from the actions it actually took, keyed by domain, and offers it back on the
+next task for that site. [Agent Workflow Memory](https://arxiv.org/abs/2409.07429)
+(ICML 2025) reports +24.6% to +51.1% relative success on Mind2Web from this.
+
+Induction is deterministic — it compacts the real trajectory, so it costs nothing per run
+and cannot invent a step that never happened. Three rules keep it safe:
+
+- **Typed values are never stored.** A login run remembers `input into password`, never
+  the password. Memory lives in a plain JSON file; it must not become a secret store.
+- **Elements are remembered by label, not index.** Indices are per-snapshot, so
+  `click 17` is worse than useless on the next visit.
+- **Failed runs are not remembered.** A route that did not work would mislead the retry.
+
+It is on by default, writes to `~/.config/browseruse/workflows.json`, and degrades
+silently if that file is unreadable. Turn it off with `BROWSER_USE_WORKFLOW_MEMORY=false`,
+or point it elsewhere:
+
+```python
+from browser_use.memory import WorkflowMemory
+
+agent.workflow_memory = WorkflowMemory(path='./workflows.json')
+```
+
+<br/>
+
 # Use it from Claude Code, Codex or Antigravity
 
 browser-use runs as an MCP server over stdio, with no cloud account and no API key

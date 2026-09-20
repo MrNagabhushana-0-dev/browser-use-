@@ -126,6 +126,7 @@ class AgentMessagePrompt:
 		llm_screenshot_size: tuple[int, int] | None = None,
 		unavailable_skills_info: str | None = None,
 		plan_description: str | None = None,
+		workflow_memory_description: str | None = None,
 	):
 		self.browser_state: 'BrowserStateSummary' = browser_state_summary
 		self.file_system: 'FileSystem | None' = file_system
@@ -145,6 +146,7 @@ class AgentMessagePrompt:
 		self.read_state_images = read_state_images or []
 		self.unavailable_skills_info: str | None = unavailable_skills_info
 		self.plan_description: str | None = plan_description
+		self.workflow_memory_description: str | None = workflow_memory_description
 		self.llm_screenshot_size = llm_screenshot_size
 		assert self.browser_state
 
@@ -360,6 +362,11 @@ Available tabs:
 """
 		if self.plan_description:
 			agent_state += f'<plan>\n{self.plan_description}\n</plan>\n'
+
+		# Routes that already worked on this site. A hint, not an instruction: sites change,
+		# and a stale route the model follows blindly is worse than no memory at all.
+		if self.workflow_memory_description:
+			agent_state += f'<workflow_memory>\n{self.workflow_memory_description}\n</workflow_memory>\n'
 
 		if self.sensitive_data:
 			agent_state += f'<sensitive_data>{self.sensitive_data}</sensitive_data>\n'

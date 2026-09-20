@@ -210,3 +210,82 @@ def test_memory_can_be_turned_off(tmp_path, action_model):
 	assert off.record('buy socks', _history(action_model, [({'navigate': {'url': url}}, None)], url=url)) is None
 	assert off.recall('buy socks', url) == []
 	assert not (tmp_path / 'workflows.json').exists()
+
+
+async def test_the_agent_records_a_successful_run_and_recalls_it_next_time(tmp_path, action_model, mock_llm):
+	"""The loop integration: without this, the store is dead weight.
+
+	Builds a real Agent, hands it a real successful history, and checks that the route it
+	induces comes back in the prompt block the next run would see.
+	"""
+	from browser_use import Agent
+	from browser_use.agent.prompts import AgentMessagePrompt
+	from browser_use.browser.views import BrowserStateSummary
+	from browser_use.dom.views import SerializedDOMState
+	from browser_use.filesystem.file_system import FileSystem
+
+	agent = Agent(task='buy running socks', llm=mock_llm)
+	agent.workflow_memory = WorkflowMemory(path=tmp_path / 'workflows.json')
+
+	url = 'https://shop.example.com/catalog'
+	agent.history = _history(
+		action_model,
+		[
+			({'navigate': {'url': url}}, None),
+			({'click': {'index': 3}}, _element(**{'aria-label': 'Add to cart'})),
+		],
+		url=url,
+	)
+	agent._remember_successful_run()
+
+	assert [w.task for w in agent.workflow_memory.workflows] == ['buy running socks']
+
+	# What the next run would be told.
+	state = BrowserStateSummary(
+		dom_state=SerializedDOMState(_root=None, selector_map={}),
+		url=url,
+		title='Shop',
+		tabs=[],
+	)
+	description = agent._render_workflow_memory(state)
+	assert description is not None
+	assert 'Add to cart' in description
+
+	rendered = str(
+		AgentMessagePrompt(
+			browser_state_summary=state,
+			file_system=FileSystem(base_dir=tmp_path / 'fs', create_default_files=False),
+			workflow_memory_description=description,
+		)
+		.get_user_message(use_vision=False)
+		.content
+	)
+	assert '<workflow_memory>' in rendered
+	assert 'shop.example.com' in rendered
+
+
+async def test_a_broken_memory_store_never_breaks_a_step(tmp_path, mock_llm):
+	"""Recall and induction both sit on the agent's hot path, so both must swallow."""
+	from browser_use import Agent
+	from browser_use.browser.views import BrowserStateSummary
+	from browser_use.dom.views import SerializedDOMState
+
+	agent = Agent(task='anything', llm=mock_llm)
+
+	class Exploding(WorkflowMemory):
+		def describe(self, task, url, limit=2):
+			raise RuntimeError('disk on fire')
+
+		def record(self, task, history):
+			raise RuntimeError('disk still on fire')
+
+	agent.workflow_memory = Exploding(path=tmp_path / 'workflows.json')
+
+	state = BrowserStateSummary(
+		dom_state=SerializedDOMState(_root=None, selector_map={}),
+		url='https://shop.example.com/',
+		title='Shop',
+		tabs=[],
+	)
+	assert agent._render_workflow_memory(state) is None
+	agent._remember_successful_run()  # must not raise
