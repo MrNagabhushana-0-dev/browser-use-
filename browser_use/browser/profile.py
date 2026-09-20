@@ -712,6 +712,11 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 	auto_download_pdfs: bool = Field(default=True, description='Automatically download PDFs when navigating to PDF viewer pages.')
 
 	# --- Agent-facing page APIs ---
+	synthesize_site_tools: bool = Field(
+		default=True,
+		description="Induce a typed tool surface from a page's own affordances when the site publishes no "
+		'WebMCP tools of its own. Set False to only ever use tools a site actually declares.',
+	)
 	enable_webmcp: bool = Field(
 		default=True,
 		description='Install the WebMCP bridge (navigator.modelContext) so pages can declare tools the agent calls '

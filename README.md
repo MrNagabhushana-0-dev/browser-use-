@@ -191,6 +191,51 @@ Runnable demo: [`examples/features/webmcp_tools.py`](examples/features/webmcp_to
 
 <br/>
 
+# Every site gets a typed tool surface, whether it built one or not
+
+WebMCP is the right shape and almost nothing ships it. The standard asks the long tail of
+the web to adopt a protocol, which twenty years of metadata history says it will not do —
+one write-up calls it [shipping a 0% adoption
+standard](https://www.freecodecamp.org/news/a-developers-guide-to-webmcp/). The conclusion
+people keep reaching is that the browser should synthesize the layer itself from what it
+already computes. This does that.
+
+On a site that declares nothing, browser-use reads the affordances a screen reader would
+see — role, accessible name, value, state — and induces typed tools in the same shape a
+declaring site would have published:
+
+```
+Site publishes ZERO agent tools. Synthesized 4:
+  - search(query?: string)        — Search
+  - sign_in(email: string)        — Sign in
+  - apply_filter(size?: string)   — Apply filter
+  - add_to_cart()                 — Add to cart
+```
+
+Those flow straight into `call_webmcp_tool`, into the MCP tools that Claude Code, Codex and
+Antigravity consume, and into the `<webmcp_tools>` prompt block. Nothing downstream needed
+changing, because the shape is the one WebMCP already defined.
+
+Why this beats the three things it replaces: pixels carry no semantics and cost a fortune
+per step; a DOM dump buries the four things you can actually do under ten thousand nodes
+and misses anything canvas-rendered; and real WebMCP is excellent on the vanishing number
+of sites that implement it. This is the same interface as the third, available on the
+first two's territory.
+
+Three things keep it honest:
+
+- **A declared tool always wins.** A published tool is a contract; a synthesized one is
+  our reading of the markup. Synthesis only runs when the site offered nothing.
+- **The prompt says which is which**, so a model does not trust a guess like a contract.
+- **Password and payment fields never become parameters.** Synthesizing
+  `sign_in(password)` would invite a model to invent credentials and put them in a trace.
+
+Tools execute through real trusted input, resolved by accessible name rather than
+coordinates — so a locator survives the element moving, and nothing depends on a vision
+model guessing pixels. Turn it off with `BrowserSession(synthesize_site_tools=False)`.
+
+<br/>
+
 # You sign in. The agent takes over.
 
 Google, Instagram and most of the interesting web will not admit a fresh automated

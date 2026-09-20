@@ -42,6 +42,8 @@ class WebMCPService:
 		self._installed: dict[TargetID, str] = {}
 		# target_id -> last successful discovery, served when a later pass times out
 		self._cache: dict[TargetID, WebMCPPageTools] = {}
+		# Induces a tool surface for the sites — nearly all of them — that publish none.
+		self._synthesizer: Any = None
 
 	@property
 	def logger(self):
@@ -82,6 +84,10 @@ class WebMCPService:
 		"""Drop cached tools for a target whose document changed."""
 		self._cache.pop(target_id, None)
 
+	def _origin_of(self, target_id: TargetID | None) -> str:
+		cached = self._cache.get(target_id) if target_id else None
+		return cached.origin if cached else ''
+
 	def cached(self, target_id: TargetID | None) -> WebMCPPageTools | None:
 		return self._cache.get(target_id) if target_id else None
 
@@ -120,11 +126,42 @@ class WebMCPService:
 			return self._cache.get(resolved_target) or WebMCPPageTools(target_id=resolved_target)
 
 		page_tools = self._parse_discovery(resolved_target, raw)
+
+		# Only when the site published nothing. A real declaration is a contract and always
+		# wins over our reading of the markup.
+		if not page_tools.tools and self.browser_session.browser_profile.synthesize_site_tools:
+			page_tools.tools = await self._synthesized_tools(target_id=resolved_target)
+
 		self._cache[resolved_target] = page_tools
 		if page_tools.tools:
 			names = ', '.join(tool.name for tool in page_tools.tools)
 			self.logger.debug(f'🧩 {len(page_tools.tools)} WebMCP tool(s) on {page_tools.origin}: {names}')
 		return page_tools
+
+	@property
+	def synthesizer(self):
+		from browser_use.synthesis import SiteToolSynthesizer
+
+		if self._synthesizer is None:
+			self._synthesizer = SiteToolSynthesizer(self.browser_session)
+		return self._synthesizer
+
+	async def _synthesized_tools(self, target_id: TargetID | None = None) -> list[WebMCPTool]:
+		"""Tools induced from the page, in the shape a declaring site would have used."""
+		try:
+			manifest = await self.synthesizer.synthesize(target_id=target_id)
+		except Exception as e:
+			self.logger.debug(f'🔧 Synthesis skipped: {type(e).__name__}: {e}')
+			return []
+		return [
+			WebMCPTool(
+				name=tool.name,
+				description=tool.description,
+				inputSchema=tool.input_schema,
+				source='synthesized',
+			)
+			for tool in manifest.tools
+		]
 
 	def _parse_discovery(self, target_id: TargetID, raw: Any) -> WebMCPPageTools:
 		"""Turn the bridge's JSON payload into validated models, dropping bad tools."""
@@ -184,6 +221,20 @@ class WebMCPService:
 			return WebMCPToolCallResult(tool_name=name, ok=False, error=f'no page to call the tool on: {e}')
 
 		await self.install(cdp_session.target_id)
+
+		# A synthesized tool has no in-page handler to call: it is a sequence of UI steps we
+		# perform ourselves, through real input.
+		if self.browser_session.browser_profile.synthesize_site_tools:
+			manifest = self.synthesizer.cached(self._origin_of(cdp_session.target_id))
+			synthesized = manifest.get(name) if manifest else None
+			if synthesized is not None:
+				try:
+					ok, message = await self.synthesizer.call(synthesized, arguments or {}, target_id=target_id)
+				except Exception as e:
+					return WebMCPToolCallResult(tool_name=name, ok=False, error=f'{type(e).__name__}: {e}')
+				if ok:
+					synthesized.verified = True
+				return WebMCPToolCallResult(tool_name=name, ok=ok, content=message if ok else '', error=None if ok else message)
 
 		# Arguments are page-bound data, never source: JSON-encode them twice so the
 		# payload crosses as a single string literal that JSON.parse reconstitutes.
