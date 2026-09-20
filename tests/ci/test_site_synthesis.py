@@ -599,7 +599,9 @@ async def test_the_prompt_separates_proven_tools_from_untried_ones(browser_sessi
 	store = ManifestStore(path=tmp_path / 'site_tools.json', enabled=True)
 	synthesizer = SiteToolSynthesizer(browser_session, store=store)
 	manifest = await synthesizer.synthesize()
-	ok, _ = await synthesizer.call(manifest.get('search'), {'query': 'boots'})
+	search = manifest.get('search')
+	assert search is not None
+	ok, _ = await synthesizer.call(search, {'query': 'boots'})
 	assert ok
 
 	# Feed that state through the same path the agent's prompt uses.
