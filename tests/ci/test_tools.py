@@ -253,12 +253,19 @@ class TestToolsIntegration:
 		assert 'click' in excluded_tools.registry.registry.actions
 
 	async def test_search_action(self, tools, browser_session, base_url):
-		"""Test the search action."""
+		"""The search action, pointed at a local engine via a URL template.
 
+		This used to call duckduckgo.com for real, against the repo's own rule that tests
+		never use remote URLs. It failed for reasons that had nothing to do with this code:
+		a captcha, an egress policy, or a TLS-terminating proxy the browser does not trust.
+		"""
 		await browser_session.get_current_page_url()
 
-		# Execute search action - it will actually navigate to our search results page
-		result = await tools.search(query='Python web automation', browser_session=browser_session)
+		result = await tools.search(
+			query='Python web automation',
+			engine=f'{base_url}/search?q={{query}}',
+			browser_session=browser_session,
+		)
 
 		# Verify the result
 		assert isinstance(result, ActionResult)
@@ -268,6 +275,27 @@ class TestToolsIntegration:
 		# For our test purposes, we just verify we're on some URL
 		current_url = await browser_session.get_current_page_url()
 		assert current_url is not None and 'Python' in current_url
+
+	async def test_search_accepts_a_url_template_for_any_engine(self, tools, browser_session, base_url):
+		"""So you can point it at a self-hosted SearxNG, an intranet search, or Kagi."""
+		result = await tools.search(
+			query='quarterly report',
+			engine=f'{base_url}/search?q={{query}}&src=internal',
+			browser_session=browser_session,
+		)
+		assert result.error is None
+
+		current_url = await browser_session.get_current_page_url()
+		assert 'src=internal' in current_url, 'the rest of the template must survive'
+		assert 'quarterly+report' in current_url or 'quarterly%20report' in current_url
+
+	async def test_search_rejects_an_engine_it_cannot_resolve(self, tools, browser_session):
+		"""A bare unknown name is a typo, not a URL; say so instead of navigating somewhere odd."""
+		result = await tools.search(query='x', engine='altavista', browser_session=browser_session)
+		assert result.error is not None
+		assert 'altavista' in result.error
+		# The error has to teach the way out, since the template form is not guessable.
+		assert '{query}' in result.error
 
 	async def test_done_action(self, tools, browser_session, base_url):
 		"""Test that DoneAction completes a task and reports success or failure."""

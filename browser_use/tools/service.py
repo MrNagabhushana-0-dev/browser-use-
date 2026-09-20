@@ -476,10 +476,19 @@ class Tools(Generic[Context]):
 				'bing': f'https://www.bing.com/search?q={encoded_query}',
 			}
 
-			if params.engine.lower() not in search_engines:
-				return ActionResult(error=f'Unsupported search engine: {params.engine}. Options: duckduckgo, google, bing')
-
-			search_url = search_engines[params.engine.lower()]
+			# A URL template lets you point at whatever you actually search with — a
+			# self-hosted SearxNG, an intranet search, Kagi — instead of the three names
+			# hardcoded here. It also lets tests exercise this action without the internet.
+			engine = params.engine.strip()
+			if '{query}' in engine and engine.lower().startswith(('http://', 'https://')):
+				search_url = engine.replace('{query}', encoded_query)
+			elif engine.lower() in search_engines:
+				search_url = search_engines[engine.lower()]
+			else:
+				return ActionResult(
+					error=f'Unsupported search engine: {params.engine}. '
+					'Options: duckduckgo, google, bing, or a URL template containing {query}'
+				)
 
 			# Simple tab logic: use current tab by default
 			use_new_tab = False
@@ -494,7 +503,8 @@ class Tools(Generic[Context]):
 				)
 				await event
 				await event.event_result(raise_if_any=True, raise_if_none=False)
-				memory = f"Searched {params.engine.title()} for '{params.query}'"
+				engine_label = urllib.parse.urlparse(search_url).hostname or engine if '{query}' in engine else engine.title()
+				memory = f"Searched {engine_label} for '{params.query}'"
 				msg = f'🔍  {memory}'
 				logger.info(msg)
 				return ActionResult(extracted_content=memory, long_term_memory=memory)

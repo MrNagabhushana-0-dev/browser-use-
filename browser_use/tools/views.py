@@ -105,7 +105,11 @@ class RunPageScriptAction(BaseModel):
 class SearchAction(BaseModel):
 	query: str
 	engine: str = Field(
-		default='duckduckgo', description='duckduckgo, google, bing (use duckduckgo by default because less captchas)'
+		default='duckduckgo',
+		description=(
+			'duckduckgo, google, bing (prefer duckduckgo, fewer captchas), or a URL template '
+			'containing {query}, e.g. https://search.internal/?q={query}'
+		),
 	)
 
 
