@@ -78,7 +78,10 @@ const accessibleName = (el) => {
 	// Visible text names a control; it does not name a container. Falling back to innerText
 	// for a <table> or <form> yields its entire subtree as the "name", which is both useless
 	// and unmatchable when resolving the locator later.
-	if (el.matches && el.matches(INTERACTIVE)) return clean(el.innerText || el.value || '');
+	// Deliberately not el.value: a field's current contents are not its name. Falling back
+	// to it writes whatever the user typed into a persisted locator, and binds that locator
+	// to a string that is gone on the next page load. An unnamed field gets a CSS path.
+	if (el.matches && el.matches(INTERACTIVE)) return clean(el.innerText);
 	return '';
 };
 
@@ -113,11 +116,16 @@ const locatorFor = (el) => {
 	if (!testid && !el.id && !loc.name && !inShadow) {
 		const parts = [];
 		let node = el;
-		for (let depth = 0; node && node.nodeType === 1 && depth < 4; depth++) {
+		for (let depth = 0; node && node.nodeType === 1 && depth < 8; depth++) {
 			let seg = node.tagName.toLowerCase();
-			if (node.classList && node.classList.length) seg += '.' + [...node.classList].slice(0, 2).join('.');
+			const parent = node.parentElement;
+			if (parent) {
+				const sibs = [...parent.children].filter(c => c.tagName === node.tagName);
+				if (sibs.length > 1) seg += `:nth-of-type(${sibs.indexOf(node) + 1})`;
+			}
 			parts.unshift(seg);
-			node = node.parentElement;
+			if (node === document.body || !parent) break;
+			node = parent;
 		}
 		loc.css = parts.join(' > ');
 	}

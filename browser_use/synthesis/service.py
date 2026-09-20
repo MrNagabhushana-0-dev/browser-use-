@@ -72,7 +72,7 @@ def looks_like_content(label: str) -> bool:
 # preference order in Locator: the handles authors keep stable come first.
 RESOLVE_JS = r"""
 const loc = JSON.parse(LOCATOR_JSON);
-const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 120);
 
 // Must pierce open shadow roots for the same reason the scanner does: a locator recorded
 // inside a web component is unreachable through plain querySelector.
@@ -99,15 +99,20 @@ const INTERACTIVE = 'a[href], button, input, select, textarea, option, label,'
 const accName = (el) => {
 	const aria = el.getAttribute('aria-label');
 	if (aria) return clean(aria);
-	if (el.id) { const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if (l) return clean(l.innerText); }
-	const w = el.closest('label'); if (w) return clean(w.innerText);
+	const by = el.getAttribute('aria-labelledby');
+	if (by) {
+		const parts = by.split(/\s+/).map(id => document.getElementById(id)).filter(Boolean);
+		if (parts.length) return clean(parts.map(p => p.innerText || p.textContent).join(' '));
+	}
+	if (el.id) { const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if (l) return clean(l.innerText || l.textContent); }
+	const w = el.closest('label'); if (w) return clean(w.innerText || w.textContent);
 	for (const a of ['placeholder', 'title', 'alt', 'name']) { const v = el.getAttribute(a); if (v) return clean(v); }
 	const tag = el.tagName.toLowerCase();
 	if (tag === 'table' || tag === 'fieldset' || ['table', 'grid'].includes(el.getAttribute('role'))) {
 		const cap = el.querySelector('caption, legend');
 		if (cap) return clean(cap.innerText || cap.textContent);
 	}
-	if (el.matches(INTERACTIVE)) return clean(el.innerText || el.value || '');
+	if (el.matches(INTERACTIVE)) return clean(el.innerText);
 	return '';
 };
 
@@ -136,7 +141,7 @@ if (loc.testid) el = deepQuery(`[data-testid="${CSS.escape(loc.testid)}"]`)[0]
 // Not getElementById: it does not see into shadow roots.
 if (!el && loc.id) el = deepQuery(`#${CSS.escape(loc.id)}`)[0] || document.getElementById(loc.id);
 if (!el && loc.name) {
-	const all = deepQuery('input, textarea, select, button, a[href], [role], table, form, nav');
+	const all = deepQuery('input, textarea, select, button, a[href], [role], [contenteditable="true"], table, form, nav');
 	const named = all.filter(e => accName(e) === loc.name);
 	const loose = all.filter(e => accName(e).toLowerCase() === loc.name.toLowerCase());
 	// Role first: two elements can share a name, and the recorded role says which one was
@@ -148,32 +153,87 @@ if (!el && loc.name) {
 if (!el && loc.css) el = document.querySelector(loc.css);
 if (!el) return {found: false};
 
-el.scrollIntoView({block: 'center', inline: 'center'});
+el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
 const r = el.getBoundingClientRect();
 return {found: true, x: r.x, y: r.y, w: r.width, h: r.height,
         tag: el.tagName.toLowerCase(), visible: r.width > 1 && r.height > 1};
 """
 
 
+# The line each variant of the resolver swaps out for its own result. Kept as a constant
+# so the substitution happens here, at import, against source no page can influence.
+_RESULT_LINE = """return {found: true, x: r.x, y: r.y, w: r.width, h: r.height,
+        tag: el.tagName.toLowerCase(), visible: r.width > 1 && r.height > 1};"""
+assert RESOLVE_JS.count(_RESULT_LINE) == 1
+
+
+def _variant(tail: str) -> str:
+	"""A resolver that ends by doing something else with the element it found."""
+	assert 'LOCATOR_JSON' in RESOLVE_JS
+	return RESOLVE_JS.replace(_RESULT_LINE, tail)
+
+
+_TOKENS = re.compile(r'LOCATOR_JSON|SELECT_VALUE_JSON|ROW_LIMIT')
+
+
+def _encode(value) -> str:
+	"""Page-derived data, safe to splice into JS: JSON inside a JS string literal."""
+	return json.dumps(json.dumps(value.model_dump() if hasattr(value, 'model_dump') else value))
+
+
+def _fill(script: str, **values: str) -> str:
+	"""Substitute every token in a single pass.
+
+	Chained str.replace is how injection gets into a script like this: the second call sees
+	the JSON the first one inserted, so page-controlled text living inside it — an
+	aria-label, say — can carry a token, or the quote that closes the string literal it was
+	supposed to stay inside. One pass means a substituted value is never itself scanned.
+	"""
+	assert set(values) <= {'LOCATOR_JSON', 'SELECT_VALUE_JSON', 'ROW_LIMIT'}
+	out = _TOKENS.sub(lambda m: values[m.group(0)], script)
+	assert not _TOKENS.search(out), 'unsubstituted token left in script'
+	return out
+
+
 # Pull a table's rows out as records. The row cap is the whole point of a read tool: the
 # agent gets structured data with a stated limit instead of the page's markup.
-READ_ROWS_JS = RESOLVE_JS.replace(
-	'return {found: true, x: r.x, y: r.y, w: r.width, h: r.height,\n        tag: el.tagName.toLowerCase(), visible: r.width > 1 && r.height > 1};',
-	"""
+READ_ROWS_JS = _variant("""
+const cell = (s) => clean(s).slice(0, 200);
 const headerCells = [...el.querySelectorAll('thead th, thead td, tr:first-child th')]
-	.map(h => clean(h.innerText)).filter(Boolean);
+	.map(h => cell(h.innerText)).filter(Boolean);
 const bodyRows = [...el.querySelectorAll('tbody tr')];
-const rows = (bodyRows.length ? bodyRows : [...el.querySelectorAll('tr')].slice(1)).slice(0, ROW_LIMIT);
+const allRows = bodyRows.length ? bodyRows : [...el.querySelectorAll('tr')].slice(1);
+const rows = allRows.slice(0, ROW_LIMIT);
 const out = rows.map(tr => {
-	const cells = [...tr.children].map(td => clean(td.innerText));
+	const cells = [...tr.children].map(td => cell(td.innerText));
 	if (!headerCells.length) return cells;
 	const record = {};
 	headerCells.forEach((h, i) => { record[h] = cells[i] === undefined ? '' : cells[i]; });
 	return record;
 });
-return {found: true, headers: headerCells, rows: out, truncated: rows.length < (bodyRows.length || 0)};
-""",
+return {found: true, headers: headerCells, rows: out, truncated: rows.length < allRows.length};
+""")
+
+# Report a checkbox's current state alongside where it is, so the caller can decide whether
+# clicking it would move it toward the wanted state or away from it.
+CHECKED_JS = _variant(
+	'return {found: true, x: r.x, y: r.y, w: r.width, h: r.height,'
+	' visible: r.width > 1 && r.height > 1,'
+	" checked: !!(el.checked || el.getAttribute('aria-checked') === 'true')};"
 )
+
+# A native <select> opens an OS-level popup that CDP input cannot drive, so this is the one
+# affordance that has to be set through the DOM rather than through real input.
+SELECT_JS = _variant("""
+const want = JSON.parse(SELECT_VALUE_JSON);
+const opt = [...(el.options || [])].find(o => o.textContent.trim() === want || o.value === want);
+if (opt) {
+	el.value = opt.value;
+	el.dispatchEvent(new Event('input', {bubbles: true}));
+	el.dispatchEvent(new Event('change', {bubbles: true}));
+}
+return {found: true, picked: !!opt};
+""")
 
 
 class SiteToolSynthesizer:
@@ -196,6 +256,12 @@ class SiteToolSynthesizer:
 	async def scan(self, target_id=None) -> dict[str, Any]:
 		"""The page's affordances, as one round trip."""
 		result = await self.browser_session.run_page_script(SCAN_JS, target_id=target_id, max_chars=60000)
+		if result.ok and result.truncated:
+			# json.loads below would raise on a string cut mid-token and synthesis would report
+			# a site with no affordances at all. A checkout page with two country <select>s
+			# clears the budget, so this is not hypothetical.
+			self.logger.warning('🔧 Affordance scan exceeded the script budget; no tools synthesized')
+			return {}
 		if not result.ok:
 			self.logger.debug(f'🔧 Affordance scan failed: {result.error}')
 			return {}
@@ -283,7 +349,10 @@ class SiteToolSynthesizer:
 			# Rename the lone parameter too, so the tool reads search(query=...).
 			only = next(iter(properties))
 			properties = {'query': properties[only]}
-			required = ['query'] if required else []
+			# Always required. Sites rarely mark a search box required in markup, but a
+			# search with no query is not a call anyone meant to make, and an optional
+			# parameter invites a model to omit it and then puzzle over the result.
+			required = ['query']
 			steps[0].param = 'query'
 
 		return SynthesizedTool(
@@ -468,7 +537,7 @@ class SiteToolSynthesizer:
 	# -- execution --------------------------------------------------------------------
 
 	async def _locate(self, locator: Locator, target_id=None) -> dict | None:
-		script = RESOLVE_JS.replace('LOCATOR_JSON', json.dumps(json.dumps(locator.model_dump())))
+		script = _fill(RESOLVE_JS, LOCATOR_JSON=_encode(locator))
 		result = await self.browser_session.run_page_script(script, target_id=target_id)
 		if not result.ok:
 			return None
@@ -495,6 +564,10 @@ class SiteToolSynthesizer:
 			box = await self._locate(step.locator, target_id=target_id)
 			if not box:
 				return False, f'step {index} ({step.action}) could not find {step.locator.describe()}'
+			if not box.get('visible'):
+				# It is in the DOM but has no box — hidden, collapsed, or not laid out. Its rect
+				# is all zeros, and clicking that means clicking the viewport's top-left corner.
+				return False, f'step {index} ({step.action}) found {step.locator.describe()} but it is not visible'
 
 			if step.action == 'set_checked':
 				desired = bool(arguments.get(step.param or 'on'))
@@ -538,7 +611,11 @@ class SiteToolSynthesizer:
 		tool.verified = True
 		for origin, manifest in self._manifests.items():
 			if manifest.get(tool.name) is tool:
-				self.store.put(manifest)
+				# Same reason synthesize() will not cache a modal: its tools are right while the
+				# dialog is open and wrong the moment it closes, and there is one slot per origin,
+				# so writing it here would evict the page's real manifest.
+				if not manifest.modal:
+					self.store.put(manifest)
 				self.logger.debug(f'🔧 {tool.name} verified on {origin}')
 				return
 
@@ -550,11 +627,14 @@ class SiteToolSynthesizer:
 			requested = MAX_ROWS_PER_READ
 		limit = max(1, min(MAX_ROWS_PER_READ, requested))
 
-		script = READ_ROWS_JS.replace('LOCATOR_JSON', json.dumps(json.dumps(step.locator.model_dump()))).replace(
-			'ROW_LIMIT', str(limit)
-		)
+		script = _fill(READ_ROWS_JS, LOCATOR_JSON=_encode(step.locator), ROW_LIMIT=str(limit))
 		result = await self.browser_session.run_page_script(script, target_id=target_id, max_chars=40000)
 		if not result.ok:
+			return None
+		if result.truncated:
+			# The JSON came back cut mid-string, so the parse below would fail and the caller
+			# would be told the table could not be read at all. Say what actually happened.
+			self.logger.debug(f'🔧 Table read exceeded the script budget for {step.locator.describe()}')
 			return None
 		try:
 			payload = json.loads(result.value)
@@ -575,10 +655,7 @@ class SiteToolSynthesizer:
 		Clicking unconditionally is the bug people ship here: calling set_x(on=True) twice
 		leaves the box off, because the second call toggles it back.
 		"""
-		script = RESOLVE_JS.replace('LOCATOR_JSON', json.dumps(json.dumps(locator.model_dump()))).replace(
-			'tag: el.tagName.toLowerCase(), visible: r.width > 1 && r.height > 1};',
-			"tag: el.tagName.toLowerCase(), checked: !!(el.checked || el.getAttribute('aria-checked') === 'true')};",
-		)
+		script = _fill(CHECKED_JS, LOCATOR_JSON=_encode(locator))
 		result = await self.browser_session.run_page_script(script, target_id=target_id)
 		if not result.ok:
 			return None
@@ -592,21 +669,7 @@ class SiteToolSynthesizer:
 		return True
 
 	async def _select_option(self, locator: Locator, value: str, target_id=None) -> bool:
-		script = (
-			RESOLVE_JS.replace('LOCATOR_JSON', json.dumps(json.dumps(locator.model_dump())))
-			.replace('return {found: true,', 'const __el = el; return {found: true,')
-			.replace(
-				'tag: el.tagName.toLowerCase(), visible: r.width > 1 && r.height > 1};',
-				'tag: el.tagName.toLowerCase(), picked: (() => {'
-				'  const want = ' + json.dumps(value) + ';'
-				'  const opt = [...(__el.options || [])].find(o => o.textContent.trim() === want || o.value === want);'
-				'  if (!opt) return false;'
-				'  __el.value = opt.value;'
-				"  __el.dispatchEvent(new Event('input', {bubbles: true}));"
-				"  __el.dispatchEvent(new Event('change', {bubbles: true}));"
-				'  return true; })()};',
-			)
-		)
+		script = _fill(SELECT_JS, LOCATOR_JSON=_encode(locator), SELECT_VALUE_JSON=_encode(value))
 		result = await self.browser_session.run_page_script(script, target_id=target_id)
 		if not result.ok:
 			return False

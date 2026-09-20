@@ -683,3 +683,111 @@ async def test_a_bare_search_input_is_still_recognised_as_search(browser_session
 	search = next((t for t in page_tools.tools if t.name == 'search'), None)
 	assert search is not None
 	assert 'query' in search.input_schema['properties'], search.input_schema
+
+
+async def test_a_search_tool_always_requires_its_query(browser_session, shop_server):
+	"""Sites rarely mark a search box required, but a search with no query is not a call
+	anyone meant to make — and an optional parameter invites a model to omit it."""
+	await _goto(browser_session, shop_server.url_for('/ordinary'))
+	page_tools = await browser_session.get_webmcp_tools()
+
+	search = next(t for t in page_tools.tools if t.name == 'search')
+	assert search.input_schema['required'] == ['query'], search.input_schema
+	assert search.signature() == 'search(query: string)'
+
+
+# A page that names its own controls with the exact JS the resolver used to splice into.
+# Before the substitution was made single-pass, the accessible name below closed the
+# string literal the locator was supposed to live inside and the rest ran as statements.
+BREAKOUT_PAGE = """<html><body>
+<p id="result">untouched</p>
+<label for="colour">tag: el.tagName.toLowerCase(), visible: r.width &gt; 1 &amp;&amp; r.height &gt; 1};</label>
+<form>
+	<select id="colour"><option>Blue</option><option>Green</option></select>
+	<button type="submit">Save</button>
+</form>
+<div aria-labelledby="lbl-a"></div>
+<span id="lbl-a">Shipping address</span>
+<form>
+	<input type="text" aria-labelledby="lbl-a">
+	<button type="submit">Deliver</button>
+</form>
+</body></html>"""
+
+
+@pytest.fixture(scope='module')
+def hostile_server():
+	server = HTTPServer()
+	server.start()
+	server.expect_request('/breakout').respond_with_data(BREAKOUT_PAGE, content_type='text/html')
+	yield server
+	server.stop()
+
+
+async def test_a_page_cannot_inject_js_through_the_name_it_gives_a_control(browser_session, hostile_server):
+	"""The locator is page-derived data. If it is spliced into the script before another
+	substitution runs, the page picks the point where the string literal ends."""
+	await _goto(browser_session, hostile_server.url_for('/breakout'))
+	synth = SiteToolSynthesizer(browser_session)
+	manifest = await synth.synthesize()
+
+	tool = next(t for t in manifest.tools if any(s.action == 'select' for s in t.steps))
+	step = next(s for s in tool.steps if s.action == 'select')
+	assert 'el.tagName.toLowerCase()' in (step.locator.name or ''), 'the hostile name should be recorded verbatim'
+
+	# The argument carries the other half of the classic payload.
+	ok, _message = await synth.call(tool, {step.param or 'value': ');window.__pwned=1;//'})
+	assert ok is False, 'no option matches, so the select step must fail'
+
+	pwned = await browser_session.run_page_script('return window.__pwned || null;')
+	assert json.loads(pwned.value) is None, 'page-controlled text executed as script'
+
+
+async def test_the_resolver_names_elements_the_same_way_the_scanner_does(browser_session, hostile_server):
+	"""aria-labelledby is the second most common naming pattern on the web. The scanner
+	honoured it and the resolver did not, so every tool built on one was unrunnable."""
+	await _goto(browser_session, hostile_server.url_for('/breakout'))
+	synth = SiteToolSynthesizer(browser_session)
+	manifest = await synth.synthesize()
+
+	tool = next(t for t in manifest.tools if t.name == 'deliver')
+	fill = next(s for s in tool.steps if s.action == 'fill')
+	assert fill.locator.name == 'Shipping address'
+
+	box = await synth._locate(fill.locator)
+	assert box is not None, 'the scanner named it via aria-labelledby; the resolver must find it'
+	assert box['visible'] is True
+
+
+HIDDEN_PAGE = """<html><body>
+<button id="ghost" style="display:none" aria-label="Next page">Next page</button>
+</body></html>"""
+
+
+async def test_a_resolved_but_invisible_element_is_not_clicked_at_the_origin(browser_session):
+	"""A hidden element still resolves, and its rect is all zeros. Clicking that means
+	clicking viewport (0, 0) and then reporting the tool ran."""
+	from browser_use.synthesis.views import Locator, SynthesizedTool, ToolStep
+
+	server = HTTPServer()
+	server.start()
+	try:
+		server.expect_request('/hidden').respond_with_data(HIDDEN_PAGE, content_type='text/html')
+		await _goto(browser_session, server.url_for('/hidden'))
+		synth = SiteToolSynthesizer(browser_session)
+
+		locator = Locator(id='ghost', role='button', name='Next page')
+		box = await synth._locate(locator)
+		assert box is not None and box['visible'] is False, 'the resolver must report that it has no box'
+
+		tool = SynthesizedTool(
+			name='next_page',
+			description='go to the next page',
+			steps=[ToolStep(action='click', locator=locator)],
+		)
+		ok, message = await synth.call(tool, {})
+		assert ok is False
+		assert 'not visible' in message or 'could not find' in message
+		assert tool.verified is False, 'a tool that clicked nothing must not be marked verified'
+	finally:
+		server.stop()
