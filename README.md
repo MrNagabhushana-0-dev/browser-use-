@@ -282,7 +282,15 @@ to that. `session.human` produces the event stream a hand would:
 await session.human.click_box((x, y, w, h))   # curved approach, hover, hold, release
 await session.human.wheel(900)                # real wheel notches, not window.scrollBy
 await session.human.type_text('hello')        # per-character, human cadence
+await session.human.hold('ArrowRight', 0.9)   # held, with auto-repeat — not a tap
+await session.human.press('Enter')            # with the key code, so forms actually submit
 ```
+
+A tap and a hold are different inputs, and the difference decides whether a car
+accelerates or twitches. `press` carries the DOM code, virtual key code and text a real
+keyboard sends; without the key code Blink emits no `keypress` at all, so implicit form
+submission never fires — which is the only way a search box with no submit button ever
+sends anything.
 
 # Watching, instead of guessing when to screenshot
 
@@ -294,6 +302,39 @@ cost nothing, and keeps only the ones that differ — a static page costs a sing
 result = await session.live_view.watch(seconds=5)
 result.describe()   # 'Watched 5.0s over 47 frames and kept 4 that differ, at 0.0s, 1.2s, ...'
 ```
+
+Better than frames, for anything that moves: don't send pictures at all. A screenshot
+costs ~1,400 tokens, is already stale, and says nothing about motion — two of them have
+to be diffed before they mean anything. The perception stream keeps object identity
+across frames and emits one line each:
+
+```python
+print(session.live_view.narrate())
+# t=2.4 pan=left | #1* (0.21,0.62) v(+0.00,+0.05) | #4 (0.78,0.61) v(-0.09,+0.00) ttc=0.9
+```
+
+`*` is the longest-lived object — in a game, almost always the thing you control, since
+obstacles come and go while the avatar stays. `ttc` is time-to-contact, which is the
+number a player is actually computing. Measured on real captures from a video and a live
+game: **38-41x fewer tokens than the equivalent images**, 15-35ms a frame, nothing to
+download.
+
+# Playing a game, as a test of all of it
+
+A browser game is the hardest thing to drive and therefore the honest test: it lives in a
+cross-origin iframe, so nothing inside it is reachable from the DOM, it answers only to
+trusted input, and the only way to tell whether anything worked is to look at the pixels.
+
+```bash
+python -m browser_use.play games.json --seconds 95
+```
+
+The player treats the control set as a multi-armed bandit and the picture as the reward,
+so it converges on whatever *this* game responds to instead of running a fixed key
+pattern. Sessions are scored on evidence of play — how much of the time the picture was
+moving, and how often an input was followed by more motion than the session's own
+baseline — because a game's own score is unreadable from outside its iframe, and a number
+that cannot be checked is not a measurement.
 
 <br/>
 
