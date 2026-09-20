@@ -175,13 +175,36 @@ async def cdp_url_for(port: int) -> str:
 	return await _wait_for_cdp(port)
 
 
-async def attach(cdp_url: str, **session_kwargs) -> 'BrowserSession':
+async def attach(cdp_url: str, **kwargs) -> 'BrowserSession':
 	"""Attach an agent session to a browser someone else is driving.
 
 	Deliberately does not open a tab, create a profile, or change what is on screen. The
 	session lands on whatever the person left in front of them.
+
+	Profile settings are accepted here too and routed to a BrowserProfile, because the
+	caller should not have to know which of the two objects owns a given option — and
+	because passing one to the wrong constructor used to be a TypeError at the point of
+	handover, which is the worst possible moment to discover it.
 	"""
+	from browser_use.browser.profile import BrowserProfile
 	from browser_use.browser.session import BrowserSession
+
+	session_fields = set(BrowserSession.model_fields)
+	profile_fields = set(BrowserProfile.model_fields)
+	for key in kwargs:
+		if key not in session_fields and key not in profile_fields:
+			raise TypeError(f'attach() got an unexpected keyword argument {key!r}')
+
+	# Launch-time options cannot apply to a browser that is already running, and silently
+	# accepting them would promise something this cannot deliver.
+	for key in ('headless', 'args', 'user_data_dir', 'executable_path', 'channel'):
+		if key in kwargs:
+			raise TypeError(f'attach() cannot apply {key!r}: the browser is already running')
+
+	profile_kwargs = {k: v for k, v in kwargs.items() if k in profile_fields and k not in session_fields}
+	session_kwargs = {k: v for k, v in kwargs.items() if k in session_fields}
+	if profile_kwargs:
+		session_kwargs['browser_profile'] = BrowserProfile(**profile_kwargs)
 
 	session = BrowserSession(cdp_url=cdp_url, is_local=False, **session_kwargs)  # type: ignore[call-overload]
 	await session.start()

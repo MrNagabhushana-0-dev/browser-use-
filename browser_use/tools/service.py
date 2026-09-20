@@ -698,9 +698,20 @@ class Tools(Generic[Context]):
 
 			memory = f'Watched the page for {seconds:.0f}s: {params.reason}'
 			logger.info(f'🎥 {memory}')
-			images = [{'name': f'frame_at_{frame.at:.1f}s.jpg', 'data': frame.to_base64()} for frame in result.keyframes]
+
+			# What moved, as text: tracked objects with headings, about forty tokens a
+			# moment against roughly 1,400 for the equivalent picture — and the picture
+			# would not carry the velocities at all.
+			narration = browser_session.live_view.narrate()
+			body = result.describe() + (f'\n{narration}' if narration else '')
+
+			# Two pictures, not eight. The stream says what moved and where it went; images
+			# are for the thing text cannot do, which is recognising what something *is*.
+			keyframes = result.keyframes
+			shown = [keyframes[0], keyframes[-1]] if len(keyframes) > 1 else keyframes
+			images = [{'name': f'frame_at_{frame.at:.1f}s.jpg', 'data': frame.to_base64()} for frame in shown]
 			return ActionResult(
-				extracted_content=result.describe(),
+				extracted_content=body,
 				long_term_memory=f'{memory} -> {result.describe()}',
 				images=images or None,
 				include_extracted_content_only_once=True,

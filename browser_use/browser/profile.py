@@ -984,6 +984,28 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 
 		self.user_data_dir = temp_dir
 
+	def _headful_user_agent(self) -> str:
+		"""This Chrome's own UA with the headless marker taken out.
+
+		Derived from the running binary rather than hardcoded, so it never claims a Chrome
+		version that is not the one actually rendering the page — a mismatch between the UA
+		string and the engine's real behaviour is itself a signal.
+		"""
+		import re
+		import subprocess
+
+		version = ''
+		try:
+			path = self.executable_path or os.environ.get('BROWSERUSE_CHROME_PATH')
+			if path:
+				out = subprocess.run([str(path), '--version'], capture_output=True, text=True, timeout=10).stdout
+				if match := re.search(r'(\d+\.\d+\.\d+\.\d+)', out):
+					version = match.group(1)
+		except Exception:
+			version = ''
+		version = version or '141.0.0.0'
+		return f'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36'
+
 	def get_args(self) -> list[str]:
 		"""Get the list of all Chrome CLI launch args for this profile (compiled from defaults, user-provided, and system-specific)."""
 
@@ -1010,12 +1032,21 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 				else []
 			),
 			*(CHROME_HEADLESS_ARGS if self.headless else []),
+			# Chromium writes "HeadlessChrome" into the UA purely because of how it was
+			# launched. It is the same binary rendering the same pages, and the string is the
+			# single loudest automation signal a site can read — so unless the caller has set
+			# a UA of their own, keep the one this Chrome would otherwise send.
+			*([f'--user-agent={self._headful_user_agent()}'] if self.headless and not self.user_agent else []),
 			*(CHROME_DISABLE_SECURITY_ARGS if self.disable_security else []),
 			*(CHROME_DETERMINISTIC_RENDERING_ARGS if self.deterministic_rendering else []),
 			*(
 				[f'--window-size={self.window_size["width"]},{self.window_size["height"]}']
 				if self.window_size
-				else (['--start-maximized'] if not self.headless else [])
+				# Headless still needs an explicit window: without one the OS window stays at
+				# Chrome's 780x580 default while the viewport is overridden to whatever was
+				# asked for, leaving window.outerWidth smaller than window.innerWidth. No real
+				# browser can be in that state, and it is trivial for a page to check.
+				else (['--start-maximized'] if not self.headless else ['--window-size=1280,800'])
 			),
 			*(
 				[f'--window-position={self.window_position["width"]},{self.window_position["height"]}']

@@ -17,6 +17,7 @@ event stream a hand would have produced.
 import asyncio
 import logging
 import random
+import time
 from typing import TYPE_CHECKING, Any, Literal
 
 from browser_use.human.motion import (
@@ -206,3 +207,64 @@ class HumanInput:
 			params={'type': 'keyUp', **up},  # type: ignore[arg-type]
 			session_id=cdp.session_id,
 		)
+
+	async def hold(self, key: str, seconds: float, target_id=None) -> None:
+		"""Hold a key down for a while, then release it.
+
+		A tap and a hold are different inputs, and games are where the difference shows:
+		accelerating, charging a jump and steering through a corner are all "the key is
+		still down". Dispatching keyDown and keyUp back to back, as press() does, produces
+		a car that twitches instead of one that drives.
+
+		Auto-repeat is part of it. A real keyboard re-sends keyDown while a key is held,
+		and code that counts those events rather than tracking state will otherwise see a
+		single frame of input.
+		"""
+		assert seconds >= 0, 'hold() needs a non-negative duration'
+		cdp = await self._session(target_id)
+		code, key_code, text = NAMED_KEYS.get(key, (None, None, None))
+
+		params: dict[str, Any] = {'key': key}
+		if code:
+			params['code'] = code
+		if key_code is not None:
+			params['windowsVirtualKeyCode'] = key_code
+			params['nativeVirtualKeyCode'] = key_code
+		if text is not None:
+			params['text'] = text
+			params['unmodifiedText'] = text
+		up = {k: v for k, v in params.items() if k not in ('text', 'unmodifiedText')}
+
+		await cdp.cdp_client.send.Input.dispatchKeyEvent(
+			params={'type': 'keyDown', **params},  # type: ignore[arg-type]
+			session_id=cdp.session_id,
+		)
+		deadline = time.monotonic() + seconds
+		while time.monotonic() < deadline:
+			# ~30Hz, which is roughly what a held key repeats at once the initial delay has
+			# passed. Jittered, because a machine-perfect interval is itself a signal.
+			await asyncio.sleep(min(self.rng.uniform(0.028, 0.038), max(0.0, deadline - time.monotonic())))
+			await cdp.cdp_client.send.Input.dispatchKeyEvent(
+				params={'type': 'keyDown', 'autoRepeat': True, **params},  # type: ignore[arg-type]
+				session_id=cdp.session_id,
+			)
+		await cdp.cdp_client.send.Input.dispatchKeyEvent(
+			params={'type': 'keyUp', **up},  # type: ignore[arg-type]
+			session_id=cdp.session_id,
+		)
+
+	async def press_and_hold(self, box: tuple[float, float, float, float], seconds: float, target_id=None) -> None:
+		"""Press the mouse inside a box, keep it down, then release where it went.
+
+		Touch-style games are built around this: charge a shot, drag a slingshot, steer by
+		holding. A click that is down and up in the same instant reads as a tap, and tap is
+		a different move.
+		"""
+		assert seconds >= 0, 'press_and_hold() needs a non-negative duration'
+		cdp = await self._session(target_id)
+		bx, by, bw, bh = box
+		x, y = landing_point(bx + bw / 2, by + bh / 2, bw, bh, self.rng)
+		await self.move_to(x, y, target_id=target_id)
+		await self._mouse(cdp, 'mousePressed', x, y, button='left', clickCount=1)
+		await asyncio.sleep(seconds)
+		await self._mouse(cdp, 'mouseReleased', x, y, button='left', clickCount=1)

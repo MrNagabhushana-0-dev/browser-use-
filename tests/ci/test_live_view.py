@@ -6,8 +6,10 @@ stream continuously and cost nothing, and only the ones that differ are kept.
 """
 
 import asyncio
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from pytest_httpserver import HTTPServer
 
 from browser_use.browser.events import NavigateToUrlEvent
@@ -220,3 +222,85 @@ async def test_a_cancelled_watch_does_not_leave_the_screencast_running(browser_s
 
 	assert live._running is False
 	assert browser_session.cdp_client._event_registry._handlers.get('Page.screencastFrame') is None
+
+
+async def test_watching_while_recording_captures_frames_and_keeps_recording(motion_server, tmp_path):
+	"""The real co-existence case, which the unit test with a fake incumbent did not cover:
+	the recorder owns the stream, and its CDP session is not necessarily the one LiveView
+	would have picked for the same target. Filtering on ours captured nothing at all."""
+	from browser_use.browser.profile import BrowserProfile
+	from browser_use.browser.session import BrowserSession
+
+	session = BrowserSession(
+		browser_profile=BrowserProfile(
+			headless=True,
+			user_data_dir=None,
+			window_size={'width': 640, 'height': 480},
+			record_video_dir=str(tmp_path / 'video'),
+			record_video_size={'width': 640, 'height': 480},
+			record_video_framerate=10,
+		)
+	)
+	await session.start()
+	try:
+		await _goto(session, motion_server.url_for('/moving'))
+		recorder = session._recording_watchdog
+		assert recorder is not None and recorder.is_recording, 'this test needs a live recording'
+
+		result = await LiveView(session).watch(seconds=4.0)
+		assert result.frames_captured > 0, 'a watch during a recording captured nothing'
+		assert result.changed, result.describe()
+	finally:
+		await session.kill()
+		await asyncio.sleep(1.0)
+
+	written = list((tmp_path / 'video').glob('*.mp4'))
+	assert written and written[0].stat().st_size > 1000, 'the recording did not survive the watch'
+
+
+def test_the_stream_costs_far_less_than_the_pictures_it_replaces():
+	"""The claim the whole perception layer rests on. A 1280x800 image is about 1,400
+	tokens on Claude and carries no motion at all — the reader has to diff two of them to
+	learn that anything moved. The stream carries heading and time-to-contact already."""
+	from browser_use.vision.stream import PerceptionStream
+
+	stream = PerceptionStream()
+	lines = []
+	# A sprite crossing a static background, which is what a game or a video mostly is.
+	for step in range(10):
+		image = Image.new('RGB', (320, 200), (30, 30, 40))
+		x = 20 + step * 26
+		for px in range(x, min(320, x + 34)):
+			for py in range(120, 160):
+				image.putpixel((px, py), (240, 200, 60))
+		buffer = BytesIO()
+		image.save(buffer, format='JPEG', quality=70)
+		if line := stream.observe(buffer.getvalue(), at=step * 0.12):
+			lines.append(line)
+
+	assert len(lines) >= 6
+	moving = [line for line in lines if 'v(+0.0' in line or 'v(+0.1' in line]
+	assert moving, f'the sprite moves right every frame but no velocity was reported:\n{lines}'
+
+	stream_tokens = sum(max(1, len(line) // 4) for line in lines)
+	image_tokens = len(lines) * ((1280 * 800) // 750)
+	assert stream_tokens * 10 < image_tokens, (
+		f'{stream_tokens} tokens of stream vs {image_tokens} of images is not the order of magnitude this layer exists to deliver'
+	)
+
+
+def test_an_object_keeps_its_identity_while_it_is_on_screen():
+	"""Velocity only means something if the thing it belongs to is the same thing as last
+	frame. Without identity every frame is a fresh set of anonymous rectangles."""
+	from browser_use.vision.perceive import Blob
+	from browser_use.vision.stream import SceneTracker
+
+	tracker = SceneTracker()
+	ids = []
+	for step in range(6):
+		tracked = tracker.update([Blob(x=0.1 + step * 0.08, y=0.5, w=0.08, h=0.1, cells=9)])
+		ids.append(tracked[0].id)
+
+	assert len(set(ids)) == 1, f'the same object was given {len(set(ids))} identities: {ids}'
+	assert tracker.objects[0].dx > 0.02, 'a rightward-moving object should report rightward velocity'
+	assert tracker.anchor() is not None, 'the longest-lived object should be nominated as the anchor'
