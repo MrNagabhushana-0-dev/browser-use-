@@ -45,14 +45,25 @@ PLAY_BUFFER = 60
 _CONSENT = ('accept', 'agree', 'consent', 'got it', 'allow all', 'i understand', 'ok')
 _START = ('play', 'start', 'tap to', 'click to', 'begin', 'resume')
 
-# Where a restart button actually sits, as fractions of the play surface, most likely
-# first. Measured from real game-over cards rather than assumed: the row of buttons sits
-# low, not in the middle, and the middle is the one place a blind click always misses.
-RESTART_SPOTS = (
+# Where the button that starts or restarts a game actually sits, as fractions of the play
+# surface, most likely first. Measured off real screens rather than assumed, and the
+# measurements agree with each other: Drive Mad's Retry sat at 0.87 of the surface height
+# and Drift Boss's title-screen Play at 0.79. Both are well below the middle, which is why
+# a blind centre click — the obvious implementation — misses every time and leaves a game
+# that loaded fine looking like a game that never started.
+#
+# A column down the middle first, because these buttons are centred horizontally far more
+# often than not; then the sides, for the Home / Retry / Next rows that straddle centre.
+BUTTON_SPOTS = (
+	(0.50, 0.79),
 	(0.50, 0.87),
-	(0.50, 0.57),
 	(0.50, 0.72),
+	(0.50, 0.62),
+	(0.50, 0.57),
 	(0.50, 0.50),
+	(0.50, 0.93),
+	(0.62, 0.79),
+	(0.38, 0.79),
 	(0.62, 0.87),
 	(0.38, 0.87),
 	(0.50, 0.35),
@@ -238,7 +249,7 @@ class GameArena:
 			if len(keyframes) < 8 and timeline and timeline[-1] >= 6 and (not keyframes or at - keyframes[-1][0] > 8):
 				keyframes.append((at, newest.data))
 
-	async def _recover(self, timeline: list[int]) -> bool:
+	async def _recover(self, timeline: list[int], limit: int = 7) -> bool:
 		"""Get out of a game-over card, and know whether it worked.
 
 		Clicking the middle of the play surface is the obvious move and it is wrong: a
@@ -252,10 +263,10 @@ class GameArena:
 		That terminates immediately when the first candidate is right and still recovers
 		when the layout is one this has never seen.
 		"""
-		for spot in RESTART_SPOTS:
+		for spot in BUTTON_SPOTS[:limit]:
 			before = len(timeline)
 			await self.human.click_box(self._spot(*spot))
-			await asyncio.sleep(0.45)
+			await asyncio.sleep(0.4)
 			window = timeline[before:]
 			if window and (sum(window) / len(window)) >= ACTIVE_THRESHOLD:
 				return True
@@ -281,6 +292,16 @@ class GameArena:
 		keyframes: list[tuple[float, bytes]] = []
 		sampler = asyncio.create_task(self._sample(view, began, timeline, keyframes))
 		last_moved = began
+
+		# Many games open on a title screen with a Play button and sit there. Waiting for
+		# the stall timer to notice wastes seconds at the front of every such session, and
+		# the whole run is a fixed length, so find the button first and use the full budget
+		# playing. The wider spot list is affordable here because it happens once.
+		await asyncio.sleep(1.2)
+		if not timeline or (sum(timeline) / len(timeline)) < ACTIVE_THRESHOLD:
+			if await self._recover(timeline, limit=len(BUTTON_SPOTS)):
+				report.restarts += 1
+			last_moved = time.monotonic()
 
 		try:
 			while time.monotonic() - began < seconds:
