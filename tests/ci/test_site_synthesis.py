@@ -215,3 +215,124 @@ async def test_a_locator_survives_the_element_moving(browser_session, shop_serve
 	ok, message = await synthesizer.call(search, {'query': 'after reflow'})
 	assert ok, message
 	assert await _result_text(browser_session) == 'searched for after reflow'
+
+
+# A dashboard: a data table, tabs, pagination, and a standalone toggle. Still no WebMCP.
+DASHBOARD_PAGE = """<!DOCTYPE html>
+<html><head><title>Orders</title></head><body>
+	<nav>
+		<a href="#overview" role="tab">Overview</a>
+		<a href="#orders" role="tab">Orders</a>
+	</nav>
+
+	<table>
+		<caption>Recent orders</caption>
+		<thead><tr><th>Order</th><th>Customer</th><th>Total</th></tr></thead>
+		<tbody>
+			<tr><td>A-1</td><td>Ada</td><td>12.00</td></tr>
+			<tr><td>A-2</td><td>Grace</td><td>34.50</td></tr>
+			<tr><td>A-3</td><td>Alan</td><td>7.25</td></tr>
+		</tbody>
+	</table>
+
+	<button id="prev">Previous</button>
+	<button id="next">Next</button>
+
+	<label for="only-open">Only open orders</label>
+	<input type="checkbox" id="only-open">
+
+	<div id="state">idle</div>
+<script>
+	const say = t => document.getElementById('state').textContent = t;
+	next.addEventListener('click', () => say('page 2'));
+	prev.addEventListener('click', () => say('page 0'));
+	document.getElementById('only-open').addEventListener('change', e => say('only open: ' + e.target.checked));
+</script>
+</body></html>"""
+
+
+@pytest.fixture(scope='module')
+def dashboard_server():
+	server = HTTPServer()
+	server.start()
+	server.expect_request('/dashboard').respond_with_data(DASHBOARD_PAGE, content_type='text/html')
+	yield server
+	server.stop()
+
+
+async def _state_text(session) -> str:
+	out = await session.run_page_script("return document.getElementById('state').textContent;")
+	return json.loads(out.value)
+
+
+async def test_a_table_becomes_a_read_tool_that_returns_records(browser_session, dashboard_server):
+	"""The affordance that most changes what an agent costs.
+
+	Without it, reading the table means the whole thing crossing the context window as
+	markup. With it, the agent gets records and a stated row limit.
+	"""
+	await _goto(browser_session, dashboard_server.url_for('/dashboard'))
+	page_tools = await browser_session.get_webmcp_tools()
+
+	read_tool = next((t for t in page_tools.tools if t.name.startswith('read_')), None)
+	assert read_tool is not None, f'no read tool among {[t.name for t in page_tools.tools]}'
+	assert 'Order' in read_tool.description and 'Customer' in read_tool.description
+
+	result = await browser_session.call_webmcp_tool(read_tool.name, {})
+	assert result.ok, result.error
+	rows = json.loads(result.content.split('\n')[0])
+	assert rows == [
+		{'Order': 'A-1', 'Customer': 'Ada', 'Total': '12.00'},
+		{'Order': 'A-2', 'Customer': 'Grace', 'Total': '34.50'},
+		{'Order': 'A-3', 'Customer': 'Alan', 'Total': '7.25'},
+	]
+
+
+async def test_a_read_tool_respects_its_limit(browser_session, dashboard_server):
+	await _goto(browser_session, dashboard_server.url_for('/dashboard'))
+	page_tools = await browser_session.get_webmcp_tools()
+	read_tool = next(t for t in page_tools.tools if t.name.startswith('read_'))
+
+	result = await browser_session.call_webmcp_tool(read_tool.name, {'limit': 2})
+	assert result.ok, result.error
+	rows = json.loads(result.content.split('\n')[0])
+	assert len(rows) == 2
+
+
+async def test_pagination_and_tabs_become_verbs(browser_session, dashboard_server):
+	await _goto(browser_session, dashboard_server.url_for('/dashboard'))
+	page_tools = await browser_session.get_webmcp_tools()
+	names = {t.name for t in page_tools.tools}
+
+	assert 'next_page' in names, f'no next_page among {sorted(names)}'
+	assert 'previous_page' in names, f'no previous_page among {sorted(names)}'
+	assert any(n.startswith('switch_to_') for n in names), f'no tab verbs among {sorted(names)}'
+
+	result = await browser_session.call_webmcp_tool('next_page', {})
+	assert result.ok, result.error
+	assert await _state_text(browser_session) == 'page 2'
+
+
+async def test_a_toggle_is_set_not_flipped(browser_session, dashboard_server):
+	"""Calling set_x(on=True) twice must leave it on.
+
+	Clicking unconditionally is the bug people ship here: the second call toggles it back
+	off, and the agent concludes the control does not work.
+	"""
+	await _goto(browser_session, dashboard_server.url_for('/dashboard'))
+	page_tools = await browser_session.get_webmcp_tools()
+
+	toggle = next((t for t in page_tools.tools if t.name.startswith('set_')), None)
+	assert toggle is not None, f'no toggle among {[t.name for t in page_tools.tools]}'
+	assert toggle.input_schema['properties']['on']['type'] == 'boolean'
+
+	assert (await browser_session.call_webmcp_tool(toggle.name, {'on': True})).ok
+	assert await _state_text(browser_session) == 'only open: true'
+
+	# Idempotent: asking for the state it is already in must not flip it.
+	assert (await browser_session.call_webmcp_tool(toggle.name, {'on': True})).ok
+	checked = await browser_session.run_page_script("return document.getElementById('only-open').checked;")
+	assert json.loads(checked.value) is True
+
+	assert (await browser_session.call_webmcp_tool(toggle.name, {'on': False})).ok
+	assert await _state_text(browser_session) == 'only open: false'

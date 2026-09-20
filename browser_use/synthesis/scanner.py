@@ -23,6 +23,8 @@ const MAX_BUTTONS = 25;
 
 const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 120);
 
+const INTERACTIVE = 'a[href], button, input, select, textarea, option, label, [role="button"], [role="link"], [role="tab"], [role="checkbox"], [role="switch"], [role="menuitem"]';
+
 const accessibleName = (el) => {
 	if (!el) return '';
 	const aria = el.getAttribute && el.getAttribute('aria-label');
@@ -42,7 +44,11 @@ const accessibleName = (el) => {
 		const v = el.getAttribute && el.getAttribute(attr);
 		if (v) return clean(v);
 	}
-	return clean(el.innerText || el.value || '');
+	// Visible text names a control; it does not name a container. Falling back to innerText
+	// for a <table> or <form> yields its entire subtree as the "name", which is both useless
+	// and unmatchable when resolving the locator later.
+	if (el.matches && el.matches(INTERACTIVE)) return clean(el.innerText || el.value || '');
+	return '';
 };
 
 // The role the platform would report. Explicit role wins; otherwise derive it from the
@@ -170,6 +176,58 @@ for (const el of [...document.querySelectorAll(CONTROL_SELECTOR)].slice(0, 120))
 	loose.push(describeControl(el));
 }
 
+// Tables and repeated lists are where the page's *data* lives. Turning them into read
+// tools is what stops an agent paging a table into its context one screenshot at a time.
+const tables = [];
+for (const table of [...document.querySelectorAll('table, [role="table"], [role="grid"]')].slice(0, 6)) {
+	if (!visible(table)) continue;
+	const headerCells = [...table.querySelectorAll('thead th, thead td, tr:first-child th')]
+		.map(h => clean(h.innerText)).filter(Boolean).slice(0, 12);
+	const bodyRows = table.querySelectorAll('tbody tr').length || Math.max(0, table.querySelectorAll('tr').length - 1);
+	if (!headerCells.length || !bodyRows) continue;
+	const caption = table.querySelector('caption');
+	tables.push({
+		name: clean(caption ? caption.innerText : '') || accessibleName(table) || '',
+		headers: headerCells,
+		rows: bodyRows,
+		locator: locatorFor(table),
+	});
+}
+
+// Tabs and in-page navigation: the verbs that move between views without a form.
+const views = [];
+for (const el of [...document.querySelectorAll('[role="tab"], nav a[href], [role="navigation"] a[href]')].slice(0, 60)) {
+	if (views.length >= 12) break;
+	if (!visible(el)) continue;
+	const name = accessibleName(el);
+	if (!name || name.length > 40) continue;
+	views.push({role: roleOf(el), name: name, locator: locatorFor(el)});
+}
+
+// Pagination, recognised by what the control says rather than by any particular markup.
+const PAGER = {next: /^(next|next page|\u203a|\u00bb|\u2192)$/i, previous: /^(prev|previous|previous page|\u2039|\u00ab|\u2190)$/i};
+const pagers = [];
+for (const el of [...document.querySelectorAll(BUTTON_SELECTOR)].slice(0, 200)) {
+	if (!visible(el)) continue;
+	const name = accessibleName(el);
+	for (const kind of Object.keys(PAGER)) {
+		if (PAGER[kind].test(name) && !pagers.some(p => p.kind === kind)) {
+			pagers.push({kind: kind, name: name, locator: locatorFor(el)});
+		}
+	}
+}
+
+// Standalone checkboxes and switches: settings, filters, consent.
+const toggles = [];
+for (const el of [...document.querySelectorAll('input[type=checkbox], [role="switch"], [role="checkbox"]')].slice(0, 40)) {
+	if (toggles.length >= 12) break;
+	if (!visible(el) || el.closest('form')) continue;
+	const name = accessibleName(el);
+	if (!name) continue;
+	toggles.push({name: name, checked: !!(el.checked || el.getAttribute('aria-checked') === 'true'), locator: locatorFor(el)});
+}
+
 return {url: location.href, origin: location.origin, title: document.title,
-        forms: forms, buttons: buttons, controls: loose};
+        forms: forms, buttons: buttons, controls: loose,
+        tables: tables, views: views, pagers: pagers, toggles: toggles};
 """

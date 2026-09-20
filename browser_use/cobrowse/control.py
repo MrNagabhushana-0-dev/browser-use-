@@ -15,7 +15,7 @@ while you were away, you need to see what it did before you take the wheel back.
 
 import logging
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 

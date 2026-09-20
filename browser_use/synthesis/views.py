@@ -63,13 +63,16 @@ class ToolStep(BaseModel):
 
 	model_config = ConfigDict(extra='forbid')
 
-	action: Literal['fill', 'click', 'select', 'press']
+	action: Literal['fill', 'click', 'select', 'press', 'read', 'set_checked']
 	locator: Locator
 	# Which tool parameter supplies this step's value; None for a plain click.
 	param: str | None = None
 	# For 'press': the key to send, e.g. Enter. A search box outside a form has no submit
 	# button to click, and Enter is how a person submits it.
 	key: str | None = None
+	# For 'read': the column headers seen at synthesis time, so the tool can say what it
+	# returns before anyone runs it.
+	columns: list[str] = Field(default_factory=list)
 
 
 class SynthesizedTool(BaseModel):
