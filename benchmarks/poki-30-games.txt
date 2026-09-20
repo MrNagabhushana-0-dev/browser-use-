@@ -1,0 +1,51 @@
+# Thirty games on Poki, 95 seconds each
+#
+# Run with:  python -m browser_use.play benchmarks/poki-games.json --seconds 95
+#
+# Every game loaded and every session ran its full 95 seconds; 884 inputs were sent and
+# 30 screen recordings written. What the columns mean is in browser_use/play/views.py.
+# In short: a game's own score is unreadable from outside its cross-origin iframe, so
+# these measure evidence of play instead — how much of the time the picture was moving,
+# and how often an input was followed by more motion than that session's own baseline.
+#
+# PLAYED is deliberately strict: loaded, full duration, active at least half the time AND
+# responsive at least half the time. Two of thirty clear it. Fourteen clear the response
+# half, which is the half that says the controls were connected; the activity half is
+# unfair to a turn-based game (Master Chess moves almost nothing) and to a game you die
+# in constantly, where most of the session legitimately is a game-over screen.
+#
+# Car Circle is the useful counter-example: 68% active and 5% responsive. It animates
+# whether or not anyone is playing, and the metric correctly declines to call that play.
+#
+Master Chess                 incomplete   95.2s  active   8.3%  responded  30.6%  streak   1.9s  inputs   36  stalls 6  
+Subway Surfers               PLAYED       97.3s  active  64.6%  responded  67.8%  streak  23.4s  inputs   59  stalls 0  
+Hole.io                      incomplete   99.3s  active  40.0%  responded  58.1%  streak   3.0s  inputs   31  stalls 5  
+MineFun.io                   incomplete   97.7s  active  12.6%  responded  25.0%  streak   1.1s  inputs   28  stalls 6  
+Tag                          incomplete   99.2s  active  15.1%  responded  23.8%  streak   0.5s  inputs   21  stalls 8  
+Basketball Stars             incomplete   97.1s  active  20.0%  responded  46.7%  streak   1.3s  inputs   15  stalls 6  
+Drift Boss                   incomplete   95.7s  active  45.8%  responded  70.8%  streak   2.4s  inputs   24  stalls 8  
+Retro Bowl                   incomplete  100.9s  active  15.3%  responded  27.8%  streak   0.5s  inputs   18  stalls 6  
+Stickman Hook                incomplete   99.9s  active  28.8%  responded  52.4%  streak   2.3s  inputs   42  stalls 8  
+Monkey Mart                  incomplete   98.4s  active  19.8%  responded  68.8%  streak   1.4s  inputs   16  stalls 4  
+Blocky Blast Puzzle          incomplete   96.2s  active  31.9%  responded  76.2%  streak   0.7s  inputs   21  stalls 7  
+Level Devil                  incomplete  102.4s  active  15.3%  responded  27.3%  streak   0.5s  inputs   22  stalls 7  
+Steal a Brainrot             incomplete   97.3s  active  45.0%  responded  65.0%  streak   2.2s  inputs   40  stalls 2  
+Hide and Paint               incomplete   97.2s  active   5.6%  responded  10.7%  streak   0.3s  inputs   28  stalls 7  
+Vortella's Dress Up          incomplete   95.4s  active  22.4%  responded  50.0%  streak   1.1s  inputs    8  stalls 3  
+Slime Keyboard Escape        incomplete  129.1s  active   0.4%  responded   0.0%  streak   0.3s  inputs    2  stalls 1  
+Escape From School           PLAYED       97.3s  active  70.8%  responded  54.4%  streak   5.6s  inputs   57  stalls 1  
+Paper.io 2                   incomplete   95.1s  active  39.3%  responded  68.0%  streak   1.6s  inputs   25  stalls 4  
+Drive Mad                    incomplete   96.7s  active  29.2%  responded  52.9%  streak   4.1s  inputs   51  stalls 8  
+Rainbow Obby                 incomplete  103.4s  active  16.5%  responded  23.8%  streak   1.6s  inputs   21  stalls 9  
+Goods Master                 incomplete  101.1s  active   7.2%  responded  10.0%  streak   0.3s  inputs   10  stalls 4  
+Snake vs Worms               incomplete   99.8s  active  16.1%  responded  21.1%  streak   0.7s  inputs   19  stalls 7  
+Car Circle                   incomplete   95.3s  active  68.3%  responded   5.3%  streak   6.0s  inputs   38  stalls 8  
+Ragdoll Chaos                incomplete   96.9s  active  29.3%  responded  46.7%  streak   1.8s  inputs   45  stalls 10  
+Temple Run 2                 incomplete   95.3s  active  32.1%  responded  60.7%  streak   3.2s  inputs   61  stalls 14  
+Beauty Salon                 incomplete  100.3s  active  16.0%  responded  11.1%  streak   0.7s  inputs    9  stalls 4  
+Murder                       incomplete  100.1s  active  36.5%  responded  56.0%  streak   1.8s  inputs   25  stalls 5  
+Ping Pong Go!                incomplete   95.3s  active  42.8%  responded  76.6%  streak   3.2s  inputs   64  stalls 4  
+Repuls.io                    incomplete   99.4s  active   8.9%  responded  18.2%  streak   1.3s  inputs   22  stalls 9  
+Ragdoll Hit                  incomplete   96.2s  active  57.8%  responded  38.5%  streak   7.6s  inputs   26  stalls 5  
+----------------------------------------------------------------------------------------------------------------------
+2/30 games genuinely played  ·  49.5 minutes of gameplay  ·  884 inputs sent
