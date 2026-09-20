@@ -136,6 +136,8 @@ class WebMCPPageTools(BaseModel):
 	url: str = ''
 	origin: str = ''
 	tools: list[WebMCPTool] = Field(default_factory=list)
+	# Set when these tools describe an open dialog rather than the page behind it.
+	modal_note: str | None = None
 	# Non-fatal problems hit during discovery (unreachable manifest, bad JSON, ...).
 	errors: list[str] = Field(default_factory=list)
 

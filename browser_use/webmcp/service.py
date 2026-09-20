@@ -131,6 +131,8 @@ class WebMCPService:
 		# wins over our reading of the markup.
 		if not page_tools.tools and self.browser_session.browser_profile.synthesize_site_tools:
 			page_tools.tools = await self._synthesized_tools(target_id=resolved_target)
+			if (manifest := self.synthesizer.cached(page_tools.origin)) is not None:
+				page_tools.modal_note = manifest.modal
 
 		self._cache[resolved_target] = page_tools
 		if page_tools.tools:
