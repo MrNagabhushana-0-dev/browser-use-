@@ -242,7 +242,10 @@ class GameArena:
 				continue
 			if last_grid is not None:
 				scene = perceive(last_grid, grid)
-				timeline.append(scene.motion)
+				# Floor at 1 when something identifiable moved. Percent-of-frame is a fine
+				# measure of magnitude and a bad measure of aliveness: the sprite that is the
+				# whole game can be a rounding error of the frame's area.
+				timeline.append(scene.motion or (1 if scene.blobs else 0))
 				self.scenes.append(scene)
 			last_grid = grid
 			at = time.monotonic() - began

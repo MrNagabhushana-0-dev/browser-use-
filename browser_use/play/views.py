@@ -25,10 +25,12 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, ConfigDict, Field
 from uuid_extensions import uuid7str
 
-# Percentage of the frame that has to change for a moment to count as "the game is
-# moving". Two percent is a sprite crossing a static background; below one percent is
-# a blinking cursor or JPEG noise on an otherwise frozen picture.
-ACTIVE_THRESHOLD = 2
+# The score above which a moment counts as "the game is moving". The scores it is
+# compared against are percent-of-frame-changed, floored at 1 whenever the perceiver
+# found a distinct moving object — because area is the wrong question. A 60x60 sprite on
+# a 640x400 canvas repaints 1.4% of the frame while being the entire game, and an area
+# threshold calls that a frozen screen.
+ACTIVE_THRESHOLD = 1
 
 # How long the picture may sit still before we treat it as a stall worth nudging.
 STALL_SECONDS = 2.5
