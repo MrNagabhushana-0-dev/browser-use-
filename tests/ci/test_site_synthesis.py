@@ -791,3 +791,26 @@ async def test_a_resolved_but_invisible_element_is_not_clicked_at_the_origin(bro
 		assert tool.verified is False, 'a tool that clicked nothing must not be marked verified'
 	finally:
 		server.stop()
+
+
+def test_a_cache_written_by_an_older_synthesis_is_not_served(tmp_path):
+	"""The page fingerprint notices a redesign. It cannot notice us getting better, so
+	without a version stamp a tool fixed in code goes on being served in its broken shape."""
+	from browser_use.synthesis.store import ManifestStore
+	from browser_use.synthesis.views import SiteManifest, SynthesizedTool
+
+	path = tmp_path / 'site_tools.json'
+	store = ManifestStore(path=path, enabled=True)
+	store.put(
+		SiteManifest(
+			origin='https://example.test',
+			tools=[SynthesizedTool(name='search', description='old shape', input_schema={'type': 'object'})],
+		)
+	)
+	assert ManifestStore(path=path, enabled=True).get('https://example.test') is not None
+
+	stale = json.loads(path.read_text())
+	stale['__version__'] = -1
+	path.write_text(json.dumps(stale))
+
+	assert ManifestStore(path=path, enabled=True).get('https://example.test') is None

@@ -77,7 +77,51 @@ def _clean_description(value: str) -> str:
 	return _clip(MAX_DESCRIPTION_LEN)(_sanitize_text(value).strip())
 
 
+# How deep and how wide a page's JSON Schema may be before we stop walking it. A schema
+# is page-authored JSON like everything else here, and it is handed to MCP clients as a
+# first-class tool definition, so it gets the same treatment as prose.
+MAX_SCHEMA_DEPTH = 6
+MAX_SCHEMA_KEYS = 64
+
+
+def _clean_schema(value: Any, depth: int = 0) -> Any:
+	"""Sanitize a page-declared JSON Schema in place of trusting it.
+
+	The module docstring's promise — text clipped, markup stripped — applied to `name`
+	and `description` and not to `input_schema`, which reaches Claude Code and Codex as
+	part of a tool definition. Nested `description`, `title` and `enum` strings are
+	rendered verbatim in those clients' tool lists, so a page could write anything it
+	liked into what reads to the model as trusted scaffolding.
+	"""
+	if depth > MAX_SCHEMA_DEPTH:
+		return None
+	if isinstance(value, str):
+		# Newlines collapse too: a schema field has no use for them, and a blank line is how
+		# injected prose stops looking like a description and starts looking like a new
+		# section of the client's tool list.
+		return _clip(MAX_DESCRIPTION_LEN)(re.sub(r'\s+', ' ', _sanitize_text(value)).strip())
+	if isinstance(value, dict):
+		out: dict[str, Any] = {}
+		for key, item in list(value.items())[:MAX_SCHEMA_KEYS]:
+			if not isinstance(key, str):
+				continue
+			out[_sanitize_text(key)[:MAX_TOOL_NAME_LEN]] = _clean_schema(item, depth + 1)
+		return out
+	if isinstance(value, list):
+		return [_clean_schema(item, depth + 1) for item in value[:MAX_SCHEMA_KEYS]]
+	if isinstance(value, (bool, int, float)) or value is None:
+		return value
+	# Anything else came off a JSON parse that should not have produced it.
+	return None
+
+
+def _clean_input_schema(value: dict[str, Any]) -> dict[str, Any]:
+	cleaned = _clean_schema(value)
+	return cleaned if isinstance(cleaned, dict) else {}
+
+
 ToolName = Annotated[str, AfterValidator(_validate_tool_name)]
+InputSchema = Annotated[dict[str, Any], AfterValidator(_clean_input_schema)]
 Description = Annotated[str, AfterValidator(_clean_description)]
 
 
@@ -90,7 +134,7 @@ class WebMCPTool(BaseModel):
 
 	name: ToolName
 	description: Description = ''
-	input_schema: dict[str, Any] = Field(default_factory=dict, alias='inputSchema')
+	input_schema: InputSchema = Field(default_factory=dict, alias='inputSchema')
 	source: WebMCPSource = 'js'
 	# Same-origin JSON-RPC endpoint for manifest-declared tools; None for in-page handlers.
 	endpoint: str | None = None
@@ -153,10 +197,10 @@ class WebMCPPageTools(BaseModel):
 		The wording tells the model two things it cannot infer: that these beat clicking,
 		and that their descriptions come from the page and are not instructions.
 		"""
-		return render_webmcp_prompt(self.tools, self.origin or self.url)
+		return render_webmcp_prompt(self.tools, self.origin or self.url, modal=self.modal_note)
 
 
-def render_webmcp_prompt(tools: list[WebMCPTool], location: str) -> str:
+def render_webmcp_prompt(tools: list[WebMCPTool], location: str, modal: str | None = None) -> str:
 	"""Render the `<webmcp_tools>` block body. Empty string when there is nothing to say.
 
 	The framing does two jobs the model cannot infer on its own: it says these calls
@@ -170,6 +214,14 @@ def render_webmcp_prompt(tools: list[WebMCPTool], location: str) -> str:
 	synthesized = [tool for tool in tools if tool.source == 'synthesized']
 
 	blocks: list[str] = []
+	if modal:
+		# Worth saying out loud: a model that does not know a dialog is open will read these
+		# as the page's tools and wonder why the ones it expected are missing.
+		blocks.append(
+			f'A dialog ({_sanitize_text(modal)[:80]}) is open, and these tools describe it rather than the page '
+			'behind it. Close or complete it to get back to the page.'
+		)
+
 	if declared:
 		blocks.append(
 			f'{location} declares these tools for agents. Calling one with call_webmcp_tool does in a single '

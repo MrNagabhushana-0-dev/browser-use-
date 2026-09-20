@@ -222,12 +222,12 @@ and misses anything canvas-rendered; and real WebMCP is excellent on the vanishi
 of sites that implement it. This is the same interface as the third, available on the
 first two's territory.
 
-Measured over twenty public sites (September 2026): tools induced on seventeen of them at
-a **median of 10ms**, costing **1,913 tokens against 44,041 tokens** of serialized page for
-the same information — **23x less to tell a model what it can do**. Thirteen of the
-seventeen produced a correctly named `search(query)`; kernel.org produced a table read
-tool, openlibrary real pagination. Check it yourself rather than taking the number on
-trust:
+Measured over the eleven public sites the benchmark script visits (September 2026): tools
+induced on ten of them at a **median of 10ms**, costing **1,027 tokens against 28,340
+tokens** of serialized page for the same information — **28x less to tell a model what it
+can do**. Ten of the ten produced a correctly named, required `search(query: string)`;
+elsewhere the same pass yields table read tools and real pagination. These will drift as
+the sites change, which is the point of shipping the script rather than the number:
 
 ```bash
 python -m browser_use.synthesis https://news.ycombinator.com   # one site

@@ -12,10 +12,11 @@ Behind a TLS-terminating proxy, point Chromium at the CA it presents:
 
     export BROWSER_USE_PROXY_CA_CERT=/path/to/proxy-ca.crt
 
-A run over twenty public sites in September 2026 produced tools on seventeen of them at a
-median of 10ms each, for 1,913 tokens of tools against 44,041 tokens of serialized page.
-Numbers will drift as those sites change; the script is here so the claim can be checked
-rather than taken on trust.
+A run over the eleven sites below in September 2026 produced tools on ten of them at a
+median of 10ms each, for 1,027 tokens of tools against 28,340 tokens of serialized page —
+28x less. All ten named their search tool `search(query: string)`, with the parameter
+required. Numbers will drift as those sites change; the script is here so the claim can be
+checked rather than taken on trust.
 """
 
 import asyncio

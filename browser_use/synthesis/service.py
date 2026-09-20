@@ -23,7 +23,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from browser_use.synthesis.scanner import SCAN_JS
-from browser_use.synthesis.store import ManifestStore, fingerprint
+from browser_use.synthesis.store import MAX_ORIGINS, ManifestStore, fingerprint
 from browser_use.synthesis.views import (
 	MAX_STEPS_PER_TOOL,
 	MAX_TOOLS_PER_SITE,
@@ -302,7 +302,8 @@ class SiteToolSynthesizer:
 		steps: list[ToolStep] = []
 
 		for control in controls:
-			if len(steps) >= MAX_STEPS_PER_TOOL:
+			# One under the cap, because a submit step is appended unconditionally below.
+			if len(steps) >= MAX_STEPS_PER_TOOL - 1:
 				break
 			if control.get('role') == 'button':
 				continue
@@ -311,7 +312,13 @@ class SiteToolSynthesizer:
 				continue
 			key, spec = parameter
 			if key in properties:
-				continue
+				# Two unlabeled controls collapse to the same identifier. Skipping the second
+				# one used to drop its step while still clicking submit, so the tool quietly
+				# sent a half-filled form. Number it instead.
+				suffix = 2
+				while f'{key}_{suffix}' in properties:
+					suffix += 1
+				key = f'{key}_{suffix}'
 			properties[key] = spec
 			if control.get('required'):
 				required.append(key)
@@ -525,6 +532,9 @@ class SiteToolSynthesizer:
 			modal=str(modal)[:80] if modal else None,
 		)
 		self._manifests[origin] = manifest
+		if len(self._manifests) > MAX_ORIGINS:
+			for stale in list(self._manifests)[: len(self._manifests) - MAX_ORIGINS]:
+				self._manifests.pop(stale, None)
 		if not modal:
 			self.store.put(manifest)
 		if tools:

@@ -204,6 +204,8 @@ class BrowserUseServer:
 		self._telemetry = ProductTelemetry()
 		# Snapshot of the current page's tool surface, refreshed on navigation.
 		self._site_tools: dict[str, Any] = {}
+		# The URL the snapshot above describes, so a page change by any route invalidates it.
+		self._site_tools_url: str = ''
 		self._start_time = time.time()
 
 		# Session management
@@ -1073,6 +1075,7 @@ class BrowserUseServer:
 	async def _refresh_site_tools(self) -> None:
 		"""Re-read what the current page offers. Never raises: this is a convenience."""
 		self._site_tools = {}
+		self._site_tools_url = ''
 		if not self.browser_session:
 			return
 		try:
@@ -1080,14 +1083,29 @@ class BrowserUseServer:
 		except Exception as e:
 			logger.debug(f'Could not refresh site tools: {type(e).__name__}: {e}')
 			return
+		self._site_tools_url = page_tools.url
 		self._site_tools = {tool.name: tool for tool in page_tools.tools}
 		if self._site_tools:
 			logger.debug(f'{len(self._site_tools)} site tool(s) now advertised: {", ".join(self._site_tools)}')
+
+	async def _refresh_site_tools_if_moved(self) -> None:
+		"""Re-scan only when the browser is somewhere other than where the snapshot is from."""
+		if not self.browser_session:
+			return
+		try:
+			current = await self.browser_session.get_current_page_url()
+		except Exception:
+			return
+		if current != self._site_tools_url:
+			await self._refresh_site_tools()
 
 	async def _call_site_tool(self, tool_name: str, arguments: dict) -> str:
 		"""Invoke one of the current page's tools."""
 		if not self.browser_session:
 			return 'Error: No browser session active'
+		# A click, a form submit, or another site tool can navigate, and only _navigate used
+		# to refresh. Without this the client is calling a tool from the previous page.
+		await self._refresh_site_tools_if_moved()
 		name = tool_name[len(SITE_TOOL_PREFIX) :]
 		if name not in self._site_tools:
 			known = ', '.join(sorted(self._site_tools)) or 'none on this page'

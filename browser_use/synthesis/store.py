@@ -15,6 +15,7 @@ of the affordances it was built from; when the page no longer matches, the manif
 rebuilt instead of trusted.
 """
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -26,6 +27,12 @@ from pydantic import ValidationError
 from browser_use.synthesis.views import SiteManifest
 
 logger = logging.getLogger(__name__)
+
+# Bumped whenever a change to synthesis would produce a different tool from the same
+# page. The page fingerprint catches a redesign; it cannot catch us getting better, so
+# without this a cache written by an older build outlives the improvement that should
+# have replaced it — a fixed tool goes on being served in its broken shape indefinitely.
+SYNTHESIS_VERSION = 2
 
 # Origins kept. Past this the oldest go; a manifest costs little but not nothing.
 MAX_ORIGINS = 200
@@ -52,6 +59,14 @@ def fingerprint(affordances: dict[str, Any]) -> str:
 
 	digest = hashlib.sha256('|'.join(sorted(parts)).encode()).hexdigest()
 	return digest[:16]
+
+
+def _age_key(created_at) -> float:
+	"""A sortable age, whether or not the stored timestamp carries a timezone."""
+	try:
+		return created_at.timestamp()
+	except (AttributeError, OSError, OverflowError, ValueError):
+		return 0.0
 
 
 class ManifestStore:
@@ -85,7 +100,10 @@ class ManifestStore:
 			return
 		if not isinstance(raw, dict):
 			return
-		for origin, entry in raw.items():
+		if raw.get('__version__') != SYNTHESIS_VERSION:
+			logger.debug(f'🔧 Site tools at {self.path} were written by another version of synthesis; starting over')
+			return
+		for origin, entry in (raw.get('origins') or {}).items():
 			try:
 				self._manifests[origin] = SiteManifest.model_validate(entry)
 			except ValidationError:
@@ -96,8 +114,18 @@ class ManifestStore:
 			return
 		try:
 			self.path.parent.mkdir(parents=True, exist_ok=True)
-			payload = {origin: manifest.model_dump(mode='json') for origin, manifest in self._manifests.items()}
-			self.path.write_text(json.dumps(payload, indent=1))
+			payload = {
+				'__version__': SYNTHESIS_VERSION,
+				'origins': {origin: manifest.model_dump(mode='json') for origin, manifest in self._manifests.items()},
+			}
+			# Temp file plus rename: a crash mid-write left a truncated file, which load()
+			# discards in full, silently throwing away every origin learned so far. Owner-only
+			# because this records the shape of pages someone visited while logged in.
+			tmp = self.path.with_suffix('.json.tmp')
+			tmp.write_text(json.dumps(payload, indent=1))
+			with contextlib.suppress(OSError):
+				tmp.chmod(0o600)
+			tmp.replace(self.path)
 		except OSError as e:
 			logger.debug(f'🔧 Could not write site tools to {self.path}: {type(e).__name__}: {e}')
 
@@ -120,7 +148,9 @@ class ManifestStore:
 		self.load()
 		self._manifests[manifest.origin] = manifest
 		if len(self._manifests) > MAX_ORIGINS:
-			oldest = sorted(self._manifests.items(), key=lambda pair: pair[1].created_at)
+			# Sorted on a timestamp that a hand-edited or older file can hand back naive, which
+			# raises when compared against an aware one. Age is a tiebreak, not a contract.
+			oldest = sorted(self._manifests.items(), key=lambda pair: _age_key(pair[1].created_at))
 			for origin, _ in oldest[: len(self._manifests) - MAX_ORIGINS]:
 				self._manifests.pop(origin, None)
 		self.save()

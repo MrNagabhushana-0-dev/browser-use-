@@ -36,7 +36,9 @@ async def main() -> int:
 
 	logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-	extra = [args.url] if args.url else []
+	# '--' guards the URL: without it a value like --headless would land in Chrome's argv
+	# as a flag rather than as the page to open.
+	extra = ['--', args.url] if args.url else []
 	browser = await launch_for_human(user_data_dir=args.profile, port=args.port, headless=args.headless, extra_args=extra)
 
 	print('\n  Browser is open. Sign in to whatever you need, and leave it running.\n')

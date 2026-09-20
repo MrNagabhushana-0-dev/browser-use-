@@ -31,7 +31,11 @@ WEBMCP_BRIDGE_JS = r"""
 	const KEY = '__browserUseWebMCP__';
 	if (window[KEY]) return;
 
-	const LIMITS = { tools: 32, text: 512, schema: 4096, result: 16384, rpcMs: 30000 };
+	// manifests: how many <link rel="model-context"> refs one document may make us load.
+	// manifestMs: a deadline for the whole loading pass, not per request — the Python side
+	// gives up after 3s, and without this the in-page promise chain kept fetching for 30s
+	// per ref, once per agent step, all of it still in flight against the site.
+	const LIMITS = { tools: 32, text: 512, schema: 4096, result: 16384, rpcMs: 30000, manifests: 8, manifestMs: 5000 };
 
 	const clip = (value, limit) => {
 		if (typeof value !== 'string') return '';
@@ -116,7 +120,10 @@ WEBMCP_BRIDGE_JS = r"""
 	// discovery on every agent step costs one querySelectorAll, not a network round trip.
 	const manifestCache = new Map();
 	// name -> { name, description, inputSchema, endpoint } for manifest-declared tools.
-	const manifestTools = new Map();
+	let manifestTools = new Map();
+	// The discovery pass currently running, if any, so concurrent callers share one.
+	let inFlightDiscovery = null;
+	const runDiscovery = () => bridge._discover();
 	let rpcId = 0;
 
 	const manifestRefs = () => {
@@ -175,7 +182,13 @@ WEBMCP_BRIDGE_JS = r"""
 
 	const loadManifests = async (errors) => {
 		const found = [];
-		for (const ref of manifestRefs()) {
+		const deadline = Date.now() + LIMITS.manifestMs;
+		const refs = manifestRefs();
+		if (refs.length > LIMITS.manifests) {
+			errors.push('ignored ' + (refs.length - LIMITS.manifests) + ' manifest ref(s) over the limit');
+		}
+		for (const ref of refs.slice(0, LIMITS.manifests)) {
+			if (Date.now() > deadline) { errors.push('manifest loading timed out'); break; }
 			try {
 				let doc;
 				if (ref.kind === 'inline') {
@@ -259,7 +272,16 @@ WEBMCP_BRIDGE_JS = r"""
 	const bridge = {
 		version: 1,
 
-		async discover() {
+		discover() {
+			// One pass at a time: discover() is called once per agent step, and a slow manifest
+			// endpoint would otherwise stack a fresh fetch chain on every one of them.
+			if (!inFlightDiscovery) {
+				inFlightDiscovery = runDiscovery().finally(() => { inFlightDiscovery = null; });
+			}
+			return inFlightDiscovery;
+		},
+
+		async _discover() {
 			const errors = [];
 			const out = [];
 			const seen = new Set();
@@ -273,12 +295,15 @@ WEBMCP_BRIDGE_JS = r"""
 				});
 				seen.add(entry.descriptor.name);
 			}
-			manifestTools.clear();
+			// Built locally and swapped in whole. Clearing the live map and then awaiting meant
+			// two overlapping discoveries wiped each other's entries, so a call arriving in
+			// that window reported "no tool named X" for a tool the prompt had just listed.
+			const nextManifestTools = new Map();
 			for (const tool of await loadManifests(errors)) {
 				// In-page handlers win: they run in the page's own session and need no network.
 				if (seen.has(tool.name) || out.length >= LIMITS.tools) continue;
 				seen.add(tool.name);
-				manifestTools.set(tool.name, tool);
+				nextManifestTools.set(tool.name, tool);
 				out.push({
 					name: tool.name,
 					description: tool.description,
@@ -287,6 +312,7 @@ WEBMCP_BRIDGE_JS = r"""
 					endpoint: tool.endpoint,
 				});
 			}
+			manifestTools = nextManifestTools;
 			return JSON.stringify({ url: location.href, origin: location.origin, tools: out, errors: errors });
 		},
 
@@ -341,6 +367,10 @@ WEBMCP_BRIDGE_JS = r"""
 	};
 
 	install(navigator, 'modelContext', modelContext);
+	// Deliberately no window.agent alias: it is not part of any draft, so it is a free
+	// fingerprint for anti-bot scripts, which is exactly what browser_use/human exists to
+	// avoid handing out. navigator.modelContext is the spec's surface and the only one a
+	// WebMCP-aware site looks for; window.modelContext stays for pages that check both.
 	install(window, 'modelContext', modelContext);
 	install(window, 'agent', { provideContext: provideContext, registerTool: registerTool });
 
