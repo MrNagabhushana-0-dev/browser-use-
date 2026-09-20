@@ -99,6 +99,10 @@ from browser_use.tools.service import Tools
 
 logger = logging.getLogger(__name__)
 
+# Namespace for tools that belong to the page rather than to browser-use, so a site's
+# `search` can never shadow `browser_navigate`.
+SITE_TOOL_PREFIX = 'site_'
+
 
 def _ensure_all_loggers_use_stderr():
 	"""Ensure ALL loggers only output to stderr, not stdout."""
@@ -198,6 +202,8 @@ class BrowserUseServer:
 		self.llm: ChatOpenAI | None = None
 		self.file_system: FileSystem | None = None
 		self._telemetry = ProductTelemetry()
+		# Snapshot of the current page's tool surface, refreshed on navigation.
+		self._site_tools: dict[str, Any] = {}
 		self._start_time = time.time()
 
 		# Session management
@@ -501,6 +507,11 @@ class BrowserUseServer:
 						description='Close all active browser sessions and clean up resources',
 						input_schema={'type': 'object', 'properties': {}},
 					),
+					# Whatever the page in front of us offers, as first-class tools. Asking a
+					# client to call browser_list_page_tools first means most never will; the
+					# point of the whole synthesis layer is that `search(query=...)` is simply
+					# there once you are on a site that can search.
+					*self._site_tool_entries(),
 				]
 			)
 
@@ -570,6 +581,13 @@ class BrowserUseServer:
 
 		elif tool_name == 'browser_close_all':
 			return await self._close_all_sessions()
+
+		# Tools belonging to the page in front of us, advertised after navigation. Must sit
+		# in the outer chain: the browser_* branch below only matches our own tool names.
+		elif tool_name.startswith(SITE_TOOL_PREFIX):
+			if not self.browser_session:
+				await self._init_browser_session()
+			return await self._call_site_tool(tool_name, arguments)
 
 		# Direct browser control tools (require active session)
 		elif tool_name.startswith('browser_'):
@@ -823,11 +841,19 @@ class BrowserUseServer:
 		if new_tab:
 			event = self.browser_session.event_bus.dispatch(NavigateToUrlEvent(url=url, new_tab=True))
 			await event
-			return f'Opened new tab with URL: {url}'
+			opened = f'Opened new tab with URL: {url}'
 		else:
 			event = self.browser_session.event_bus.dispatch(NavigateToUrlEvent(url=url))
 			await event
-			return f'Navigated to: {url}'
+			opened = f'Navigated to: {url}'
+
+		# The tool surface belongs to the page, so it changes when the page does.
+		await self._refresh_site_tools()
+		if self._site_tools:
+			opened += f'\n{len(self._site_tools)} tool(s) on this site: ' + ', '.join(
+				f'{SITE_TOOL_PREFIX}{name}' for name in sorted(self._site_tools)
+			)
+		return opened
 
 	async def _click(
 		self,
@@ -1016,6 +1042,61 @@ class BrowserUseServer:
 		if result.truncated:
 			body += f'\n[truncated: {len(result.value)} of {result.full_length} chars. Return fewer fields, or slice the list.]'
 		return body
+
+	def _site_tool_entries(self) -> list[types.Tool]:
+		"""The current page's tools, namespaced so they cannot collide with ours.
+
+		Built from a snapshot refreshed on navigation rather than scanned here: tools/list
+		is called often and synchronously, and a client should never wait on a page scan to
+		find out what it can do.
+		"""
+		entries: list[types.Tool] = []
+		for tool in self._site_tools.values():
+			provenance = (
+				'published by this site'
+				if tool.source != 'synthesized'
+				else (
+					'worked out from the page and previously run successfully'
+					if tool.verified
+					else 'worked out from the page, not yet run'
+				)
+			)
+			entries.append(
+				types.Tool(
+					name=f'{SITE_TOOL_PREFIX}{tool.name}',
+					description=f'{tool.description or tool.name} ({provenance})',
+					input_schema=tool.input_schema or {'type': 'object', 'properties': {}},
+				)
+			)
+		return entries
+
+	async def _refresh_site_tools(self) -> None:
+		"""Re-read what the current page offers. Never raises: this is a convenience."""
+		self._site_tools = {}
+		if not self.browser_session:
+			return
+		try:
+			page_tools = await self.browser_session.get_webmcp_tools()
+		except Exception as e:
+			logger.debug(f'Could not refresh site tools: {type(e).__name__}: {e}')
+			return
+		self._site_tools = {tool.name: tool for tool in page_tools.tools}
+		if self._site_tools:
+			logger.debug(f'{len(self._site_tools)} site tool(s) now advertised: {", ".join(self._site_tools)}')
+
+	async def _call_site_tool(self, tool_name: str, arguments: dict) -> str:
+		"""Invoke one of the current page's tools."""
+		if not self.browser_session:
+			return 'Error: No browser session active'
+		name = tool_name[len(SITE_TOOL_PREFIX) :]
+		if name not in self._site_tools:
+			known = ', '.join(sorted(self._site_tools)) or 'none on this page'
+			return f'Error: "{name}" is not a tool on the current page. Available: {known}'
+
+		result = await self.browser_session.call_webmcp_tool(name, arguments or {})
+		if not result.ok:
+			return f'Site tool "{name}" failed: {result.error or "unknown error"}'
+		return result.content or '(the tool succeeded and returned no content)'
 
 	async def _list_page_tools(self) -> str:
 		"""List WebMCP tools the current page declares."""

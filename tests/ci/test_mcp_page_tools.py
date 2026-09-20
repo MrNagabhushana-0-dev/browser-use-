@@ -110,3 +110,61 @@ async def test_malformed_tool_arguments_are_rejected_before_reaching_the_page(se
 		server, 'browser_call_page_tool', {'name': 'book_seat', 'arguments': 'not json'}
 	)
 	assert 'must be a JSON object' in await _call(server, 'browser_call_page_tool', {'name': 'book_seat', 'arguments': '[1, 2]'})
+
+
+# A site with a form and nothing agent-specific: the ordinary case.
+PLAIN_SHOP = """<!DOCTYPE html><html><head><title>Shop</title></head><body>
+	<form><input type="search" aria-label="Search stock"><button type="submit">Search</button></form>
+	<div id="out">idle</div>
+<script>
+	document.querySelector('form').addEventListener('submit', e => {
+		e.preventDefault();
+		document.getElementById('out').textContent = 'found ' + document.querySelector('input').value;
+	});
+</script></body></html>"""
+
+
+async def test_the_sites_tools_appear_in_the_mcp_tool_list(server, mcp_server_pages):
+	"""An MCP client should not have to know to ask what a page offers.
+
+	Requiring browser_list_page_tools first means most clients never will, and the point of
+	the synthesis layer is that site_search is simply there once you are on a site that can
+	search.
+	"""
+	mcp_server_pages.expect_request('/plainshop').respond_with_data(PLAIN_SHOP, content_type='text/html')
+
+	before = {tool.name for tool in await _list_tools(server)}
+	assert not any(name.startswith('site_') for name in before), 'site tools before navigating anywhere'
+
+	await _call(server, 'browser_navigate', {'url': mcp_server_pages.url_for('/plainshop')})
+
+	after = {tool.name for tool in await _list_tools(server)}
+	new_tools = after - before
+	assert 'site_search' in new_tools, f'the page tools were not advertised: {sorted(new_tools)}'
+
+
+async def test_a_site_tool_can_be_called_directly(server, mcp_server_pages):
+	mcp_server_pages.expect_request('/plainshop').respond_with_data(PLAIN_SHOP, content_type='text/html')
+	await _call(server, 'browser_navigate', {'url': mcp_server_pages.url_for('/plainshop')})
+
+	out = await _call(server, 'site_search', {'query': 'widgets'})
+	assert 'failed' not in out.lower(), out
+
+	shown = await _call(server, 'browser_run_script', {'script': "return document.getElementById('out').textContent;"})
+	assert json.loads(shown) == 'found widgets'
+
+
+async def test_a_site_tool_that_is_not_on_this_page_says_what_is(server, mcp_server_pages):
+	await _call(server, 'browser_navigate', {'url': mcp_server_pages.url_for('/rows')})
+
+	out = await _call(server, 'site_definitely_not_here', {})
+	assert 'not a tool on the current page' in out
+
+
+async def _list_tools(server):
+	import mcp.types as types
+
+	handler = server.server.get_request_handler('tools/list')
+	assert handler is not None
+	result = await handler.handler(None, types.PaginatedRequestParams())  # type: ignore[arg-type]
+	return result.tools
