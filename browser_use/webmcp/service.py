@@ -58,6 +58,11 @@ class WebMCPService:
 		works whether the tab is freshly created oralready loaded. Returns True when the
 		target is (now or already) instrumented.
 		"""
+		if not self.browser_session.browser_profile.enable_webmcp:
+			# No shipping browser exposes navigator.modelContext, so installing it labels the
+			# session to every script on every page. Synthesis does not need it, so the
+			# default is to leave the page's JS environment exactly as it found it.
+			return False
 		cdp_session = await self.browser_session.get_or_create_cdp_session(target_id, focus=False)
 		if cdp_session.target_id in self._installed:
 			return True
@@ -131,6 +136,12 @@ class WebMCPService:
 		# wins over our reading of the markup.
 		if not page_tools.tools and self.browser_session.browser_profile.synthesize_site_tools:
 			page_tools.tools = await self._synthesized_tools(target_id=resolved_target)
+			# The bridge is what reports the page's location, so with it uninstalled — the
+			# default — url and origin arrive empty and every later lookup by origin misses.
+			# The synthesizer read the same page and knows where it was.
+			if not page_tools.origin and (scanned := self.synthesizer.latest()) is not None:
+				page_tools.url = page_tools.url or scanned.url
+				page_tools.origin = scanned.origin
 			if (manifest := self.synthesizer.cached(page_tools.origin)) is not None:
 				page_tools.modal_note = manifest.modal
 

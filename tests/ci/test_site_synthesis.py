@@ -145,11 +145,15 @@ async def test_a_password_never_becomes_a_parameter(browser_session, shop_server
 	assert len(properties) == 1, f'only the email should be fillable, got {sorted(properties)}'
 
 
-async def test_what_the_site_declares_always_wins(browser_session, shop_server):
-	"""A published tool is a contract; a synthesized one is our reading of the markup."""
-	await _goto(browser_session, shop_server.url_for('/declaring'))
+async def test_what_the_site_declares_always_wins(webmcp_session, shop_server):
+	"""A published tool is a contract; a synthesized one is our reading of the markup.
 
-	page_tools = await browser_session.get_webmcp_tools()
+	Uses the bridge-enabled fixture because a page can only *declare* tools when
+	navigator.modelContext exists, and that is off by default.
+	"""
+	await _goto(webmcp_session, shop_server.url_for('/declaring'))
+
+	page_tools = await webmcp_session.get_webmcp_tools()
 	names = {tool.name for tool in page_tools.tools}
 
 	assert names == {'official_search'}, f'synthesis should not run over a declaring site, got {names}'

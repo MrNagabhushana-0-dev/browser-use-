@@ -242,6 +242,7 @@ class SiteToolSynthesizer:
 	def __init__(self, browser_session: 'BrowserSession', store: 'ManifestStore | None' = None) -> None:
 		self.browser_session = browser_session
 		self._manifests: dict[str, SiteManifest] = {}
+		self._last: SiteManifest | None = None
 		self._seen_labels: dict[str, int] = {}
 		# Persists across sessions, so the second agent to visit a site inherits what the
 		# first one worked out — including which tools have actually been run.
@@ -532,6 +533,7 @@ class SiteToolSynthesizer:
 			modal=str(modal)[:80] if modal else None,
 		)
 		self._manifests[origin] = manifest
+		self._last = manifest
 		if len(self._manifests) > MAX_ORIGINS:
 			for stale in list(self._manifests)[: len(self._manifests) - MAX_ORIGINS]:
 				self._manifests.pop(stale, None)
@@ -543,6 +545,15 @@ class SiteToolSynthesizer:
 
 	def cached(self, origin: str) -> SiteManifest | None:
 		return self._manifests.get(origin)
+
+	def latest(self) -> SiteManifest | None:
+		"""The manifest from the most recent scan, whatever origin it was for.
+
+		Needed because the caller does not always know where it is: without the WebMCP
+		bridge installed nothing else reports the page's location, and a manifest keyed
+		by the empty string is a manifest nobody can look up.
+		"""
+		return self._last
 
 	# -- execution --------------------------------------------------------------------
 

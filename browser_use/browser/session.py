@@ -649,7 +649,10 @@ class BrowserSession(BaseModel):
 			return WebMCPToolCallResult(
 				tool_name=name,
 				ok=False,
-				error='WebMCP is disabled for this session (BrowserProfile.enable_webmcp=False)',
+				error=(
+					'Page tools are disabled for this session '
+					'(BrowserProfile.enable_webmcp and synthesize_site_tools are both False)'
+				),
 			)
 		return await self._webmcp_watchdog.service.call_tool(name, arguments, target_id)
 
@@ -1977,8 +1980,12 @@ class BrowserSession(BaseModel):
 			self._captcha_watchdog = CaptchaWatchdog(event_bus=self.event_bus, browser_session=self)
 			self._captcha_watchdog.attach_to_session()
 
-		# Initialize WebMCPWatchdog (installs the navigator.modelContext bridge so pages can declare agent-callable tools)
-		if self.browser_profile.enable_webmcp:
+		# Initialize WebMCPWatchdog. It does two jobs: it injects the navigator.modelContext
+		# bridge (only when enable_webmcp is on), and it serves the page's tool surface —
+		# which for synthesized tools is read out of the accessibility layer and needs no
+		# injection whatever. Gating the whole watchdog on enable_webmcp therefore switched
+		# synthesis off along with the bridge, which is the opposite of the intent.
+		if self.browser_profile.enable_webmcp or self.browser_profile.synthesize_site_tools:
 			WebMCPWatchdog.model_rebuild()
 			self._webmcp_watchdog = WebMCPWatchdog(event_bus=self.event_bus, browser_session=self)
 			self._webmcp_watchdog.attach_to_session()

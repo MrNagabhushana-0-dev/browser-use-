@@ -83,14 +83,31 @@ async def test_browser_run_script_reports_a_bad_script_verbatim(server, mcp_serv
 	assert 'totallyUndefined' in out
 
 
-async def test_page_declared_tools_are_discoverable_and_callable_over_mcp(server, mcp_server_pages):
-	await _call(server, 'browser_navigate', {'url': mcp_server_pages.url_for('/booking')})
+@pytest.fixture
+async def bridge_server(tmp_path):
+	"""An MCP server whose browser installs the WebMCP bridge.
 
-	listed = json.loads(await _call(server, 'browser_list_page_tools', {}))
+	The shipped default leaves it out, for the same reason the library does: no real
+	browser has navigator.modelContext, so installing it marks the session on every page
+	a client visits. A client that wants tools a site *declares* asks for it; the
+	synthesized `site_*` tools need no bridge and are on regardless.
+	"""
+	mcp_server = BrowserUseServer()
+	mcp_server.config.setdefault('browser_profile', {}).update(
+		{'headless': True, 'user_data_dir': str(tmp_path / 'profile'), 'enable_webmcp': True}
+	)
+	yield mcp_server
+	await _call(mcp_server, 'browser_close_all', {})
+
+
+async def test_page_declared_tools_are_discoverable_and_callable_over_mcp(bridge_server, mcp_server_pages):
+	await _call(bridge_server, 'browser_navigate', {'url': mcp_server_pages.url_for('/booking')})
+
+	listed = json.loads(await _call(bridge_server, 'browser_list_page_tools', {}))
 	assert [tool['name'] for tool in listed] == ['book_seat']
 	assert listed[0]['input_schema']['required'] == ['seat']
 
-	out = await _call(server, 'browser_call_page_tool', {'name': 'book_seat', 'arguments': '{"seat": "14C"}'})
+	out = await _call(bridge_server, 'browser_call_page_tool', {'name': 'book_seat', 'arguments': '{"seat": "14C"}'})
 	assert out == 'reserved 14C'
 
 

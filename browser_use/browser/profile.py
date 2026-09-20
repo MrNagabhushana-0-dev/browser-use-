@@ -787,9 +787,12 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 		'WebMCP tools of its own. Set False to only ever use tools a site actually declares.',
 	)
 	enable_webmcp: bool = Field(
-		default=True,
+		default=False,
 		description='Install the WebMCP bridge (navigator.modelContext) so pages can declare tools the agent calls '
-		'directly instead of being clicked through. Disable to leave page JS untouched.',
+		'directly instead of being clicked through. Off by default: no shipping browser has this API, so its '
+		'presence identifies the session to every script on every page, and virtually no site declares WebMCP '
+		'tools to make that worth paying. Synthesized tools (synthesize_site_tools) need no injection and are '
+		'unaffected. Turn this on for a site you know publishes WebMCP.',
 	)
 
 	profile_directory: str = 'Default'  # e.g. 'Profile 1', 'Profile 2', 'Custom Profile', etc.
@@ -1042,11 +1045,19 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 			*(
 				[f'--window-size={self.window_size["width"]},{self.window_size["height"]}']
 				if self.window_size
-				# Headless still needs an explicit window: without one the OS window stays at
-				# Chrome's 780x580 default while the viewport is overridden to whatever was
-				# asked for, leaving window.outerWidth smaller than window.innerWidth. No real
-				# browser can be in that state, and it is trivial for a page to check.
-				else (['--start-maximized'] if not self.headless else ['--window-size=1280,800'])
+				# Headless still needs an explicit window, and it has to match the viewport.
+				# detect_display_configuration() clears window_size in headless and drives the
+				# content size through the viewport instead, so without this the OS window stays
+				# at Chrome's 780x580 default and window.outerWidth comes back *smaller* than
+				# window.innerWidth. No real browser can be in that state, and a page checking
+				# it learns more than any user-agent string would tell it.
+				else (
+					['--start-maximized']
+					if not self.headless
+					else [f'--window-size={self.viewport["width"]},{self.viewport["height"]}']
+					if self.viewport
+					else ['--window-size=1280,800']
+				)
 			),
 			*(
 				[f'--window-position={self.window_position["width"]},{self.window_position["height"]}']
