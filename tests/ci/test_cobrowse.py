@@ -6,6 +6,7 @@ here automates a login. It proves the handover: same profile, same cookies, same
 the agent acting through real input once it arrives.
 """
 
+import asyncio
 import json
 
 import pytest
@@ -182,3 +183,83 @@ async def test_the_handover_summary_never_returns_cookie_values(human_browser, l
 	finally:
 		await agent.kill()
 		await agent.event_bus.stop(clear=True, timeout=5)
+
+
+async def test_the_full_handover_round_trip(human_browser, login_server):
+	"""The whole point, in one test: the person signs in, the agent takes over the same
+	session, the person takes it back, and the agent stops acting on request.
+
+	Each half is covered above; this asserts they compose, because the failure that
+	matters is the one that only appears when control changes hands twice.
+	"""
+	session = await attach(human_browser.cdp_url)
+	try:
+		event = session.event_bus.dispatch(NavigateToUrlEvent(url=login_server.url_for('/account')))
+		await event
+		await event.event_result(raise_if_any=False, raise_if_none=False)
+		await session.run_page_script("document.cookie = 'session_token=secret-value; path=/'; return 1;")
+
+		# Handed over: names, never values.
+		handover = await describe_session(session)
+		assert 'session_token' in handover['cookie_names']
+		assert 'secret-value' not in json.dumps(handover)
+
+		# The person takes the wheel; the agent must refuse rather than queue.
+		session.control.grant_to_human('signing in')
+		assert session.control.agent_may_act is False
+		refusal = session.control.refusal('click the button')
+		assert 'person is driving' in refusal and 'control will come back' in refusal
+
+		# Handed back, the agent drives the same tab with the same cookies.
+		session.control.grant_to_agent('you can drive now')
+		assert session.control.agent_may_act is True
+		await session.human.wheel(500)
+		await asyncio.sleep(0.6)
+
+		state = await session.run_page_script("return {kept: document.cookie.includes('session_token'), y: window.scrollY};")
+		assert json.loads(state.value)['kept'] is True, 'the login did not survive the handover'
+	finally:
+		await session.kill()
+
+
+async def test_the_human_browser_trusts_a_proxy_ca_when_given_one(tmp_path):
+	"""Behind a TLS-terminating proxy, a browser that does not trust the proxy's CA fails
+	every HTTPS page with ERR_CERT_AUTHORITY_INVALID — which makes co-browsing useless
+	exactly where it is needed, since there is nothing to sign into over plain HTTP."""
+	from browser_use.browser.profile import proxy_ca_pins
+	from browser_use.cobrowse.service import launch_for_human as _launch
+
+	# A self-signed CA is enough: we are asserting the flag is derived and passed, not
+	# that Chromium trusts this particular certificate.
+	cert = tmp_path / 'ca.crt'
+	process = await asyncio.create_subprocess_exec(
+		*[
+			'openssl',
+			'req',
+			'-x509',
+			'-newkey',
+			'rsa:2048',
+			'-nodes',
+			'-keyout',
+			str(tmp_path / 'ca.key'),
+			'-out',
+			str(cert),
+			'-days',
+			'1',
+			'-subj',
+			'/CN=test-proxy-ca',
+		],
+		stdout=asyncio.subprocess.DEVNULL,
+		stderr=asyncio.subprocess.DEVNULL,
+	)
+	assert await process.wait() == 0, 'openssl could not produce a test CA'
+	pins = proxy_ca_pins(cert)
+	assert pins, 'a valid CA certificate should yield an SPKI pin'
+
+	browser = await _launch(user_data_dir=tmp_path / 'profile', headless=True, proxy_ca_cert=cert)
+	try:
+		args = ' '.join(browser.args)
+		assert '--ignore-certificate-errors-spki-list=' in args, args
+		assert pins[0] in args
+	finally:
+		await browser.close()

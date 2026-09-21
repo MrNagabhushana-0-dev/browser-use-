@@ -169,6 +169,14 @@ async def _goto(session: BrowserSession, url: str) -> None:
 	await event.event_result(raise_if_any=True, raise_if_none=False)
 
 
+@pytest.fixture(scope='module')
+async def browser_session(webmcp_session):
+	"""Every test in this file is about tools a page *declares*, which is only possible
+	when navigator.modelContext exists — and that is off by default. Overriding the shared
+	fixture here keeps the opt-in explicit without threading it through every signature."""
+	return webmcp_session
+
+
 async def test_tools_registered_by_the_page_are_discovered_and_callable(browser_session, webmcp_server):
 	"""The whole point: a declared tool is listed, then invoked with typed arguments."""
 	await _goto(browser_session, webmcp_server.url_for('/shop'))
@@ -361,33 +369,59 @@ async def test_a_tab_opened_later_is_instrumented_too(browser_session, webmcp_se
 	assert result.content == 'added 1 x TAB-1'
 
 
-async def test_webmcp_can_be_turned_off_entirely(webmcp_server):
-	"""Opting out must leave page JS untouched, not merely hide the listing."""
-	session = BrowserSession(
-		browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=True, enable_webmcp=False)
-	)
+async def test_the_bridge_is_absent_unless_asked_for(webmcp_server):
+	"""The default has to leave the page's JS environment exactly as it found it.
+
+	navigator.modelContext exists in no shipping browser, so installing it is a unique
+	marker any script on any page can read — and since almost no site declares WebMCP
+	tools, the overwhelmingly common case is paying that for nothing. Synthesis reads the
+	accessibility layer and needs no injection, so it keeps working regardless.
+	"""
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=True))
 	await session.start()
 	try:
+		assert session.browser_profile.enable_webmcp is False, 'the bridge must be opt-in'
 		await _goto(session, webmcp_server.url_for('/shop'))
 
-		assert session._webmcp_watchdog is None
-		assert (await session.get_webmcp_tools()).tools == []
-
-		result = await session.call_webmcp_tool('add_to_cart', {'sku': 'ABC-1'})
-		assert not result.ok
-		assert result.error is not None and 'disabled' in result.error
-
-		# The bridge is genuinely absent from the page, so the site's own feature
-		# detection sees a browser without WebMCP.
 		cdp_session = await session.get_or_create_cdp_session()
 		probe = await cdp_session.cdp_client.send.Runtime.evaluate(
-			params={'expression': 'typeof navigator.modelContext', 'returnByValue': True},
+			params={'expression': "typeof navigator.modelContext + ',' + ('modelContext' in navigator)", 'returnByValue': True},
 			session_id=cdp_session.session_id,
 		)
-		assert probe.get('result', {}).get('value') == 'undefined'
+		assert probe['result']['value'] == 'undefined,false', 'the page can still detect the bridge'
+
+		# The site declares tools, but with no bridge it registered none — so what comes
+		# back is synthesized from its markup, which is the whole point of the default.
+		page_tools = await session.get_webmcp_tools()
+		assert all(tool.source == 'synthesized' for tool in page_tools.tools), [t.source for t in page_tools.tools]
+		assert page_tools.origin, 'a synthesized listing still has to know what page it is for'
 	finally:
 		await session.kill()
-		await session.event_bus.stop(clear=True, timeout=5)
+
+
+async def test_turning_the_bridge_on_and_off_both_work(webmcp_server):
+	"""Off is not merely a hidden listing, and on is not merely a flag."""
+	for enabled, expected in ((True, 'object'), (False, 'undefined')):
+		session = BrowserSession(
+			browser_profile=BrowserProfile(
+				headless=True, user_data_dir=None, keep_alive=True, enable_webmcp=enabled, synthesize_site_tools=False
+			)
+		)
+		await session.start()
+		try:
+			await _goto(session, webmcp_server.url_for('/shop'))
+			cdp_session = await session.get_or_create_cdp_session()
+			probe = await cdp_session.cdp_client.send.Runtime.evaluate(
+				params={'expression': 'typeof navigator.modelContext', 'returnByValue': True},
+				session_id=cdp_session.session_id,
+			)
+			assert probe['result']['value'] == expected, f'enable_webmcp={enabled} gave {probe["result"]["value"]}'
+
+			if not enabled:
+				result = await session.call_webmcp_tool('add_to_cart', {'sku': 'ABC-1'})
+				assert not result.ok and result.error is not None and 'disabled' in result.error
+		finally:
+			await session.kill()
 
 
 async def test_a_page_cannot_spend_unbounded_agent_context(browser_session, webmcp_server):

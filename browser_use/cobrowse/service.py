@@ -65,6 +65,9 @@ class HumanBrowser:
 	port: int
 	user_data_dir: Path
 	process: asyncio.subprocess.Process | None = field(default=None, repr=False)
+	# The argv this browser was started with. Kept because "why is every page failing TLS"
+	# is answered by looking at the flags, and there is otherwise nowhere to look.
+	args: list[str] = field(default_factory=list, repr=False)
 
 	async def close(self) -> None:
 		"""Shut the browser down cleanly. Only call this for a browser you launched.
@@ -112,6 +115,7 @@ async def launch_for_human(
 	headless: bool = False,
 	executable_path: str | None = None,
 	extra_args: list[str] | None = None,
+	proxy_ca_cert: Path | str | None = None,
 ) -> HumanBrowser:
 	"""Start a browser for a person to use and later hand over.
 
@@ -136,6 +140,18 @@ async def launch_for_human(
 	if headless:
 		args.append('--headless=new')
 
+	# Behind a TLS-terminating proxy every HTTPS page fails with ERR_CERT_AUTHORITY_INVALID
+	# unless Chromium is told to trust the CA it presents. BrowserProfile does this for the
+	# agent's own browser; the person's browser needs it just as much, and without it
+	# co-browsing cannot load a single page worth signing into.
+	if proxy_ca_cert:
+		from browser_use.browser.profile import proxy_ca_pins
+
+		if pins := proxy_ca_pins(proxy_ca_cert):
+			args.append(f'--ignore-certificate-errors-spki-list={",".join(pins)}')
+		else:
+			logger.warning(f'🧑‍💻 Could not read any certificate pin from {proxy_ca_cert}; HTTPS pages may fail')
+
 	# Chrome refuses to start its sandbox as root, which is the normal case inside a
 	# container. Matches what BrowserProfile already does for the same reason.
 	from browser_use.config import CONFIG
@@ -149,7 +165,7 @@ async def launch_for_human(
 	process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
 
 	cdp_url = await _wait_for_cdp(port, process)
-	return HumanBrowser(cdp_url=cdp_url, port=port, user_data_dir=user_data_dir, process=process)
+	return HumanBrowser(cdp_url=cdp_url, port=port, user_data_dir=user_data_dir, process=process, args=args)
 
 
 async def _wait_for_cdp(port: int, process: 'asyncio.subprocess.Process | None' = None) -> str:

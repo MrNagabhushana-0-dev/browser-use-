@@ -30,7 +30,14 @@ logger = logging.getLogger(__name__)
 
 # How long to wait after an input before judging what it did. Human reaction time is
 # around 250ms; this is the same idea pointed the other way.
-REACTION = 0.18
+REACTION = 0.12
+
+# Pointer speed multipliers. A considered click on a link is slow; a player reacting, or
+# slapping a Retry button they have hit forty times, is not — and at default speed a
+# single probe pass cost more than ten seconds, which measured out as 25-59 seconds of a
+# 95 second session spent looking for buttons rather than playing.
+PROBE_HASTE = 4.0
+PLAY_HASTE = 3.0
 
 # How often the picture is sampled, independent of the player's pace.
 SAMPLE = 0.1
@@ -45,14 +52,25 @@ PLAY_BUFFER = 60
 _CONSENT = ('accept', 'agree', 'consent', 'got it', 'allow all', 'i understand', 'ok')
 _START = ('play', 'start', 'tap to', 'click to', 'begin', 'resume')
 
-# Where a restart button actually sits, as fractions of the play surface, most likely
-# first. Measured from real game-over cards rather than assumed: the row of buttons sits
-# low, not in the middle, and the middle is the one place a blind click always misses.
-RESTART_SPOTS = (
+# Where the button that starts or restarts a game actually sits, as fractions of the play
+# surface, most likely first. Measured off real screens rather than assumed, and the
+# measurements agree with each other: Drive Mad's Retry sat at 0.87 of the surface height
+# and Drift Boss's title-screen Play at 0.79. Both are well below the middle, which is why
+# a blind centre click — the obvious implementation — misses every time and leaves a game
+# that loaded fine looking like a game that never started.
+#
+# A column down the middle first, because these buttons are centred horizontally far more
+# often than not; then the sides, for the Home / Retry / Next rows that straddle centre.
+BUTTON_SPOTS = (
+	(0.50, 0.79),
 	(0.50, 0.87),
-	(0.50, 0.57),
 	(0.50, 0.72),
+	(0.50, 0.62),
+	(0.50, 0.57),
 	(0.50, 0.50),
+	(0.50, 0.93),
+	(0.62, 0.79),
+	(0.38, 0.79),
 	(0.62, 0.87),
 	(0.38, 0.87),
 	(0.50, 0.35),
@@ -199,7 +217,7 @@ class GameArena:
 		elif action.kind == 'tap_key' and action.key:
 			await self.human.press(action.key)
 		elif action.kind == 'click':
-			await self.human.click_box(self._box(action.where))
+			await self.human.click_box(self._box(action.where), haste=PLAY_HASTE)
 		elif action.kind == 'hold_click':
 			await self.human.press_and_hold(self._box(action.where), action.seconds)
 
@@ -231,14 +249,17 @@ class GameArena:
 				continue
 			if last_grid is not None:
 				scene = perceive(last_grid, grid)
-				timeline.append(scene.motion)
+				# Floor at 1 when something identifiable moved. Percent-of-frame is a fine
+				# measure of magnitude and a bad measure of aliveness: the sprite that is the
+				# whole game can be a rounding error of the frame's area.
+				timeline.append(scene.motion or (1 if scene.blobs else 0))
 				self.scenes.append(scene)
 			last_grid = grid
 			at = time.monotonic() - began
 			if len(keyframes) < 8 and timeline and timeline[-1] >= 6 and (not keyframes or at - keyframes[-1][0] > 8):
 				keyframes.append((at, newest.data))
 
-	async def _recover(self, timeline: list[int]) -> bool:
+	async def _recover(self, timeline: list[int], limit: int = 5) -> bool:
 		"""Get out of a game-over card, and know whether it worked.
 
 		Clicking the middle of the play surface is the obvious move and it is wrong: a
@@ -252,10 +273,10 @@ class GameArena:
 		That terminates immediately when the first candidate is right and still recovers
 		when the layout is one this has never seen.
 		"""
-		for spot in RESTART_SPOTS:
+		for spot in BUTTON_SPOTS[:limit]:
 			before = len(timeline)
-			await self.human.click_box(self._spot(*spot))
-			await asyncio.sleep(0.45)
+			await self.human.click_box(self._spot(*spot), haste=PROBE_HASTE)
+			await asyncio.sleep(0.28)
 			window = timeline[before:]
 			if window and (sum(window) / len(window)) >= ACTIVE_THRESHOLD:
 				return True
@@ -263,7 +284,7 @@ class GameArena:
 		for key in ('Space', 'Enter', 'r'):
 			before = len(timeline)
 			await self.human.press(key)
-			await asyncio.sleep(0.35)
+			await asyncio.sleep(0.25)
 			window = timeline[before:]
 			if window and (sum(window) / len(window)) >= ACTIVE_THRESHOLD:
 				return True
@@ -281,6 +302,16 @@ class GameArena:
 		keyframes: list[tuple[float, bytes]] = []
 		sampler = asyncio.create_task(self._sample(view, began, timeline, keyframes))
 		last_moved = began
+
+		# Many games open on a title screen with a Play button and sit there. Waiting for
+		# the stall timer to notice wastes seconds at the front of every such session, and
+		# the whole run is a fixed length, so find the button first and use the full budget
+		# playing. The wider spot list is affordable here because it happens once.
+		await asyncio.sleep(1.2)
+		if not timeline or (sum(timeline) / len(timeline)) < ACTIVE_THRESHOLD:
+			if await self._recover(timeline, limit=len(BUTTON_SPOTS)):
+				report.restarts += 1
+			last_moved = time.monotonic()
 
 		try:
 			while time.monotonic() - began < seconds:
@@ -301,7 +332,11 @@ class GameArena:
 					last_moved = time.monotonic()
 				elif time.monotonic() - last_moved > STALL_SECONDS:
 					report.stalls += 1
-					if await self._recover(timeline):
+					# Back off. If the first few spots have not worked three times running, the
+					# button is somewhere this does not know about, and re-running the whole
+					# search every 2.5 seconds spends the session on it.
+					budget = 5 if report.stalls <= 3 else 2
+					if await self._recover(timeline, limit=budget):
 						report.restarts += 1
 					last_moved = time.monotonic()
 		finally:

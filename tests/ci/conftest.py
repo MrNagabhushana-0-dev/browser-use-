@@ -172,6 +172,28 @@ async def browser_session():
 	await session.start()
 	yield session
 	await session.kill()
+
+
+@pytest.fixture(scope='module')
+async def webmcp_session():
+	"""A session with the WebMCP bridge installed.
+
+	Separate from `browser_session` on purpose. The bridge is off by default because
+	navigator.modelContext exists in no shipping browser and so identifies the session to
+	every script on every page — a test that needs a page to *declare* tools has to ask
+	for it, and asking is what keeps that default honest.
+	"""
+	session = BrowserSession(
+		browser_profile=BrowserProfile(
+			headless=True,
+			user_data_dir=None,
+			keep_alive=True,
+			enable_webmcp=True,
+		)
+	)
+	await session.start()
+	yield session
+	await session.kill()
 	# Ensure event bus is properly stopped
 	await session.event_bus.stop(clear=True, timeout=5)
 

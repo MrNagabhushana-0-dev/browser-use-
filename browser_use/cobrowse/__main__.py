@@ -13,6 +13,7 @@ the browser down cleanly, which is what commits your cookies to disk.
 import argparse
 import asyncio
 import logging
+import os
 import sys
 
 from browser_use.cobrowse.service import launch_for_human
@@ -31,6 +32,12 @@ async def main() -> int:
 	parser.add_argument('--profile', default=_default_profile(), help='Persistent profile directory')
 	parser.add_argument('--port', type=int, default=None, help='Debugging port (default: a free one)')
 	parser.add_argument('--url', default=None, help='Page to open first')
+	parser.add_argument(
+		'--proxy-ca-cert',
+		dest='proxy_ca_cert',
+		default=None,
+		help='CA certificate a TLS-terminating proxy presents, so HTTPS pages load (defaults to $BROWSER_USE_PROXY_CA_CERT)',
+	)
 	parser.add_argument('--headless', action='store_true', help='For testing; defeats the purpose otherwise')
 	args = parser.parse_args()
 
@@ -39,7 +46,13 @@ async def main() -> int:
 	# '--' guards the URL: without it a value like --headless would land in Chrome's argv
 	# as a flag rather than as the page to open.
 	extra = ['--', args.url] if args.url else []
-	browser = await launch_for_human(user_data_dir=args.profile, port=args.port, headless=args.headless, extra_args=extra)
+	browser = await launch_for_human(
+		user_data_dir=args.profile,
+		port=args.port,
+		headless=args.headless,
+		extra_args=extra,
+		proxy_ca_cert=args.proxy_ca_cert or os.environ.get('BROWSER_USE_PROXY_CA_CERT'),
+	)
 
 	print('\n  Browser is open. Sign in to whatever you need, and leave it running.\n')
 	print(f'  CDP URL   {browser.cdp_url}')

@@ -18,6 +18,7 @@ from browser_use.webmcp.views import (
 
 if TYPE_CHECKING:
 	from browser_use.browser.session import BrowserSession
+	from browser_use.synthesis.views import SiteManifest
 
 # Discovery sits on the agent's per-step critical path, so it gets a tight budget:
 # one Runtime.evaluate over an in-page Map, plus (first pass only) a same-origin
@@ -58,6 +59,11 @@ class WebMCPService:
 		works whether the tab is freshly created oralready loaded. Returns True when the
 		target is (now or already) instrumented.
 		"""
+		if not self.browser_session.browser_profile.enable_webmcp:
+			# No shipping browser exposes navigator.modelContext, so installing it labels the
+			# session to every script on every page. Synthesis does not need it, so the
+			# default is to leave the page's JS environment exactly as it found it.
+			return False
 		cdp_session = await self.browser_session.get_or_create_cdp_session(target_id, focus=False)
 		if cdp_session.target_id in self._installed:
 			return True
@@ -130,8 +136,14 @@ class WebMCPService:
 		# Only when the site published nothing. A real declaration is a contract and always
 		# wins over our reading of the markup.
 		if not page_tools.tools and self.browser_session.browser_profile.synthesize_site_tools:
-			page_tools.tools = await self._synthesized_tools(target_id=resolved_target)
-			if (manifest := self.synthesizer.cached(page_tools.origin)) is not None:
+			page_tools.tools, manifest = await self._synthesized_tools(target_id=resolved_target)
+			if manifest is not None:
+				# The bridge is what reports the page's location, so with it uninstalled — the
+				# default — url and origin arrive empty and every later lookup by origin misses.
+				# This manifest came from this target, so it is the right answer rather than
+				# whatever the synthesizer scanned most recently in some other tab.
+				page_tools.url = page_tools.url or manifest.url
+				page_tools.origin = page_tools.origin or manifest.origin
 				page_tools.modal_note = manifest.modal
 
 		self._cache[resolved_target] = page_tools
@@ -148,13 +160,18 @@ class WebMCPService:
 			self._synthesizer = SiteToolSynthesizer(self.browser_session)
 		return self._synthesizer
 
-	async def _synthesized_tools(self, target_id: TargetID | None = None) -> list[WebMCPTool]:
-		"""Tools induced from the page, in the shape a declaring site would have used."""
+	async def _synthesized_tools(self, target_id: TargetID | None = None) -> tuple[list[WebMCPTool], 'SiteManifest | None']:
+		"""Tools induced from the page, in the shape a declaring site would have used.
+
+		Returns the manifest alongside them because the caller needs to know which page
+		these came from, and asking the synthesizer afterwards would be a guess: with two
+		tabs open, "the most recent scan" is not necessarily this tab's.
+		"""
 		try:
 			manifest = await self.synthesizer.synthesize(target_id=target_id)
 		except Exception as e:
 			self.logger.debug(f'🔧 Synthesis skipped: {type(e).__name__}: {e}')
-			return []
+			return [], None
 		return [
 			WebMCPTool(
 				name=tool.name,
@@ -164,7 +181,7 @@ class WebMCPService:
 				verified=tool.verified,
 			)
 			for tool in manifest.tools
-		]
+		], manifest
 
 	def _parse_discovery(self, target_id: TargetID, raw: Any) -> WebMCPPageTools:
 		"""Turn the bridge's JSON payload into validated models, dropping bad tools."""
