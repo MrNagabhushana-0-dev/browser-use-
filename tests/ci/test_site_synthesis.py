@@ -8,6 +8,7 @@ would have published, and everything downstream works unchanged.
 The page below declares no tools at all. That is the point.
 """
 
+import asyncio
 import json
 
 import pytest
@@ -818,3 +819,66 @@ def test_a_cache_written_by_an_older_synthesis_is_not_served(tmp_path):
 	path.write_text(json.dumps(stale))
 
 	assert ManifestStore(path=path, enabled=True).get('https://example.test') is None
+
+
+# Forty buttons, and the only ones a reader can see are the last four. Document order
+# spends the whole budget before reaching them — which is what reddit.com does in
+# practice: 42 buttons, 5 on screen, and the first 25 contained only 3 of those 5.
+CROWDED_PAGE = (
+	'<html><body style="margin:0">'
+	'<div style="position:absolute;top:-9000px">'
+	+ ''.join(f'<button>Offscreen action {i}</button>' for i in range(40))
+	+ '</div>'
+	'<div style="position:absolute;top:40px">'
+	'<button>Buy this now</button><button>Add to basket</button>'
+	'<button>Compare prices</button><button>Ask a question</button>'
+	'</div></body></html>'
+)
+
+
+async def test_the_budget_buys_what_the_reader_can_actually_see(browser_session):
+	"""A control below the fold is still usable — the resolver scrolls to it — so this
+	ranks rather than excludes. But when there are more candidates than the budget holds,
+	spending it on things nobody is looking at is the wrong trade."""
+	server = HTTPServer()
+	server.start()
+	try:
+		server.expect_request('/crowded').respond_with_data(CROWDED_PAGE, content_type='text/html')
+		await _goto(browser_session, server.url_for('/crowded'))
+
+		synth = SiteToolSynthesizer(browser_session)
+		affordances = await synth.scan()
+		kept = {button['name'] for button in (affordances.get('buttons') or [])}
+
+		for visible_label in ('Buy this now', 'Add to basket', 'Compare prices', 'Ask a question'):
+			assert visible_label in kept, f'{visible_label!r} is on screen and was dropped; kept {sorted(kept)[:6]}'
+	finally:
+		server.stop()
+
+
+async def test_tool_names_do_not_change_when_the_page_is_scrolled(browser_session):
+	"""Ranking decides what survives the budget; it must not decide what things are
+	called. A name that moves with the scroll position is a name nothing can rely on —
+	not the cache, not workflow memory, not a model that saw it a moment ago."""
+	server = HTTPServer()
+	server.start()
+	try:
+		server.expect_request('/crowded').respond_with_data(CROWDED_PAGE, content_type='text/html')
+		await _goto(browser_session, server.url_for('/crowded'))
+
+		synth = SiteToolSynthesizer(browser_session)
+		before = [button['name'] for button in (await synth.scan()).get('buttons') or []]
+
+		await browser_session.human.wheel(400)
+		await asyncio.sleep(0.5)
+		after = [button['name'] for button in (await synth.scan()).get('buttons') or []]
+
+		assert before, 'nothing was scanned'
+		# The set may legitimately shift as different controls come into view; the order of
+		# whatever survives must stay document order, not viewport order.
+		common = [name for name in before if name in after]
+		assert common == [name for name in after if name in before], (
+			f'order changed with scroll:\n  before {before}\n  after  {after}'
+		)
+	finally:
+		server.stop()

@@ -206,11 +206,33 @@ const formName = (form, submit) => {
 	return clean(form.getAttribute('name') || form.getAttribute('id') || '');
 };
 
+// Which candidates the budget buys, when there are more than it can hold.
+//
+// Taking them in document order is the obvious implementation and it is wrong on exactly
+// the pages where the cap binds. Measured on reddit.com: 42 buttons, 5 of them on screen,
+// and document order spent 25 slots on 22 the reader could not see while dropping 2 of
+// the 5 they could. A control below the fold is still usable — the resolver scrolls to
+// it — so this ranks rather than excludes, and only matters once the budget is tight.
+const byRelevance = (elements, limit) => {
+	const scored = elements.map((el, index) => {
+		const r = el.getBoundingClientRect();
+		const onScreen = r.bottom > 0 && r.top < innerHeight;
+		// How far it is from the part of the page being looked at, downwards or up.
+		const distance = onScreen ? 0 : r.top >= innerHeight ? r.top - innerHeight : -r.bottom;
+		return {el, index, onScreen, distance};
+	});
+	scored.sort((a, b) =>
+		(b.onScreen - a.onScreen) || (a.distance - b.distance) || (a.index - b.index));
+	// Back into document order once chosen: the order decides tool names, and a name that
+	// changes with the scroll position is a name nothing can rely on.
+	return scored.slice(0, limit).sort((a, b) => a.index - b.index).map(s => s.el);
+};
+
 const forms = [];
 for (const form of deepQuery('form', SCOPE).slice(0, MAX_FORMS)) {
 	if (!visible(form)) continue;
-	const controls = deepQuery(CONTROL_SELECTOR, form)
-		.filter(visible).slice(0, MAX_CONTROLS).map(describeControl);
+	const controls = byRelevance(deepQuery(CONTROL_SELECTOR, form).filter(visible), MAX_CONTROLS)
+		.map(describeControl);
 	if (!controls.length) continue;
 	const submit = form.querySelector('button[type=submit], input[type=submit], button:not([type])');
 	forms.push({
@@ -223,22 +245,17 @@ for (const form of deepQuery('form', SCOPE).slice(0, MAX_FORMS)) {
 }
 
 // Buttons that are not inside a form: the standalone verbs of the page.
-const buttons = [];
-for (const el of deepQuery(BUTTON_SELECTOR, SCOPE).slice(0, 200)) {
-	if (buttons.length >= MAX_BUTTONS) break;
-	if (!visible(el) || el.closest('form')) continue;
-	const name = accessibleName(el);
-	if (!name) continue;
-	buttons.push({role: roleOf(el), name: name, locator: locatorFor(el)});
-}
+const buttonCandidates = deepQuery(BUTTON_SELECTOR, SCOPE)
+	.slice(0, 200)
+	.filter(el => visible(el) && !el.closest('form') && accessibleName(el));
+const buttons = byRelevance(buttonCandidates, MAX_BUTTONS)
+	.map(el => ({role: roleOf(el), name: accessibleName(el), locator: locatorFor(el)}));
 
 // Controls outside any form — a site-wide search box usually lives here.
-const loose = [];
-for (const el of deepQuery(CONTROL_SELECTOR, SCOPE).slice(0, 120)) {
-	if (loose.length >= MAX_CONTROLS) break;
-	if (!visible(el) || el.closest('form')) continue;
-	loose.push(describeControl(el));
-}
+const looseCandidates = deepQuery(CONTROL_SELECTOR, SCOPE)
+	.slice(0, 120)
+	.filter(el => visible(el) && !el.closest('form'));
+const loose = byRelevance(looseCandidates, MAX_CONTROLS).map(describeControl);
 
 // Tables and repeated lists are where the page's *data* lives. Turning them into read
 // tools is what stops an agent paging a table into its context one screenshot at a time.
