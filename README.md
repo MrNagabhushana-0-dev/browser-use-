@@ -319,6 +319,37 @@ number a player is actually computing. Measured on real captures from a video an
 game: **38-41x fewer tokens than the equivalent images**, 15-35ms a frame, nothing to
 download.
 
+# Not every decision needs a model that writes
+
+Much of what an agent decides is a classification, not a composition: which of these
+tools does what I want, is this a login wall, is this an error page. Asking a model that
+generates prose costs a paragraph to get one name back — plus the cost of putting the
+whole page in front of it to ask.
+
+`browser_use/decide/` asks those as typed questions against
+[TypeSafe's Jev](https://docs.typesafe.ai/api), a non-autoregressive decision model: one
+forward pass, a distribution over the allowed answers, a confidence, and no output tokens
+because nothing is generated.
+
+```python
+from browser_use.decide import Jev, choose_tool, triage_page
+
+tools = await session.get_webmcp_tools()
+pick = await choose_tool(Jev(), tools, 'find a blue shirt in my size')
+# -> Answer(kind='choice', value='search', confidence=0.9), or None: you decide
+```
+
+The two reductions compose, which is the point. The state it reads is the synthesized
+tool surface, not the markup — so synthesis makes the page small and the decision model
+reads it without writing anything. Measured over five live sites: **464 tokens of
+decision state against 65,523 of page HTML, 141x less** to ask which tool to use
+(`uv run examples/features/decision_model_cost.py`).
+
+It is an optimization, never a dependency. No key, no network, a timeout, a body that
+does not parse, or an answer below the confidence bar all return nothing, and every
+caller falls back to the agent deciding for itself. The model can also answer
+`none_of_these`, because a forced choice over wrong options still returns one of them.
+
 # Playing a game, as a test of all of it
 
 A browser game is the hardest thing to drive and therefore the honest test: it lives in a
