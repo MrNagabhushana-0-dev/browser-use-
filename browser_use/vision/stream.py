@@ -31,6 +31,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from browser_use.vision.label import FrameFeatures, frame_features
 from browser_use.vision.perceive import Blob, Scene, luma_grid, perceive
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class Tracked:
 	dy: float = 0.0
 	age: int = 1
 	missed: int = 0
+	label: str = 'region'
 
 	def predict(self) -> tuple[float, float]:
 		return self.x + self.dx, self.y + self.dy
@@ -162,11 +164,14 @@ class PerceptionStream:
 
 		scene = perceive(self._previous_grid, grid)
 		self._previous_grid = grid
-		line = self._render(scene, at if at is not None else time.monotonic() - self.started)
+		# Decoded once and shared across every blob this frame — the JPEG decode is the
+		# cost, labelling a region against the result is nearly free.
+		features = frame_features(jpeg_bytes)
+		line = self._render(scene, at if at is not None else time.monotonic() - self.started, features)
 		self.lines.append(line)
 		return line
 
-	def _render(self, scene: Scene, at: float) -> str:
+	def _render(self, scene: Scene, at: float, features: FrameFeatures | None = None) -> str:
 		if scene.cut:
 			self.tracker = SceneTracker()
 			return f't={at:.1f} scene cut — everything changed at once'
@@ -174,6 +179,13 @@ class PerceptionStream:
 			return f't={at:.1f} still'
 
 		objects = self.tracker.update(scene.blobs)
+		if features is not None and features.usable:
+			# Label on the frame we can actually see it in. A region that vanishes keeps its
+			# last label rather than reverting to 'region', because identity outlives one
+			# occluded frame and so should the name.
+			for obj in objects:
+				if obj.missed == 0:
+					obj.label = features.label(obj.x, obj.y, obj.w, obj.h)
 		anchor = self.tracker.anchor()
 		parts = [f't={at:.1f}']
 		if scene.pan:
@@ -182,7 +194,7 @@ class PerceptionStream:
 		ranked = sorted(objects, key=lambda o: o.w * o.h, reverse=True)[:MAX_REPORTED]
 		for obj in ranked:
 			tag = '*' if anchor is not None and obj.id == anchor.id else ''
-			bit = f'#{obj.id}{tag} ({obj.x:.2f},{obj.y:.2f}) v({obj.dx:+.2f},{obj.dy:+.2f})'
+			bit = f'#{obj.id}{tag} {obj.label} ({obj.x:.2f},{obj.y:.2f}) v({obj.dx:+.2f},{obj.dy:+.2f})'
 			if anchor is not None and obj.id != anchor.id:
 				if (ttc := time_to_contact(anchor, obj)) is not None:
 					bit += f' ttc={ttc}'
