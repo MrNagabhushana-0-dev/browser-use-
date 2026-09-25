@@ -23,7 +23,14 @@ if TYPE_CHECKING:
 # Discovery sits on the agent's per-step critical path, so it gets a tight budget:
 # one Runtime.evaluate over an in-page Map, plus (first pass only) a same-origin
 # manifest fetch. A page that stalls past this yields its cached tools instead.
-DEFAULT_DISCOVER_TIMEOUT = 3.0
+#
+# Must stay above the bridge's own LIMITS.manifestMs (bridge.py, currently 5000ms):
+# that is the deadline the in-page manifest pass aborts itself by and keeps going
+# past, so the JS-declared tools it collects alongside a hanging manifest still make
+# it back. If this timeout is tighter than manifestMs, Python's own eval gives up
+# first and this returns stale cached tools instead of the bridge's gracefully
+# degraded (but complete) result — the failure test_webmcp_bridge_limits.py checks for.
+DEFAULT_DISCOVER_TIMEOUT = 6.0
 
 # Invocation runs real site logic — a checkout, a search, a booking — so it gets the
 # room a network round trip needs, matching the bridge's own internal RPC timeout.
