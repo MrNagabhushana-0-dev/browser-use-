@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 _MAX_JS_CLICK_LISTENER_ELEMENTS = 100
 _DESCRIBE_NODE_BATCH_SIZE = 20
 _JS_CLICK_LISTENER_OVERFLOW = '__browser_use_too_many_click_listeners__'
+_JS_CLICK_LISTENER_OBJECT_GROUP = 'browser_use_click_listener_scan'
 _MIN_CROSS_ORIGIN_IFRAME_EDGE = 10
 
 
@@ -501,67 +502,79 @@ class DomService:
 					% (_MAX_JS_CLICK_LISTENER_ELEMENTS, _JS_CLICK_LISTENER_OVERFLOW),
 					'includeCommandLineAPI': True,  # enables getEventListeners()
 					'returnByValue': False,  # Return object references, not values
+					# Tag every remote object this evaluation creates so it can all be
+					# released together below, however many per-element handles Step 2
+					# ends up resolving.
+					'objectGroup': _JS_CLICK_LISTENER_OBJECT_GROUP,
 				},
 				session_id=cdp_session.session_id,
 			)
 
-			if js_listener_result.get('result', {}).get('value') == _JS_CLICK_LISTENER_OVERFLOW:
-				self.logger.debug(
-					f'Skipping JS listener resolution: more than {_MAX_JS_CLICK_LISTENER_ELEMENTS} elements have click listeners'
-				)
+			try:
+				if js_listener_result.get('result', {}).get('value') == _JS_CLICK_LISTENER_OVERFLOW:
+					self.logger.debug(
+						f'Skipping JS listener resolution: more than {_MAX_JS_CLICK_LISTENER_ELEMENTS} elements have click listeners'
+					)
 
-			result_object_id = js_listener_result.get('result', {}).get('objectId')
-			if result_object_id:
-				# Step 2: Get array properties to access each element
-				array_props = await cdp_session.cdp_client.send.Runtime.getProperties(
-					params={
-						'objectId': result_object_id,
-						'ownProperties': True,
-					},
-					session_id=cdp_session.session_id,
-				)
+				result_object_id = js_listener_result.get('result', {}).get('objectId')
+				if result_object_id:
+					# Step 2: Get array properties to access each element
+					array_props = await cdp_session.cdp_client.send.Runtime.getProperties(
+						params={
+							'objectId': result_object_id,
+							'ownProperties': True,
+						},
+						session_id=cdp_session.session_id,
+					)
 
-				# Step 3: For each element, get its backend node ID via DOM.describeNode
-				element_object_ids: list[str] = []
-				for prop in array_props.get('result', []):
-					# Array indices are numeric property names
-					prop_name = prop.get('name', '') if isinstance(prop, dict) else ''
-					if isinstance(prop_name, str) and prop_name.isdigit():
-						prop_value = prop.get('value', {}) if isinstance(prop, dict) else {}
-						if isinstance(prop_value, dict):
-							object_id = prop_value.get('objectId')
-							if object_id and isinstance(object_id, str):
-								element_object_ids.append(object_id)
+					# Step 3: For each element, get its backend node ID via DOM.describeNode
+					element_object_ids: list[str] = []
+					for prop in array_props.get('result', []):
+						# Array indices are numeric property names
+						prop_name = prop.get('name', '') if isinstance(prop, dict) else ''
+						if isinstance(prop_name, str) and prop_name.isdigit():
+							prop_value = prop.get('value', {}) if isinstance(prop, dict) else {}
+							if isinstance(prop_value, dict):
+								object_id = prop_value.get('objectId')
+								if object_id and isinstance(object_id, str):
+									element_object_ids.append(object_id)
 
-				async def get_backend_node_id(object_id: str) -> int | None:
-					try:
-						node_info = await cdp_session.cdp_client.send.DOM.describeNode(
-							params={'objectId': object_id},
-							session_id=cdp_session.session_id,
-						)
-						return node_info.get('node', {}).get('backendNodeId')
-					except Exception:
-						return None
+					async def get_backend_node_id(object_id: str) -> int | None:
+						try:
+							node_info = await cdp_session.cdp_client.send.DOM.describeNode(
+								params={'objectId': object_id},
+								session_id=cdp_session.session_id,
+							)
+							return node_info.get('node', {}).get('backendNodeId')
+						except Exception:
+							return None
 
-				# Keep concurrency bounded. Each describeNode call can trigger target/session
-				# bookkeeping, so even a few dozen simultaneous calls can starve screenshots
-				# and the other CDP requests needed to build browser state.
-				backend_ids: list[int | None] = []
-				for batch_start in range(0, len(element_object_ids), _DESCRIBE_NODE_BATCH_SIZE):
-					batch = element_object_ids[batch_start : batch_start + _DESCRIBE_NODE_BATCH_SIZE]
-					backend_ids.extend(await asyncio.gather(*[get_backend_node_id(object_id) for object_id in batch]))
-				js_click_listener_backend_ids = {bid for bid in backend_ids if bid is not None}
+					# Keep concurrency bounded. Each describeNode call can trigger target/session
+					# bookkeeping, so even a few dozen simultaneous calls can starve screenshots
+					# and the other CDP requests needed to build browser state.
+					backend_ids: list[int | None] = []
+					for batch_start in range(0, len(element_object_ids), _DESCRIBE_NODE_BATCH_SIZE):
+						batch = element_object_ids[batch_start : batch_start + _DESCRIBE_NODE_BATCH_SIZE]
+						backend_ids.extend(await asyncio.gather(*[get_backend_node_id(object_id) for object_id in batch]))
+					js_click_listener_backend_ids = {bid for bid in backend_ids if bid is not None}
 
-				# Release the array object to avoid memory leaks
+					self.logger.debug(f'Detected {len(js_click_listener_backend_ids)} elements with JS click listeners')
+			finally:
+				# Release every remote object this scan created, not just the array itself.
+				# Runtime.getProperties documents that "[the] object group of the result is
+				# inherited from the target object" — so because Step 1 tagged the array with
+				# `objectGroup`, each individual element handle Step 2 resolved from it inherited
+				# that same group and is freed by this one releaseObjectGroup call. Releasing only
+				# `result_object_id` (the array) left every per-element handle pinned in the
+				# renderer's inspector backend for the rest of the CDP session — an unbounded leak
+				# across every DOM extraction on any page with JS click listeners.
 				try:
-					await cdp_session.cdp_client.send.Runtime.releaseObject(
-						params={'objectId': result_object_id},
+					await cdp_session.cdp_client.send.Runtime.releaseObjectGroup(
+						params={'objectGroup': _JS_CLICK_LISTENER_OBJECT_GROUP},
 						session_id=cdp_session.session_id,
 					)
 				except Exception:
 					pass  # Best effort cleanup
-
-				self.logger.debug(f'Detected {len(js_click_listener_backend_ids)} elements with JS click listeners')
 		except Exception as e:
 			self.logger.debug(f'Failed to detect JS event listeners: {e}')
 		js_listener_detection_ms = (time.time() - start_js_listener_detection) * 1000

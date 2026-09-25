@@ -810,6 +810,7 @@ class BrowserSession(BaseModel):
 		self._cached_selector_map.clear()
 		self._cached_selector_indices.clear()
 		self._downloaded_files.clear()
+		self._closed_popup_messages.clear()
 
 		self.agent_focus_target_id = None
 		if self.is_local:

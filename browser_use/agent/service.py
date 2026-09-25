@@ -2123,6 +2123,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			param_str = f'({", ".join(param_summary)})' if param_summary else ''
 			action_details.append(f'{action_name}{param_str}')
 
+		if action_details:
+			self.logger.debug(f'📝 Next action(s): {" | ".join(action_details)}')
+
 	def _prepare_demo_message(self, message: str, limit: int = 600) -> str:
 		# Previously truncated long entries; keep full text for better context in demo panel
 		return message.strip()
