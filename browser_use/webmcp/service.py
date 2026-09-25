@@ -243,13 +243,20 @@ class WebMCPService:
 		await self.install(cdp_session.target_id)
 
 		# A synthesized tool has no in-page handler to call: it is a sequence of UI steps we
-		# perform ourselves, through real input.
-		if self.browser_session.browser_profile.synthesize_site_tools:
+		# perform ourselves, through real input. Only take this path when the *latest*
+		# discovery for this target still lists the name as synthesized — a page that has
+		# since declared its own tool of the same name is a real contract and always wins,
+		# even though the synthesizer's own per-origin cache would still offer a stale match.
+		discovered = self._cache.get(cdp_session.target_id)
+		discovered_tool = discovered.get(name) if discovered else None
+		if self.browser_session.browser_profile.synthesize_site_tools and (
+			discovered_tool is not None and discovered_tool.source == 'synthesized'
+		):
 			manifest = self.synthesizer.cached(self._origin_of(cdp_session.target_id))
 			synthesized = manifest.get(name) if manifest else None
 			if synthesized is not None:
 				try:
-					ok, message = await self.synthesizer.call(synthesized, arguments or {}, target_id=target_id)
+					ok, message = await self.synthesizer.call(synthesized, arguments or {}, target_id=cdp_session.target_id)
 				except Exception as e:
 					return WebMCPToolCallResult(tool_name=name, ok=False, error=f'{type(e).__name__}: {e}')
 				if ok:

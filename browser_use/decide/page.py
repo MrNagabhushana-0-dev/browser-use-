@@ -76,6 +76,11 @@ async def choose_tool(
 	answer = decisions.get('tool')
 	if answer is None or answer.value == NO_TOOL:
 		return None
+	if answer.value not in options:
+		# A choice is only an answer among the options it was offered. Anything else is the
+		# model naming a tool this page does not have, and calling it would fail downstream.
+		logger.debug(f'🎛️ Tool pick {answer.value!r} was never offered; leaving it to the agent')
+		return None
 	if not answer.certain(certainty):
 		logger.debug(f'🎛️ Tool pick {answer.value!r} not certain enough ({answer.confidence}); leaving it to the agent')
 		return None

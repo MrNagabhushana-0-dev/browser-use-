@@ -18,6 +18,7 @@ import asyncio
 import logging
 import random
 import time
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Any, Literal
 
 from browser_use.human.motion import (
@@ -92,6 +93,28 @@ class HumanInput:
 		params: dict[str, Any] = {'type': event_type, 'x': x, 'y': y, **extra}
 		await cdp.cdp_client.send.Input.dispatchMouseEvent(params=params, session_id=cdp.session_id)
 
+	@staticmethod
+	async def _release(what: str, send: Awaitable[Any]) -> None:
+		"""Send the up half of a down/up pair from a `finally`, whatever we are unwinding from.
+
+		Every hold in this module is a sleep between a down event and an up event, and an
+		agent step timeout cancels the task mid-sleep. Without the release the key or button
+		stays down in Blink and on the page — the renderer has no idea the Python task died —
+		so the next action types into a browser holding ArrowRight, or drags instead of
+		clicking. State in the renderer outlives the coroutine that created it; the up event
+		is the only thing that clears it.
+
+		A dead CDP session or a page that has navigated away will make this raise, and it
+		must not replace the exception already on its way out. Cancellation is the one thing
+		that is never swallowed: swallowing it would make the task uncancellable.
+		"""
+		try:
+			await send
+		except asyncio.CancelledError:
+			raise
+		except Exception as e:
+			logger.debug(f'Could not send {what} while unwinding: {type(e).__name__}: {e}')
+
 	# -- pointer ---------------------------------------------------------------------
 
 	async def move_to(self, x: float, y: float, target_id=None, haste: float = 1.0) -> None:
@@ -133,8 +156,13 @@ class HumanInput:
 		await asyncio.sleep(self.rng.uniform(0.03, 0.12) / haste)
 
 		await self._mouse(cdp, 'mousePressed', self.x, self.y, button=button, clickCount=click_count)
-		await asyncio.sleep(click_dwell_ms(self.rng) / 1000.0)
-		await self._mouse(cdp, 'mouseReleased', self.x, self.y, button=button, clickCount=click_count)
+		try:
+			await asyncio.sleep(click_dwell_ms(self.rng) / 1000.0)
+		finally:
+			await self._release(
+				'mouseReleased',
+				self._mouse(cdp, 'mouseReleased', self.x, self.y, button=button, clickCount=click_count),
+			)
 
 	async def click_box(self, box: tuple[float, float, float, float], target_id=None, **kwargs) -> None:
 		"""Click somewhere sensible inside (x, y, width, height), not dead centre."""
@@ -181,11 +209,16 @@ class HumanInput:
 				params={'type': 'keyDown', 'text': char, 'key': char, 'unmodifiedText': char},
 				session_id=cdp.session_id,
 			)
-			await asyncio.sleep(max(0.004, delay_ms / 2000.0))
-			await cdp.cdp_client.send.Input.dispatchKeyEvent(
-				params={'type': 'keyUp', 'key': char},
-				session_id=cdp.session_id,
-			)
+			try:
+				await asyncio.sleep(max(0.004, delay_ms / 2000.0))
+			finally:
+				await self._release(
+					'keyUp',
+					cdp.cdp_client.send.Input.dispatchKeyEvent(
+						params={'type': 'keyUp', 'key': char},
+						session_id=cdp.session_id,
+					),
+				)
 			await asyncio.sleep(max(0.004, delay_ms / 2000.0))
 
 	async def press(self, key: str, code: str | None = None, key_code: int | None = None, target_id=None) -> None:
@@ -211,11 +244,16 @@ class HumanInput:
 			params={'type': 'keyDown', **params},  # type: ignore[arg-type]
 			session_id=cdp.session_id,
 		)
-		await asyncio.sleep(self.rng.uniform(0.04, 0.11))
-		await cdp.cdp_client.send.Input.dispatchKeyEvent(
-			params={'type': 'keyUp', **up},  # type: ignore[arg-type]
-			session_id=cdp.session_id,
-		)
+		try:
+			await asyncio.sleep(self.rng.uniform(0.04, 0.11))
+		finally:
+			await self._release(
+				'keyUp',
+				cdp.cdp_client.send.Input.dispatchKeyEvent(
+					params={'type': 'keyUp', **up},  # type: ignore[arg-type]
+					session_id=cdp.session_id,
+				),
+			)
 
 	async def hold(self, key: str, seconds: float, target_id=None) -> None:
 		"""Hold a key down for a while, then release it.
@@ -248,19 +286,24 @@ class HumanInput:
 			params={'type': 'keyDown', **params},  # type: ignore[arg-type]
 			session_id=cdp.session_id,
 		)
-		deadline = time.monotonic() + seconds
-		while time.monotonic() < deadline:
-			# ~30Hz, which is roughly what a held key repeats at once the initial delay has
-			# passed. Jittered, because a machine-perfect interval is itself a signal.
-			await asyncio.sleep(min(self.rng.uniform(0.028, 0.038), max(0.0, deadline - time.monotonic())))
-			await cdp.cdp_client.send.Input.dispatchKeyEvent(
-				params={'type': 'keyDown', 'autoRepeat': True, **params},  # type: ignore[arg-type]
-				session_id=cdp.session_id,
+		try:
+			deadline = time.monotonic() + seconds
+			while time.monotonic() < deadline:
+				# ~30Hz, which is roughly what a held key repeats at once the initial delay has
+				# passed. Jittered, because a machine-perfect interval is itself a signal.
+				await asyncio.sleep(min(self.rng.uniform(0.028, 0.038), max(0.0, deadline - time.monotonic())))
+				await cdp.cdp_client.send.Input.dispatchKeyEvent(
+					params={'type': 'keyDown', 'autoRepeat': True, **params},  # type: ignore[arg-type]
+					session_id=cdp.session_id,
+				)
+		finally:
+			await self._release(
+				'keyUp',
+				cdp.cdp_client.send.Input.dispatchKeyEvent(
+					params={'type': 'keyUp', **up},  # type: ignore[arg-type]
+					session_id=cdp.session_id,
+				),
 			)
-		await cdp.cdp_client.send.Input.dispatchKeyEvent(
-			params={'type': 'keyUp', **up},  # type: ignore[arg-type]
-			session_id=cdp.session_id,
-		)
 
 	async def press_and_hold(self, box: tuple[float, float, float, float], seconds: float, target_id=None) -> None:
 		"""Press the mouse inside a box, keep it down, then release where it went.
@@ -275,5 +318,7 @@ class HumanInput:
 		x, y = landing_point(bx + bw / 2, by + bh / 2, bw, bh, self.rng)
 		await self.move_to(x, y, target_id=target_id)
 		await self._mouse(cdp, 'mousePressed', x, y, button='left', clickCount=1)
-		await asyncio.sleep(seconds)
-		await self._mouse(cdp, 'mouseReleased', x, y, button='left', clickCount=1)
+		try:
+			await asyncio.sleep(seconds)
+		finally:
+			await self._release('mouseReleased', self._mouse(cdp, 'mouseReleased', x, y, button='left', clickCount=1))
