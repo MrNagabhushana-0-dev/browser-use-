@@ -1,4 +1,5 @@
 import os
+import platform
 import sys
 import tempfile
 from collections.abc import Iterable
@@ -23,6 +24,19 @@ def _get_enable_default_extensions_default() -> bool:
 		# If DISABLE_EXTENSIONS is truthy, return False (extensions disabled)
 		return env_val.lower() in ('0', 'false', 'no', 'off', '')
 	return True
+
+
+def _ua_os_token(system: str) -> str:
+	"""The OS token a real Chrome puts in its User-Agent on the given `platform.system()` host.
+
+	A UA claiming Linux while navigator.platform and userAgentData report macOS is a free
+	automation signal, so the token has to follow the host we are actually running on.
+	"""
+	if system == 'Darwin':
+		return 'Macintosh; Intel Mac OS X 10_15_7'
+	if system == 'Windows':
+		return 'Windows NT 10.0; Win64; x64'
+	return 'X11; Linux x86_64'
 
 
 def _get_headless_default() -> bool | None:
@@ -1007,7 +1021,8 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 		except Exception:
 			version = ''
 		version = version or '141.0.0.0'
-		return f'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36'
+		os_token = _ua_os_token(platform.system())
+		return f'Mozilla/5.0 ({os_token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36'
 
 	def get_args(self) -> list[str]:
 		"""Get the list of all Chrome CLI launch args for this profile (compiled from defaults, user-provided, and system-specific)."""

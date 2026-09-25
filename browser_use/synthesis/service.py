@@ -136,8 +136,14 @@ const roleOf = (el) => {
 };
 
 let el = null;
+// The scanner reads three attributes into `testid` — data-testid, data-test-id, data-test
+// — so all three have to be tried back, in the same order. When a testid is recorded the
+// scanner computes no CSS fallback, so a missing branch here is not a degraded match: the
+// element resolves to nothing, its tool answers 'could not find' on every call, and it can
+// therefore never be verified.
 if (loc.testid) el = deepQuery(`[data-testid="${CSS.escape(loc.testid)}"]`)[0]
-	|| deepQuery(`[data-test-id="${CSS.escape(loc.testid)}"]`)[0];
+	|| deepQuery(`[data-test-id="${CSS.escape(loc.testid)}"]`)[0]
+	|| deepQuery(`[data-test="${CSS.escape(loc.testid)}"]`)[0];
 // Not getElementById: it does not see into shadow roots.
 if (!el && loc.id) el = deepQuery(`#${CSS.escape(loc.id)}`)[0] || document.getElementById(loc.id);
 if (!el && loc.name) {
@@ -233,6 +239,38 @@ if (opt) {
 	el.dispatchEvent(new Event('change', {bubbles: true}));
 }
 return {found: true, picked: !!opt};
+""")
+
+# Select whatever a field already holds, so the next trusted keystroke replaces it.
+#
+# Typing is real key input, which inserts at the caret. A click lands the caret wherever in
+# the existing text it happens to land, so filling a pre-filled field appended or spliced —
+# 'old' plus 'new' came back as 'oldnew' or 'olnewd' — and the tool still reported ok and
+# marked itself verified. Selecting first is what a person does, and it is the only way to
+# replace the contents without writing to .value behind the page's back.
+SELECT_CONTENTS_JS = _variant("""
+const tag = el.tagName.toLowerCase();
+if (tag === 'input' || tag === 'textarea') {
+	el.focus();
+	// Throws on an input type that has no selectable text (colour, range, checkbox); such a
+	// field is never a fill step's target, but the resolver must not blow up if it is.
+	try { el.select(); } catch (e) { return {found: true, selected: false}; }
+	return {found: true, selected: true};
+}
+if (el.isContentEditable) {
+	el.focus();
+	const range = document.createRange();
+	range.selectNodeContents(el);
+	// A contenteditable inside a shadow root has its selection on that root in Chrome, not
+	// on the document.
+	const scope = el.getRootNode();
+	const sel = (scope && typeof scope.getSelection === 'function') ? scope.getSelection() : window.getSelection();
+	if (!sel) return {found: true, selected: false};
+	sel.removeAllRanges();
+	sel.addRange(range);
+	return {found: true, selected: true};
+}
+return {found: true, selected: false};
 """)
 
 
@@ -605,6 +643,10 @@ class SiteToolSynthesizer:
 						return False, f'step {index} could not select {value!r} in {step.locator.describe()}'
 				else:
 					await human.click_box(rect, target_id=target_id)
+					# Real keystrokes insert at the caret, so filling a field that already holds
+					# something appends to it. Select the contents first and let the first
+					# keystroke replace them, which is what typing over a selection does.
+					await self._select_contents(step.locator, target_id=target_id)
 					await human.type_text(str(value), target_id=target_id)
 
 		# It ran end to end, so it is no longer just a reading of the markup.
@@ -677,6 +719,23 @@ class SiteToolSynthesizer:
 		if current != desired:
 			await self.browser_session.human.click_box((box['x'], box['y'], box['w'], box['h']), target_id=target_id)
 		return True
+
+	async def _select_contents(self, locator: Locator, target_id=None) -> bool:
+		"""Select what a field already holds, so the typing that follows replaces it.
+
+		Returns whether anything was selected. A field this cannot select — a control that is
+		neither a text input nor contenteditable — is still typed into, because appending to
+		an empty field is the same as filling it and refusing here would break the common case
+		to protect the rare one.
+		"""
+		script = _fill(SELECT_CONTENTS_JS, LOCATOR_JSON=_encode(locator))
+		result = await self.browser_session.run_page_script(script, target_id=target_id)
+		if not result.ok:
+			return False
+		try:
+			return bool(json.loads(result.value).get('selected'))
+		except json.JSONDecodeError:
+			return False
 
 	async def _select_option(self, locator: Locator, value: str, target_id=None) -> bool:
 		script = _fill(SELECT_JS, LOCATOR_JSON=_encode(locator), SELECT_VALUE_JSON=_encode(value))

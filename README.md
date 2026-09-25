@@ -310,14 +310,18 @@ across frames and emits one line each:
 
 ```python
 print(session.live_view.narrate())
-# t=2.4 pan=left | #1* (0.21,0.62) v(+0.00,+0.05) | #4 (0.78,0.61) v(-0.09,+0.00) ttc=0.9
+# t=2.4 pan=left | #1* button (0.21,0.62) v(+0.00,+0.05) | #4 media (0.78,0.61) v(-0.09,+0.00) ttc=0.9
 ```
 
 `*` is the longest-lived object — in a game, almost always the thing you control, since
 obstacles come and go while the avatar stays. `ttc` is time-to-contact, which is the
 number a player is actually computing. Measured on real captures from a video and a live
 game: **38-41x fewer tokens than the equivalent images**, 15-35ms a frame, nothing to
-download.
+download. Each tracked object also carries a coarse label —
+`text`, `button`, `media`, `panel`, `region` — read from cheap visual features (edge
+density, colour variance, shape), so the stream says *what* moved, not only where. The
+labels are guesses from pixels and named as such; a finer taxonomy is a segmentation
+model's job, which is a strictly larger dependency.
 
 # Not every decision needs a model that writes
 
