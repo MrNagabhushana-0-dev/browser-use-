@@ -24,6 +24,7 @@ dist/
 *.gif
 *.txt
 *.pdf
+!docs/research/*.pdf
 *.csv
 *.json
 !/server.json
