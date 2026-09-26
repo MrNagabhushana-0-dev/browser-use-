@@ -42,7 +42,15 @@ class SchemaOptimizer:
 				flattened_ref: dict[str, Any] | None = None
 
 				# Skip unnecessary fields AND $defs (we'll inline everything)
-				skip_fields = ['additionalProperties', '$defs']
+				skip_fields = ['$defs']
+
+				# A field with no `properties` (e.g. `dict[str, Any]`) is a free-form
+				# mapping, not a modeled object. Its `additionalProperties` is the only
+				# thing describing what values it may hold, so it must be captured here
+				# and restored below rather than dropped and unconditionally replaced
+				# with `False` (which would make the field satisfiable only by `{}`).
+				had_additional_properties = 'additionalProperties' in obj
+				original_additional_properties = obj.get('additionalProperties')
 
 				for key, value in obj.items():
 					# Keys inside `properties` are user field names, not schema keywords.
@@ -51,6 +59,12 @@ class SchemaOptimizer:
 						continue
 
 					if key in skip_fields:
+						continue
+
+					if key == 'additionalProperties':
+						# Handled after the loop via `had_additional_properties`/
+						# `original_additional_properties`, once we know whether this
+						# object has modeled `properties` or is a free-form dict.
 						continue
 
 					# Skip metadata "title"
@@ -125,9 +139,21 @@ class SchemaOptimizer:
 					return result
 				else:
 					# No $ref, just return the optimized object
-					# CRITICAL: Add additionalProperties: false to ALL objects for OpenAI strict mode
 					if optimized.get('type') == 'object':
-						optimized['additionalProperties'] = False
+						if optimized.get('properties'):
+							# CRITICAL: Add additionalProperties: false to modeled objects
+							# for OpenAI strict mode.
+							optimized['additionalProperties'] = False
+						elif had_additional_properties:
+							# Free-form mapping (e.g. `dict[str, Any]`, or a
+							# schema-derived `{"type": "object"}` field with no
+							# nested `properties`): restore what it may hold instead
+							# of forcing it to `{}`-only.
+							optimized['additionalProperties'] = (
+								optimize_schema(original_additional_properties, defs_lookup)
+								if isinstance(original_additional_properties, (dict, list))
+								else original_additional_properties
+							)
 
 					return optimized
 
@@ -143,12 +169,15 @@ class SchemaOptimizer:
 
 		optimized_schema: dict[str, Any] = optimized_result
 
-		# Additional pass to ensure ALL objects have additionalProperties: false
+		# Additional pass to ensure all MODELED objects have additionalProperties: false.
+		# A free-form mapping (no `properties`) already had its `additionalProperties`
+		# set correctly by `optimize_schema` above and must not be overwritten here,
+		# or it would collapse back into a `{}`-only schema.
 		def ensure_additional_properties_false(obj: Any) -> None:
-			"""Ensure all objects have additionalProperties: false"""
+			"""Ensure all modeled objects have additionalProperties: false"""
 			if isinstance(obj, dict):
-				# If it's an object type, ensure additionalProperties is false
-				if obj.get('type') == 'object':
+				# If it's an object type with defined properties, ensure additionalProperties is false
+				if obj.get('type') == 'object' and obj.get('properties'):
 					obj['additionalProperties'] = False
 
 				# Recursively apply to all values
