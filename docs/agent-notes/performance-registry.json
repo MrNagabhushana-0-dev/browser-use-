@@ -88,7 +88,7 @@
       "tool_calls": 2,
       "duration_ms": 2927,
       "verified_outcome": "error",
-      "failure_mode": "session limit · resets 7:50pm UTC -- hit identically across all 4 concurrent agents at launch, not a per-model quality signal"
+      "failure_mode": "session limit \u00b7 resets 7:50pm UTC -- hit identically across all 4 concurrent agents at launch, not a per-model quality signal"
     },
     {
       "task_key": "orchestration-advisor-consultation",
@@ -111,6 +111,70 @@
       "failure_mode": null,
       "evaluator_score": null,
       "notes": "Produced the architecture critique that this file/ledger/README restructure is responding to. Read docs/agent-notes/* and git log before writing its critique -- grounded in the repo's actual history, not just the prompt's description of it."
+    },
+    {
+      "task_key": "browser_use/browser/watchdogs/security_watchdog.py:_is_url_match:full-url-pattern-startswith-bypass",
+      "model": "claude-sonnet-5",
+      "stage": "hunt+implement",
+      "tokens": 117293,
+      "tool_calls": 29,
+      "duration_ms": 255537,
+      "verified_outcome": "landed",
+      "failure_mode": null,
+      "first_pass_success": true,
+      "recovery_success": null,
+      "tool_failures": 0,
+      "critic_rejection": false,
+      "regression_detected": false,
+      "evaluator_score": 4
+    },
+    {
+      "task_key": "browser_use/mcp/client.py:connect:stale-disconnect-event-tears-down-reconnect",
+      "model": "claude-sonnet-5",
+      "stage": "hunt+implement",
+      "tokens": 99790,
+      "tool_calls": 38,
+      "duration_ms": 281001,
+      "verified_outcome": "landed",
+      "failure_mode": null,
+      "first_pass_success": true,
+      "recovery_success": null,
+      "tool_failures": 0,
+      "critic_rejection": false,
+      "regression_detected": false,
+      "evaluator_score": 3
+    },
+    {
+      "task_key": "browser_use/browser/watchdogs/downloads_watchdog.py:attach_to_target:early-return-skips-per-tab-network-monitoring",
+      "model": "claude-sonnet-5",
+      "stage": "hunt+implement",
+      "tokens": 153220,
+      "tool_calls": 51,
+      "duration_ms": 2181392,
+      "verified_outcome": "landed",
+      "failure_mode": null,
+      "first_pass_success": true,
+      "recovery_success": null,
+      "tool_failures": 0,
+      "critic_rejection": false,
+      "regression_detected": false,
+      "evaluator_score": 4
+    },
+    {
+      "task_key": "browser_use/llm/schema.py:SchemaOptimizer:additionalProperties-false-corrupts-freeform-dict",
+      "model": "claude-sonnet-5",
+      "stage": "hunt+implement",
+      "tokens": 155059,
+      "tool_calls": 67,
+      "duration_ms": 1484383,
+      "verified_outcome": "landed",
+      "failure_mode": null,
+      "first_pass_success": true,
+      "recovery_success": null,
+      "tool_failures": 0,
+      "critic_rejection": false,
+      "regression_detected": false,
+      "evaluator_score": 3
     }
   ]
 }

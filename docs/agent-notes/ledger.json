@@ -75,7 +75,7 @@
       "key": "browser_use/cobrowse/service.py:launch_for_human:_wait_for_cdp-no-cleanup",
       "status": "rejected",
       "round": "0",
-      "reason": "Lead review did not accept the patch as submitted (notes not fully captured before advisor hit a usage limit). Real defect class (process/profile-lock leak on failed CDP wait) is still open — a future round can re-attempt with a cleaner fix."
+      "reason": "Lead review did not accept the patch as submitted (notes not fully captured before advisor hit a usage limit). Real defect class (process/profile-lock leak on failed CDP wait) is still open \u2014 a future round can re-attempt with a cleaner fix."
     },
     {
       "key": "browser_use/webmcp/bridge.py:loadManifests:manifest-deadline-not-actually-bounded",
@@ -91,7 +91,7 @@
       "round": "1b",
       "finder_model": "claude-opus-5",
       "commit": "028de2d",
-      "reason": "window.agent installed despite the bridge's own comment saying it deliberately wasn't — a free automation fingerprint."
+      "reason": "window.agent installed despite the bridge's own comment saying it deliberately wasn't \u2014 a free automation fingerprint."
     },
     {
       "key": "browser_use/webmcp/service.py:DEFAULT_DISCOVER_TIMEOUT:shorter-than-bridge-manifestMs",
@@ -135,27 +135,95 @@
     },
     {
       "key": "browser_use/browser/watchdogs/security_watchdog.py:domain-restriction-enforcement",
-      "status": "in_progress",
+      "status": "superseded_by_landed_entry",
       "round": "2",
       "reason": "Round 2 worker assigned; first attempt failed on a shared account-level usage-limit error across all 4 workers simultaneously (not a quality signal). Resumed after reset."
     },
     {
       "key": "browser_use/mcp/client.py:connection-management",
-      "status": "in_progress",
+      "status": "superseded_by_landed_entry",
       "round": "2",
       "reason": "Same round-2 usage-limit failure/resume as security_watchdog.py above."
     },
     {
       "key": "browser_use/browser/watchdogs/downloads_watchdog.py:pdf-download-file-management",
-      "status": "in_progress",
+      "status": "superseded_by_landed_entry",
       "round": "2",
       "reason": "Same round-2 usage-limit failure/resume as security_watchdog.py above."
     },
     {
       "key": "browser_use/llm/schema.py:shared-tool-schema-generation",
-      "status": "in_progress",
+      "status": "superseded_by_landed_entry",
       "round": "2",
       "reason": "Same round-2 usage-limit failure/resume as security_watchdog.py above. High-leverage target: shared across every LLM provider."
+    },
+    {
+      "key": "browser_use/browser/watchdogs/security_watchdog.py:_is_url_match:full-url-pattern-startswith-bypass",
+      "status": "landed",
+      "round": "2",
+      "finder_model": "claude-sonnet-5",
+      "commit": "ed4bf31",
+      "impact": 4,
+      "evidence": {
+        "baseline": "allowed_domains=['https://example.com'] let 'https://example.com.evil.com' through",
+        "new_result": "that host is now rejected; same-host deeper paths still match as before",
+        "measured_improvement": "closes a domain-allowlist bypass -- qualitative (security boundary), not a throughput number",
+        "confidence": "high -- reproduced live against unfixed code, regression test fails-then-passes, 108 existing security tests unaffected",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from the finder"
+      },
+      "reason": "Highest-value fix of round 2: a security-boundary bypass, not a correctness nit."
+    },
+    {
+      "key": "browser_use/mcp/client.py:connect:stale-disconnect-event-tears-down-reconnect",
+      "status": "landed",
+      "round": "2",
+      "finder_model": "claude-sonnet-5",
+      "commit": "ed4bf31",
+      "impact": 3,
+      "evidence": {
+        "baseline": "connect()->disconnect()->connect() left _connected=False, session=None moments later",
+        "new_result": "reconnect stays up and tool calls succeed end-to-end",
+        "measured_improvement": "qualitative -- any retry/resilience layer above MCPClient was silently broken",
+        "confidence": "high -- reproduced live with a real stdio MCP server, regression test fails-then-passes, 33 existing tests unaffected",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from the finder"
+      },
+      "reason": null
+    },
+    {
+      "key": "browser_use/browser/watchdogs/downloads_watchdog.py:attach_to_target:early-return-skips-per-tab-network-monitoring",
+      "status": "landed",
+      "round": "2",
+      "finder_model": "claude-sonnet-5",
+      "commit": "ed4bf31",
+      "impact": 4,
+      "evidence": {
+        "baseline": "network-based PDF/download detection worked only on the first tab of a session",
+        "new_result": "works on every tab",
+        "measured_improvement": "qualitative -- fires on the common case (any multi-tab agent session)",
+        "confidence": "high -- regression test fails-then-passes with a real second-tab download, full tests/ci suite (1376 passed) unaffected",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from the finder"
+      },
+      "reason": null
+    },
+    {
+      "key": "browser_use/llm/schema.py:SchemaOptimizer:additionalProperties-false-corrupts-freeform-dict",
+      "status": "landed",
+      "round": "2",
+      "finder_model": "claude-sonnet-5",
+      "commit": "ed4bf31",
+      "impact": 3,
+      "evidence": {
+        "baseline": "a dict[str, Any] field schema became satisfiable only by {} under every provider using this shared optimizer",
+        "new_result": "free-form mapping fields keep a usable schema; modeled objects unchanged",
+        "measured_improvement": "qualitative -- shared code path, affects every LLM provider at once",
+        "confidence": "high -- regression test fails-then-passes, 48+6 related tests and full tests/ci suite (1376 passed) unaffected",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from the finder"
+      },
+      "reason": null
     }
   ]
 }
