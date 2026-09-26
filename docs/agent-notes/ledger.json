@@ -1,0 +1,286 @@
+{
+  "_comment": "Machine-readable record of every proposed defect/finding across rounds, keyed by file:line_range:mechanism. Frozen and injected verbatim into hunter prompts at the start of each round so workers don't re-propose something already landed, held, or refuted. Append-only between rounds; never edited mid-round (resume caching keys on byte-identical agent prompts).",
+  "schema_version": 2,
+  "_schema_note": "v2 adds optional 'impact' (0-5, see README.md D) and 'evidence' ({baseline, new_result, measured_improvement, confidence, reproducible, independent_verification}) for entries going forward. v1 entries below are left as originally recorded rather than backfilled with numbers nobody measured at the time.",
+  "entries": [
+    {
+      "key": "browser_use/synthesis/service.py:RESOLVE_JS:missing-data-test-branch",
+      "status": "landed",
+      "round": "0",
+      "finder_model": "claude-opus-5",
+      "reviewer_model": "claude-opus-5-5",
+      "commit": "df31062",
+      "reason": "Resolver only queried data-testid/data-test-id; scanner also records data-test. Parity gap, real."
+    },
+    {
+      "key": "browser_use/synthesis/service.py:call():fill-appends-not-replaces",
+      "status": "landed",
+      "round": "0",
+      "finder_model": "claude-opus-5",
+      "reviewer_model": "claude-opus-5-5",
+      "commit": "df31062",
+      "reason": "'fill' steps clicked then typed without selecting existing contents first, so pre-filled fields got appended to."
+    },
+    {
+      "key": "browser_use/webmcp/service.py:call_tool:stale-synthesized-manifest-precedence",
+      "status": "landed",
+      "round": "0",
+      "finder_model": "claude-sonnet-5",
+      "reviewer_model": "claude-opus-5-5",
+      "commit": "df31062",
+      "reason": "call_tool ran a stale synthesized tool even after the page later declared its own tool of the same name."
+    },
+    {
+      "key": "browser_use/human/input.py:down-up-pairs:stuck-key-on-cancel",
+      "status": "landed",
+      "round": "0",
+      "finder_model": "claude-opus-5",
+      "reviewer_model": "claude-opus-5-5",
+      "commit": "df31062",
+      "reason": "A cancelled sleep between key/button down and up left it stuck down; no cleanup."
+    },
+    {
+      "key": "browser_use/decide/service.py:parse_decisions:never-raises-contract-broken",
+      "status": "landed",
+      "round": "0",
+      "finder_model": "claude-opus-5",
+      "reviewer_model": "claude-opus-5-5",
+      "commit": "df31062",
+      "reason": "int()/float() on untrusted usage/confidence fields could raise, breaking the documented never-raises contract. choose_tool could also return a tool never offered."
+    },
+    {
+      "key": "browser_use/browser/profile.py:_headful_user_agent:hardcoded-linux-ua",
+      "status": "landed",
+      "round": "0",
+      "finder_model": "claude-sonnet-5",
+      "reviewer_model": "claude-opus-5-5",
+      "commit": "df31062",
+      "reason": "Headless 'headful' UA always claimed Linux, contradicting navigator.platform on macOS/Windows."
+    },
+    {
+      "key": "browser_use/synthesis/service.py:synthesize:controls-never-read",
+      "status": "rejected",
+      "round": "0",
+      "finder_model": "claude-opus-5",
+      "reviewer_model": "claude-opus-5-5",
+      "reason": "Real bug (loose search-box controls never wired into synthesis) but the fix's cache-fingerprint interaction with the loose-controls list wasn't judged safe as submitted. Held rather than landed un-reviewed."
+    },
+    {
+      "key": "browser_use/synthesis/{scanner.py,store.py}:fingerprint:scroll-dependent-cache-key",
+      "status": "rejected",
+      "round": "0",
+      "reason": "BLOCKING: uncapped name lists (up to 200 button names, 120 loose-control names) added to the scan result could overflow the 60000-char scan budget and silently wipe out synthesis entirely on busy pages. The fix was worse than the bug. Do not re-propose without fixing the budget-overflow risk first."
+    },
+    {
+      "key": "browser_use/cobrowse/service.py:launch_for_human:_wait_for_cdp-no-cleanup",
+      "status": "rejected",
+      "round": "0",
+      "reason": "Lead review did not accept the patch as submitted (notes not fully captured before advisor hit a usage limit). Real defect class (process/profile-lock leak on failed CDP wait) is still open \u2014 a future round can re-attempt with a cleaner fix."
+    },
+    {
+      "key": "browser_use/webmcp/bridge.py:loadManifests:manifest-deadline-not-actually-bounded",
+      "status": "landed",
+      "round": "1b",
+      "finder_model": "claude-opus-5",
+      "commit": "028de2d",
+      "reason": "Deadline was only checked between manifest refs, not around the fetch/tools-list-RPC itself, so an unresponsive manifest server hung call_webmcp_tool() indefinitely on any unknown tool name."
+    },
+    {
+      "key": "browser_use/webmcp/bridge.py:install:window.agent-fingerprint",
+      "status": "landed",
+      "round": "1b",
+      "finder_model": "claude-opus-5",
+      "commit": "028de2d",
+      "reason": "window.agent installed despite the bridge's own comment saying it deliberately wasn't \u2014 a free automation fingerprint."
+    },
+    {
+      "key": "browser_use/webmcp/service.py:DEFAULT_DISCOVER_TIMEOUT:shorter-than-bridge-manifestMs",
+      "status": "landed",
+      "round": "1b",
+      "finder_model": "claude-sonnet-5 (orchestrator, caught during independent re-verification, not the original worker)",
+      "commit": "028de2d",
+      "reason": "Outer Python timeout (3.0s) was shorter than the bridge's own JS-side abort bound (manifestMs=5000ms) it's supposed to wait out, so the outer timeout fired first and silently defeated the round-1b fix above for get_webmcp_tools(). Raised to 6.0s."
+    },
+    {
+      "key": "browser_use/agent/service.py:_log_next_action_summary:builds-then-discards-summary",
+      "status": "landed",
+      "round": "1",
+      "finder_model": "claude-sonnet-5",
+      "commit": "634cd86",
+      "reason": "Built a per-action debug summary every step and never logged it, contradicting its own docstring."
+    },
+    {
+      "key": "browser_use/browser/session.py:reset:closed_popup_messages-never-cleared",
+      "status": "landed",
+      "round": "1",
+      "finder_model": "claude-sonnet-5",
+      "commit": "634cd86",
+      "reason": "reset() cleared every other per-session cache but not _closed_popup_messages; stale dialog kept resurfacing in every future prompt on session reuse."
+    },
+    {
+      "key": "browser_use/tools/service.py:_validate_and_fix_javascript:quote-fixer-corrupts-valid-js",
+      "status": "landed",
+      "round": "1",
+      "finder_model": "claude-sonnet-5",
+      "commit": "634cd86",
+      "reason": "Unconditional backslash-quote strip corrupted valid JS that legitimately escapes a quote inside a string. Gated on: no bare (bona fide) delimiter quote anywhere in the code. Orchestrator's own attempted 'improvement' to this gate (backslash-parity counting) was stress-tested before shipping and found to be a regression -- reverted to the worker's original, simpler gate."
+    },
+    {
+      "key": "browser_use/dom/service.py:_get_all_trees:cdp-object-handle-leak-click-listeners",
+      "status": "landed",
+      "round": "1",
+      "finder_model": "claude-sonnet-5",
+      "commit": "634cd86",
+      "reason": "Up to 100 per-element CDP remote-object handles resolved via Runtime.getProperties were never released, only the parent array's handle was. Unbounded leak on every DOM extraction (every agent step) on any page with JS click listeners. Highest-impact fix of round 1."
+    },
+    {
+      "key": "browser_use/browser/watchdogs/security_watchdog.py:domain-restriction-enforcement",
+      "status": "superseded_by_landed_entry",
+      "round": "2",
+      "reason": "Round 2 worker assigned; first attempt failed on a shared account-level usage-limit error across all 4 workers simultaneously (not a quality signal). Resumed after reset."
+    },
+    {
+      "key": "browser_use/mcp/client.py:connection-management",
+      "status": "superseded_by_landed_entry",
+      "round": "2",
+      "reason": "Same round-2 usage-limit failure/resume as security_watchdog.py above."
+    },
+    {
+      "key": "browser_use/browser/watchdogs/downloads_watchdog.py:pdf-download-file-management",
+      "status": "superseded_by_landed_entry",
+      "round": "2",
+      "reason": "Same round-2 usage-limit failure/resume as security_watchdog.py above."
+    },
+    {
+      "key": "browser_use/llm/schema.py:shared-tool-schema-generation",
+      "status": "superseded_by_landed_entry",
+      "round": "2",
+      "reason": "Same round-2 usage-limit failure/resume as security_watchdog.py above. High-leverage target: shared across every LLM provider."
+    },
+    {
+      "key": "browser_use/browser/watchdogs/security_watchdog.py:_is_url_match:full-url-pattern-startswith-bypass",
+      "status": "landed",
+      "round": "2",
+      "finder_model": "claude-sonnet-5",
+      "commit": "ed4bf31",
+      "impact": 4,
+      "evidence": {
+        "baseline": "allowed_domains=['https://example.com'] let 'https://example.com.evil.com' through",
+        "new_result": "that host is now rejected; same-host deeper paths still match as before",
+        "measured_improvement": "closes a domain-allowlist bypass -- qualitative (security boundary), not a throughput number",
+        "confidence": "high -- reproduced live against unfixed code, regression test fails-then-passes, 108 existing security tests unaffected",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from the finder"
+      },
+      "reason": "Highest-value fix of round 2: a security-boundary bypass, not a correctness nit."
+    },
+    {
+      "key": "browser_use/mcp/client.py:connect:stale-disconnect-event-tears-down-reconnect",
+      "status": "landed",
+      "round": "2",
+      "finder_model": "claude-sonnet-5",
+      "commit": "ed4bf31",
+      "impact": 3,
+      "evidence": {
+        "baseline": "connect()->disconnect()->connect() left _connected=False, session=None moments later",
+        "new_result": "reconnect stays up and tool calls succeed end-to-end",
+        "measured_improvement": "qualitative -- any retry/resilience layer above MCPClient was silently broken",
+        "confidence": "high -- reproduced live with a real stdio MCP server, regression test fails-then-passes, 33 existing tests unaffected",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from the finder"
+      },
+      "reason": null
+    },
+    {
+      "key": "browser_use/browser/watchdogs/downloads_watchdog.py:attach_to_target:early-return-skips-per-tab-network-monitoring",
+      "status": "landed",
+      "round": "2",
+      "finder_model": "claude-sonnet-5",
+      "commit": "ed4bf31",
+      "impact": 4,
+      "evidence": {
+        "baseline": "network-based PDF/download detection worked only on the first tab of a session",
+        "new_result": "works on every tab",
+        "measured_improvement": "qualitative -- fires on the common case (any multi-tab agent session)",
+        "confidence": "high -- regression test fails-then-passes with a real second-tab download, full tests/ci suite (1376 passed) unaffected",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from the finder"
+      },
+      "reason": null
+    },
+    {
+      "key": "browser_use/llm/schema.py:SchemaOptimizer:additionalProperties-false-corrupts-freeform-dict",
+      "status": "landed",
+      "round": "2",
+      "finder_model": "claude-sonnet-5",
+      "commit": "ed4bf31",
+      "impact": 3,
+      "evidence": {
+        "baseline": "a dict[str, Any] field schema became satisfiable only by {} under every provider using this shared optimizer",
+        "new_result": "free-form mapping fields keep a usable schema; modeled objects unchanged",
+        "measured_improvement": "qualitative -- shared code path, affects every LLM provider at once",
+        "confidence": "high -- regression test fails-then-passes, 48+6 related tests and full tests/ci suite (1376 passed) unaffected",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from the finder"
+      },
+      "reason": null
+    },
+    {
+      "key": "browser_use/browser/watchdogs/default_action_watchdog.py:on_ScrollToTextEvent:unescaped-quote-breaks-xpath-and-js-search",
+      "status": "landed",
+      "round": "3",
+      "finder_model": "claude-sonnet-5",
+      "refuter_model": "claude-opus-5",
+      "implementer_model": "claude-opus-5",
+      "commit": "9f66c05",
+      "impact": 3,
+      "evidence": {
+        "baseline": "scroll_to_text raised \"Text not found\" for any target text containing a double-quote, even when present on the page",
+        "new_result": "json.dumps for the JS fallback + a new XPath 1.0 string-literal encoder (concat() for mixed-quote values) fixes both paths",
+        "measured_improvement": "qualitative -- common real-world text (quoted button labels, review text, code snippets) now works",
+        "confidence": "high -- refuter independently reproduced with a real browser + control case, corrected the hunters mechanism theory but confirmed the conclusion; new tests fail pre-fix, pass post-fix",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from finder/refuter/implementer"
+      },
+      "reason": "Pipeline round 1 (task-centric, checkpoint-gated). Evaluator passed hunt and refute on first attempt, no reassignment needed."
+    },
+    {
+      "key": "browser_use/browser/watchdogs/crash_watchdog.py:_check_browser_health:loop-var-clobbers-focus-session-and-hijacks-focus",
+      "status": "landed",
+      "round": "3",
+      "finder_model": "claude-sonnet-5",
+      "refuter_model": "claude-opus-5",
+      "implementer_model": "claude-opus-5",
+      "commit": "9f66c05",
+      "impact": 2,
+      "evidence": {
+        "baseline": "a stray chrome://new-tab-page/ tab caused the health ping to run against the wrong tab and silently hijacked agent_focus_target_id onto it",
+        "new_result": "separate loop variable + focus=False; ping always runs against the real focus session",
+        "measured_improvement": "qualitative -- but CrashWatchdog is currently dead code (never instantiated, per a repo-wide grep the refuter ran), so real-world blast radius today is zero; logic bug is real for whoever re-enables it",
+        "confidence": "high -- refuter reproduced against real Chromium with a genuinely wedged renderer + control case; also corrected the hunters claim (it is an actual focus hijack via focus=True default, not just mis-logging)",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from finder/refuter/implementer"
+      },
+      "reason": "Impact scored 2, not higher, specifically because the module is dead code today -- scored on the logic bug alone would be higher once re-enabled."
+    },
+    {
+      "key": "browser_use/llm/openai/chat.py:plain-text-branch:truncated-to-empty-silently-swallowed",
+      "status": "landed",
+      "round": "3",
+      "finder_model": "claude-sonnet-5",
+      "refuter_model": "claude-opus-5",
+      "implementer_model": "claude-opus-5",
+      "commit": "9f66c05",
+      "impact": 3,
+      "evidence": {
+        "baseline": "a reasoning model burning its whole budget on hidden reasoning returned completion=\"\" with stop_reason=\"length\" as a normal success, while the sibling structured-output path already raised for the same condition",
+        "new_result": "raises ModelOutputTruncatedError on empty+length; a partial answer at the cap still returns normally (guard-rail test)",
+        "measured_improvement": "qualitative -- affects any reasoning-model call through the plain-text path; the one in-repo caller (extract_structured_data) previously logged a silently-empty extraction as a normal memory entry",
+        "confidence": "high -- refuter reproduced with a canned truncated response, also found the identical gap in the Anthropic and Google providers (flagged, out of scope) and downgraded severity to low-end-of-medium since the failure is visible at the API surface, just not acted on by the one caller",
+        "reproducible": true,
+        "independent_verification": "orchestrator (this session), separate context from finder/refuter/implementer"
+      },
+      "reason": "Anthropic and Google providers have the identical gap -- logged as a follow-up target, not yet fixed."
+    }
+  ]
+}

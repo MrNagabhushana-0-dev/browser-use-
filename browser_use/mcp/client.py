@@ -89,6 +89,12 @@ class MCPClient:
 		try:
 			logger.info(f"🔌 Connecting to MCP server '{self.server_name}': {self.command} {' '.join(self.args)}")
 
+			# Get a fresh disconnect event for this connection. A previous disconnect() call
+			# leaves the old event set; reusing it here would make _run_stdio_client's
+			# `await self._disconnect_event.wait()` return immediately, tearing the new
+			# connection down right after it comes up (see test_mcp_client_reconnect.py).
+			self._disconnect_event = asyncio.Event()
+
 			# Create server parameters
 			server_params = StdioServerParameters(command=self.command, args=self.args, env=self.env)
 

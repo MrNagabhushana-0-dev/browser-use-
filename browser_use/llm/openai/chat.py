@@ -214,6 +214,24 @@ class ChatOpenAI(BaseChatModel):
 						model=self.name,
 					)
 
+				# a partial answer is still useful here (unlike structured output, which must parse),
+				# so only the empty case is fatal: reasoning models can burn the whole budget on
+				# hidden reasoning, leaving finish_reason='length' with content=None
+				if choice.finish_reason == 'length' and not choice.message.content:
+					cap = (
+						f'max_completion_tokens={self.max_completion_tokens}'
+						if self.max_completion_tokens is not None
+						else "the model's output token limit"
+					)
+					raise ModelOutputTruncatedError(
+						message=(
+							f'Model output was truncated at {cap} before any text was returned;'
+							' the completion is empty. Increase max_completion_tokens or request'
+							' shorter output.'
+						),
+						model=self.name,
+					)
+
 				usage = self._get_usage(response)
 				return ChatInvokeCompletion(
 					completion=choice.message.content or '',

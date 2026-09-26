@@ -27,6 +27,7 @@ dist/
 *.csv
 *.json
 !/server.json
+!docs/agent-notes/*.json
 *.jsonl
 *.log
 *.bak
@@ -45,7 +46,6 @@ private_example.py
 private_example
 CLAUDE.local.md
 
-uv.lock
 temp
 tmp
 

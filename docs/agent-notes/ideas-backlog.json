@@ -1,0 +1,69 @@
+{
+  "_comment": "Innovation proposals \u2014 a concept a worker found worth cooking, not a bug fix. Nothing here is implemented from the proposal alone; it has to move through the status lifecycle. Never discard an entry for being 'not immediately useful' -- park it with a reason instead of deleting it.",
+  "schema_version": 1,
+  "status_lifecycle": [
+    "proposed",
+    "prototyped",
+    "benchmarked",
+    "accepted",
+    "rejected",
+    "parked"
+  ],
+  "entry_schema": {
+    "hypothesis": "the falsifiable claim, e.g. 'X currently fails at Y; with Z it succeeds' -- not 'would be cool'",
+    "originating_agent": "model + task_key of the worker that proposed it",
+    "supporting_evidence": "what grounds this in an actual observed failure mode -- a scenario-suite result, a ledger entry, a named pattern from comparable tools",
+    "estimated_upside": "concrete and bounded, not a multiplier -- what measurably improves and by roughly how much, with the honesty that this is a pre-benchmark estimate",
+    "implementation_cost": "rough size/risk of the change",
+    "dependencies": "what this needs to exist first",
+    "experiment_required": "the specific benchmark or adversarial test that would confirm or kill it",
+    "status": "see status_lifecycle",
+    "status_reason": "required whenever status is rejected or parked -- why, so it can be revisited if the reason stops applying"
+  },
+  "entries": [
+    {
+      "hypothesis": "A priority-ordered, character-budget-aware pruning pass over the DOM/AX snapshot (focused/invalid fields+alerts first, then actionable controls, then repeated records breadth-first, then named sections, then low-value text, with a recoverable omission marker) reduces per-step tokens without losing actionable elements, on pages currently producing oversized snapshots.",
+      "originating_agent": "orchestrator, from reading agentrhq/webcmd (competitive analysis, docs/agent-notes/competitive-analysis.md)",
+      "supporting_evidence": "webcmd cites this as one of three changes behind its BU Bench V1 token/accuracy numbers versus browser-use -- self-reported, not yet independently reproduced, but the technique itself is inspectable in their public writeup",
+      "estimated_upside": "unmeasured -- webcmd claims ~10% fewer tokens than browser-use in their run; ours would need its own measurement, not theirs",
+      "implementation_cost": "medium -- touches the DOM serialization path some existing tests already cover; needs its own scenario coverage before landing",
+      "dependencies": "the local failure-scenario suite (planned, not yet built) to have a real before/after to measure against",
+      "experiment_required": "reproduce BU Bench V1 (or a subset) against current browser-use to get OUR baseline numbers first, before building anything -- a prototype without that baseline cant be judged",
+      "status": "proposed",
+      "status_reason": null
+    },
+    {
+      "hypothesis": "Returning a structural diff of page state after a browser-run program (instead of a fresh full snapshot), with an explicit opt-out for research-style tasks, reduces tokens on form-filling/multi-step workflows without losing the agent visibility into what changed.",
+      "originating_agent": "orchestrator, from reading agentrhq/webcmd",
+      "supporting_evidence": "same source as above; webcmd explicitly reran both task categories to check the opt-out did not regress research-task accuracy before shipping it",
+      "estimated_upside": "unmeasured",
+      "implementation_cost": "medium-high -- needs a real diffing strategy against this repo own snapshot format, plus the same before/after discipline webcmd applied (rerun both task types, not just the one being optimized)",
+      "dependencies": "the failure-scenario suite; also depends on idea 1 if snapshot pruning changes the format being diffed",
+      "experiment_required": "a scenario/benchmark showing token reduction on multi-step form tasks with zero regression on research-style tasks",
+      "status": "proposed",
+      "status_reason": null
+    },
+    {
+      "hypothesis": "Encouraging more aggressive batched code-based execution (multiple browser steps in one agent turn) measurably lowers agent-turns-per-task, the same lever webcmd attributes part of its turn-count advantage to.",
+      "originating_agent": "orchestrator, from reading agentrhq/webcmd",
+      "supporting_evidence": "webcmd states this as one of three factors behind its 9.8-vs-14.8 turns/task number; this repo already has a code-execution-over-page action per its own project history, so the question is usage rate, not whether the capability exists",
+      "estimated_upside": "unmeasured -- needs a baseline read of how often the existing action is actually invoked vs single-step actions across a real task sample",
+      "implementation_cost": "low to start (measurement only), unknown for any follow-on change",
+      "dependencies": "none to start measuring; the failure-scenario suite for a controlled comparison",
+      "experiment_required": "first just measure: what fraction of current real task runs use the batched action vs single steps, before proposing any change to encourage it more",
+      "status": "parked",
+      "status_reason": "Not measurable with anything currently in this repo: no production telemetry (browser_use/telemetry/ is an explicit stub, PostHog client removed), no counter distinguishing evaluate()/batched calls from single-step actions in tools/service.py, and no benchmark harness recording action-type frequency. Requires new instrumentation + a real task corpus before this can even be measured, let alone acted on. Revisit if/when either exists."
+    },
+    {
+      "hypothesis": "Extending browser_use/synthesis (currently a per-origin tool manifest) to also record observed pitfalls and fallback paths, not just available actions, would close a gap against webcmds broader sitemap concept.",
+      "originating_agent": "orchestrator, from reading agentrhq/webcmd",
+      "supporting_evidence": "webcmd README describes its sitemap layer as covering pages, states, actions, workflows, APIs, pitfalls, and fallback paths -- broader than a tool manifest; not yet compared against SiteToolSynthesizer/ManifestStore in detail",
+      "estimated_upside": "unmeasured -- this one needs a real side-by-side reading of both systems before its even clear how big the gap is",
+      "implementation_cost": "unknown -- parked pending the comparison, not sized yet",
+      "dependencies": "a focused read of both browser_use/synthesis/{service,store,views}.py and webcmds src/site-memory/ (concepts only, still no code copying)",
+      "experiment_required": "the comparison itself, before any implementation cost estimate is trustworthy",
+      "status": "parked",
+      "status_reason": "least concrete of the four -- needs a dedicated comparison pass before its even scoped, not ready for a prototype yet"
+    }
+  ]
+}

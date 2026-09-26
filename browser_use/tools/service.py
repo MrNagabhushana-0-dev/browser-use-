@@ -2055,8 +2055,24 @@ Validated Code (after quote fixing):
 
 		import re
 
-		# Pattern 1: Fix double-escaped quotes (\\\" → \")
-		fixed_code = re.sub(r'\\"', '"', code)
+		# Pattern 1: Fix a script that arrived entirely over-escaped (e.g. an upstream
+		# JSON-encoding step escaped every quote one level too many), which leaves NO
+		# unescaped delimiter quote anywhere in the code and is therefore unparseable
+		# as-is.
+		#
+		# We only strip the backslashes when the code has no unescaped quote at all —
+		# that absence is the unambiguous signature of "the whole snippet got
+		# over-escaped". Valid JS always opens every string with a bare, un-escaped
+		# delimiter quote (a leading `\"` isn't valid JS syntax on its own — it can only
+		# occur once the whole snippet is already over-escaped), so this never misfires
+		# on valid code, including code that legitimately escapes a quote *inside* a
+		# string (e.g. `"She said \"hi\""`): its own opening delimiter is still bare.
+		# Blindly stripping every `\"` (the previous behavior) corrupted exactly that
+		# common, valid case into a syntax error.
+		if '"' in code and not re.search(r'(?<!\\)"', code):
+			fixed_code = re.sub(r'\\"', '"', code)
+		else:
+			fixed_code = code
 
 		# Pattern 2: Fix over-escaped regex patterns (\\\\d → \\d)
 		# Common issue: regex gets double-escaped during parsing

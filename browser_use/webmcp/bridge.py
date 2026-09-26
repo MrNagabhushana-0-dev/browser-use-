@@ -156,10 +156,19 @@ WEBMCP_BRIDGE_JS = r"""
 		return JSON.parse(text);
 	};
 
-	const rpc = async (endpoint, method, params) => {
+	// `outerSignal`, when given, bounds this call by a deadline the caller already owns
+	// (loadManifests' own manifestMs abort) instead of the full rpcMs — otherwise a
+	// tools/list issued while still inside the manifest deadline could run for another
+	// 30s after that deadline had already passed.
+	const rpc = async (endpoint, method, params, outerSignal) => {
 		if (!sameOrigin(endpoint)) throw new Error('WebMCP: refusing cross-origin endpoint ' + endpoint);
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), LIMITS.rpcMs);
+		const onOuterAbort = () => controller.abort();
+		if (outerSignal) {
+			if (outerSignal.aborted) controller.abort();
+			else outerSignal.addEventListener('abort', onOuterAbort);
+		}
 		try {
 			const res = await fetch(endpoint, {
 				method: 'POST',
@@ -177,62 +186,78 @@ WEBMCP_BRIDGE_JS = r"""
 			return payload ? payload.result : null;
 		} finally {
 			clearTimeout(timer);
+			if (outerSignal) outerSignal.removeEventListener('abort', onOuterAbort);
 		}
 	};
 
+	// One AbortController per pass, aborted once at manifestMs. Without this, a manifest
+	// fetch (or the tools/list it triggers) that never resolves left the deadline check
+	// below meaningless — it only ran *between* refs, never inside the awaited fetch, so
+	// a single hanging server stalled the whole pass, and with it the shared
+	// inFlightDiscovery promise every call() on an unknown name waits on.
 	const loadManifests = async (errors) => {
 		const found = [];
-		const deadline = Date.now() + LIMITS.manifestMs;
 		const refs = manifestRefs();
 		if (refs.length > LIMITS.manifests) {
 			errors.push('ignored ' + (refs.length - LIMITS.manifests) + ' manifest ref(s) over the limit');
 		}
-		for (const ref of refs.slice(0, LIMITS.manifests)) {
-			if (Date.now() > deadline) { errors.push('manifest loading timed out'); break; }
-			try {
-				let doc;
-				if (ref.kind === 'inline') {
-					doc = JSON.parse(ref.value);
-				} else if (!sameOrigin(ref.value)) {
-					errors.push('ignored cross-origin manifest ' + ref.value);
-					continue;
-				} else if (manifestCache.has(ref.value)) {
-					doc = manifestCache.get(ref.value);
-				} else {
-					const res = await fetch(ref.value, { credentials: 'same-origin', headers: { accept: 'application/json' } });
-					if (!res.ok) { errors.push('manifest ' + ref.value + ' returned HTTP ' + res.status); continue; }
-					doc = await res.json();
-					manifestCache.set(ref.value, doc);
-				}
-				if (!doc || typeof doc !== 'object') { errors.push('manifest is not a JSON object'); continue; }
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), LIMITS.manifestMs);
+		try {
+			for (const ref of refs.slice(0, LIMITS.manifests)) {
+				if (controller.signal.aborted) { errors.push('manifest loading timed out'); break; }
+				try {
+					let doc;
+					if (ref.kind === 'inline') {
+						doc = JSON.parse(ref.value);
+					} else if (!sameOrigin(ref.value)) {
+						errors.push('ignored cross-origin manifest ' + ref.value);
+						continue;
+					} else if (manifestCache.has(ref.value)) {
+						doc = manifestCache.get(ref.value);
+					} else {
+						const res = await fetch(ref.value, {
+							credentials: 'same-origin',
+							headers: { accept: 'application/json' },
+							signal: controller.signal,
+						});
+						if (!res.ok) { errors.push('manifest ' + ref.value + ' returned HTTP ' + res.status); continue; }
+						doc = await res.json();
+						manifestCache.set(ref.value, doc);
+					}
+					if (!doc || typeof doc !== 'object') { errors.push('manifest is not a JSON object'); continue; }
 
-				const base = ref.kind === 'href' ? ref.value : location.href;
-				const rawEndpoint = typeof doc.endpoint === 'string' ? doc.endpoint : '';
-				const endpoint = rawEndpoint ? new URL(rawEndpoint, base).href : '';
-				if (endpoint && !sameOrigin(endpoint)) {
-					errors.push('ignored cross-origin endpoint ' + endpoint);
-					continue;
-				}
+					const base = ref.kind === 'href' ? ref.value : location.href;
+					const rawEndpoint = typeof doc.endpoint === 'string' ? doc.endpoint : '';
+					const endpoint = rawEndpoint ? new URL(rawEndpoint, base).href : '';
+					if (endpoint && !sameOrigin(endpoint)) {
+						errors.push('ignored cross-origin endpoint ' + endpoint);
+						continue;
+					}
 
-				// A manifest may inline its tool list, or name an endpoint we ask for one.
-				let declared = Array.isArray(doc.tools) ? doc.tools : null;
-				if (!declared && endpoint) {
-					const listed = await rpc(endpoint, 'tools/list', {});
-					declared = listed && Array.isArray(listed.tools) ? listed.tools : [];
+					// A manifest may inline its tool list, or name an endpoint we ask for one.
+					let declared = Array.isArray(doc.tools) ? doc.tools : null;
+					if (!declared && endpoint) {
+						const listed = await rpc(endpoint, 'tools/list', {}, controller.signal);
+						declared = listed && Array.isArray(listed.tools) ? listed.tools : [];
+					}
+					for (const tool of declared || []) {
+						if (!tool || typeof tool.name !== 'string' || !tool.name) continue;
+						if (!endpoint) { errors.push('tool "' + tool.name + '" has no endpoint to call'); continue; }
+						found.push({
+							name: tool.name.trim(),
+							description: clip(typeof tool.description === 'string' ? tool.description : '', LIMITS.text),
+							inputSchema: normalizeSchema(tool.inputSchema || tool.input_schema || tool.parameters),
+							endpoint: endpoint,
+						});
+					}
+				} catch (err) {
+					if (controller.signal.aborted) { errors.push('manifest loading timed out'); break; }
+					errors.push(clip('manifest error: ' + ((err && err.message) || String(err)), 256));
 				}
-				for (const tool of declared || []) {
-					if (!tool || typeof tool.name !== 'string' || !tool.name) continue;
-					if (!endpoint) { errors.push('tool "' + tool.name + '" has no endpoint to call'); continue; }
-					found.push({
-						name: tool.name.trim(),
-						description: clip(typeof tool.description === 'string' ? tool.description : '', LIMITS.text),
-						inputSchema: normalizeSchema(tool.inputSchema || tool.input_schema || tool.parameters),
-						endpoint: endpoint,
-					});
-				}
-			} catch (err) {
-				errors.push(clip('manifest error: ' + ((err && err.message) || String(err)), 256));
 			}
+		} finally {
+			clearTimeout(timer);
 		}
 		return found;
 	};
@@ -372,7 +397,6 @@ WEBMCP_BRIDGE_JS = r"""
 	// avoid handing out. navigator.modelContext is the spec's surface and the only one a
 	// WebMCP-aware site looks for; window.modelContext stays for pages that check both.
 	install(window, 'modelContext', modelContext);
-	install(window, 'agent', { provideContext: provideContext, registerTool: registerTool });
 
 	// Lets an already-loaded page (where we injected late) register after the fact.
 	try { window.dispatchEvent(new Event('modelcontextready')); } catch (err) { /* no DOM yet */ }

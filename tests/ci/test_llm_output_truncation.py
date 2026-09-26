@@ -139,3 +139,70 @@ async def test_truncation_detected_when_content_is_null(httpserver):
 		await llm.ainvoke([UserMessage(content='think hard')], output_format=AnswerFormat)
 
 	assert 'truncated' in str(exc_info.value), f'expected truncation signal, got: {exc_info.value}'
+
+
+async def test_plain_text_truncation_to_empty_is_not_silently_swallowed(httpserver):
+	"""Same failure mode as the test above, but with output_format=None.
+
+	A reasoning model can spend the entire max_completion_tokens budget on hidden
+	reasoning, returning finish_reason='length' with content=null. The structured
+	branch raises ModelOutputTruncatedError for exactly this; the plain-text branch
+	turns it into `completion=''` via `choice.message.content or ''` and reports
+	success. Callers such as the no-schema branch of the extract_structured_data
+	action (browser_use/tools/service.py) then record an empty extraction as a
+	normal result instead of surfacing a token-budget failure.
+	"""
+	httpserver.expect_request('/v1/chat/completions', method='POST').respond_with_json(
+		{
+			'id': 'chatcmpl-test',
+			'object': 'chat.completion',
+			'created': 0,
+			'model': 'o3',
+			'choices': [
+				{
+					'index': 0,
+					'message': {'role': 'assistant', 'content': None},
+					'finish_reason': 'length',
+				}
+			],
+			'usage': {'prompt_tokens': 10, 'completion_tokens': 4096, 'total_tokens': 4106},
+		}
+	)
+
+	llm = ChatOpenAI(model='o3', api_key='test-key', base_url=httpserver.url_for('/v1'))
+
+	with pytest.raises(ModelProviderError) as exc_info:
+		result = await llm.ainvoke([UserMessage(content='extract everything relevant')])
+		pytest.fail(
+			'expected a truncation error, got a "successful" completion: '
+			f'completion={result.completion!r} stop_reason={result.stop_reason!r}'
+		)
+
+	assert 'truncated' in str(exc_info.value), f'expected truncation signal, got: {exc_info.value}'
+
+
+async def test_plain_text_partial_output_is_still_returned(httpserver):
+	"""Guard against over-correcting: a *partial* plain-text answer at the cap is still
+	useful and must keep being returned (unlike structured output, which must parse)."""
+	httpserver.expect_request('/v1/chat/completions', method='POST').respond_with_json(
+		{
+			'id': 'chatcmpl-test',
+			'object': 'chat.completion',
+			'created': 0,
+			'model': 'gpt-4o',
+			'choices': [
+				{
+					'index': 0,
+					'message': {'role': 'assistant', 'content': 'the page lists three products: alpha, beta, ga'},
+					'finish_reason': 'length',
+				}
+			],
+			'usage': {'prompt_tokens': 10, 'completion_tokens': 4096, 'total_tokens': 4106},
+		}
+	)
+
+	llm = ChatOpenAI(model='gpt-4o', api_key='test-key', base_url=httpserver.url_for('/v1'))
+
+	result = await llm.ainvoke([UserMessage(content='list the products')])
+	assert result.completion.startswith('the page lists three products')
+	assert result.stop_reason == 'length'
