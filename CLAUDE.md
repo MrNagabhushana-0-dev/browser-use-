@@ -147,6 +147,20 @@ The library supports both modes:
 
 Connection management lives in `browser_use/mcp/client.py`.
 
+## Prior Multi-Agent Hardening Work
+
+`docs/agent-notes/` holds a working log from a multi-round, multi-agent
+hardening effort against this codebase: a machine-readable `ledger.json` of
+every proposed defect (landed, rejected, or in-progress, with evidence and
+impact scores), `performance-registry.json` (per-agent-call metrics),
+`ideas-backlog.json` (innovation proposals not yet built), a competitive
+analysis of a direct competitor, and the actual `Workflow` tool scripts used
+under `workflows/`. Read `docs/agent-notes/README.md` first if continuing
+that effort or orchestrating a similar one — it states plainly which parts
+of the described architecture are real given this tool's constraints (no
+live mid-task model swap, no reachable non-Claude agent frameworks from this
+environment) versus documented intent, so as not to repeat settled ground.
+
 ## Important Development Constraints
 
 - **Always use `uv` instead of `pip`** for dependency management
