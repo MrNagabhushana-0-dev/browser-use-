@@ -38,6 +38,36 @@ ScrollEvent.model_rebuild()
 UploadFileEvent.model_rebuild()
 
 
+def _xpath_string_literal(value: str) -> str:
+	"""Encode an arbitrary string as an XPath 1.0 string literal.
+
+	XPath 1.0 has no escape syntax inside string literals, so a value containing both quote
+	characters has to be assembled with concat(). Without this, text like `Click "Continue"`
+	closes the literal early and silently produces a query that matches nothing.
+	"""
+	assert isinstance(value, str), f'expected str, got {type(value)}'
+
+	if '"' not in value:
+		return f'"{value}"'
+	if "'" not in value:
+		return f"'{value}'"
+
+	# Both quote characters present: split on `"` and splice the double quotes back in as single-quoted literals
+	pieces: list[str] = []
+	parts = value.split('"')
+	for i, part in enumerate(parts):
+		if part:
+			pieces.append(f'"{part}"')
+		if i < len(parts) - 1:
+			pieces.append("'\"'")
+	while len(pieces) < 2:  # concat() requires at least two arguments
+		pieces.append('""')
+
+	result = f'concat({", ".join(pieces)})'
+	assert result.startswith('concat(') and result.endswith(')')
+	return result
+
+
 class DefaultActionWatchdog(BaseWatchdog):
 	"""Handles default browser actions like click, type, and scroll using CDP."""
 
@@ -2738,11 +2768,12 @@ class DefaultActionWatchdog(BaseWatchdog):
 		doc = await cdp_client.send.DOM.getDocument(params={'depth': -1}, session_id=session_id)
 		root_node_id = doc['root']['nodeId']
 
-		# Search for text using XPath
+		# Search for text using XPath (the target text is agent-supplied, so it must be encoded, not interpolated)
+		text_literal = _xpath_string_literal(event.text)
 		search_queries = [
-			f'//*[contains(text(), "{event.text}")]',
-			f'//*[contains(., "{event.text}")]',
-			f'//*[@*[contains(., "{event.text}")]]',
+			f'//*[contains(text(), {text_literal})]',
+			f'//*[contains(., {text_literal})]',
+			f'//*[@*[contains(., {text_literal})]]',
 		]
 
 		found = False
@@ -2780,7 +2811,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 			# Fallback: Try JavaScript search
 			js_result = await cdp_client.send.Runtime.evaluate(
 				params={
-					'expression': f'''
+					'expression': f"""
 							(() => {{
 								const walker = document.createTreeWalker(
 									document.body,
@@ -2790,14 +2821,14 @@ class DefaultActionWatchdog(BaseWatchdog):
 								);
 								let node;
 								while (node = walker.nextNode()) {{
-									if (node.textContent.includes("{event.text}")) {{
+									if (node.textContent.includes({json.dumps(event.text)})) {{
 										node.parentElement.scrollIntoView({{behavior: 'smooth', block: 'center'}});
 										return true;
 									}}
 								}}
 								return false;
 							}})()
-						'''
+						"""
 				},
 				session_id=session_id,
 			)

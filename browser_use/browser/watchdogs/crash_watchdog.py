@@ -288,10 +288,21 @@ class CrashWatchdog(BaseWatchdog):
 			for target in self.browser_session.session_manager.get_all_page_targets():
 				if self._is_new_tab_page(target.url) and target.url != 'about:blank':
 					self.logger.debug(f'[CrashWatchdog] Redirecting chrome://new-tab-page/ to about:blank {target.url}')
-					cdp_session = await self.browser_session.get_or_create_cdp_session(target_id=target.target_id)
-					await cdp_session.cdp_client.send.Page.navigate(
-						params={'url': 'about:blank'}, session_id=cdp_session.session_id
-					)
+					try:
+						# Separate variable + focus=False: this cleanup must not clobber the focus session used for
+						# the health ping below, nor drag the agent's focus onto an unrelated background tab.
+						redirect_session = await self.browser_session.get_or_create_cdp_session(
+							target_id=target.target_id, focus=False
+						)
+						await redirect_session.cdp_client.send.Page.navigate(
+							params={'url': 'about:blank'}, session_id=redirect_session.session_id
+						)
+					except Exception as e:
+						# A stray tab failing to redirect says nothing about the focus target's health.
+						self.logger.warning(
+							f'[CrashWatchdog] Failed to redirect new tab page {target.target_id} to about:blank: '
+							f'{type(e).__name__}: {e}'
+						)
 
 			# Quick ping to check if session is alive
 			self.logger.debug(f'[CrashWatchdog] Attempting to run simple JS test expression in session {cdp_session} 1+1')
