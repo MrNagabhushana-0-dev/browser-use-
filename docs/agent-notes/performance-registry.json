@@ -1,6 +1,7 @@
 {
   "_comment": "Structured per-agent-call metrics. model-performance.md is a human-readable summary DERIVED from this file, not written from memory. Populated with real figures where available; entries missing exact token/duration data are marked explicitly rather than estimated.",
-  "schema_version": 1,
+  "schema_version": 2,
+  "_schema_note": "v2 adds economics fields for future entries (agent economics, not just per-call cost): first_pass_success (bool -- did it land without a retry-with-correction), recovery_success (bool|null -- if it needed a retry, did the retry land), tool_failures (int), critic_rejection (bool -- did the refute stage kill this claim before implementation was ever attempted), accepted_innovation (bool -- ideas-backlog entries only), regression_detected (bool -- did anything in the existing suite start failing because of this). cost_per_verified_improvement is NOT a per-entry field -- it's computed across entries once there's enough volume to mean anything, and reported in model-performance.md, not fabricated per task. v1 entries are left as originally recorded rather than backfilled with fields nobody measured at the time.",
   "entries": [
     {
       "task_key": "browser_use/agent/service.py:_log_next_action_summary:builds-then-discards-summary",

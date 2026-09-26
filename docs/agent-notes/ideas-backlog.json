@@ -1,0 +1,17 @@
+{
+  "_comment": "Innovation proposals — a concept a worker found worth cooking, not a bug fix. Nothing here is implemented from the proposal alone; it has to move through the status lifecycle. Never discard an entry for being 'not immediately useful' -- park it with a reason instead of deleting it.",
+  "schema_version": 1,
+  "status_lifecycle": ["proposed", "prototyped", "benchmarked", "accepted", "rejected", "parked"],
+  "entry_schema": {
+    "hypothesis": "the falsifiable claim, e.g. 'X currently fails at Y; with Z it succeeds' -- not 'would be cool'",
+    "originating_agent": "model + task_key of the worker that proposed it",
+    "supporting_evidence": "what grounds this in an actual observed failure mode -- a scenario-suite result, a ledger entry, a named pattern from comparable tools",
+    "estimated_upside": "concrete and bounded, not a multiplier -- what measurably improves and by roughly how much, with the honesty that this is a pre-benchmark estimate",
+    "implementation_cost": "rough size/risk of the change",
+    "dependencies": "what this needs to exist first",
+    "experiment_required": "the specific benchmark or adversarial test that would confirm or kill it",
+    "status": "see status_lifecycle",
+    "status_reason": "required whenever status is rejected or parked -- why, so it can be revisited if the reason stops applying"
+  },
+  "entries": []
+}

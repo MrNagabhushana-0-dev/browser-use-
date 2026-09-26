@@ -1,13 +1,17 @@
 # Ideas backlog
 
-Concepts a worker proposes beyond fixing a specific bug — new capabilities,
-architectural directions. Nothing here is implemented from this list alone:
-an idea gets promoted to a real work item (read, scoped, tested, reviewed)
-before any code is written. This file is where "let them cook" output lands
-so it isn't lost, not a queue of pre-approved work.
+Canonical data lives in `ideas-backlog.json` — this file is just the pointer
+and the rule: **never discard an entry for being "not immediately useful."**
+Park it with a `status_reason` instead of deleting it. A parked idea can be
+revisited once its blocking reason no longer applies (a dependency lands, a
+scenario in the failure suite starts exercising it, a cheaper approach
+appears).
 
-Empty so far — the first two rounds were scoped to bug-hunting in specific
-modules. Starting with round 3, workers get an explicit second channel: one
-genuine defect (as before) *and* one concept for something browser-use
-doesn't do yet that would matter for a real agent-browsing session. Ideas
-land here for review, not in the source tree.
+Nothing is implemented from a proposal alone. It moves:
+`proposed → prototyped → benchmarked → accepted | rejected | parked`,
+and `accepted` still requires owner approval before it merges into default
+behavior — cooking on a branch is cheap; landing it is a decision.
+
+Empty as of this write-up — round 3 is the first round giving workers an
+explicit second channel (fix a real defect *and* propose one concept), so
+entries start appearing once that runs.
