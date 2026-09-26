@@ -14,6 +14,27 @@ agent() call to completion — there is no live mid-task swap. Checkpoint-based
 reassignment between stages is the actual mechanism; see
 `README.md` section C.
 
+**Round 3, the first real cross-model data point.** The task-centric,
+checkpoint-gated pipeline (hunt -> evaluator -> refute -> evaluator ->
+implement) ran with real model diversity for the first time: Sonnet 5
+hunts, Opus 5 refutes and implements, Sonnet 5 evaluates at both
+checkpoints. All 3 targets passed every evaluator gate on the first
+attempt (verdict=pass, 0 weak retries, 0 poor reassignments) — meaning
+this round doesn't yet have failure-path data to compare models on, only
+a clean run. What it does show: the refute stage (a different model,
+independently reproducing) caught something real in every single case —
+corrected the hunter's predicted mechanism on the ScrollToTextEvent bug
+(Chrome degrades malformed XPath rather than raising), caught that the
+crash_watchdog bug is worse than described (an actual focus hijack via
+`focus=True`, not just mis-logging) and that the module is currently dead
+code (downgrading its impact score), and found the identical truncation
+gap in the Anthropic and Google providers while correctly keeping the
+llm/openai/chat.py fix scoped to its claim. Self-critique-in-one-call
+never produced findings of this caliber in rounds 1-2; a separate model
+with the explicit job of trying to kill the claim did, three times in a
+row. This is the strongest evidence yet for the restructure, not just an
+argument for it.
+
 **Hermes / OpenClaw, checked 2026-09-26**: no API keys or equivalent
 credentials for either exist in this environment (`env | grep`, checked
 directly), no installed binary or config references either name anywhere

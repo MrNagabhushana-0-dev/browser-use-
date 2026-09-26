@@ -51,8 +51,8 @@
       "implementation_cost": "low to start (measurement only), unknown for any follow-on change",
       "dependencies": "none to start measuring; the failure-scenario suite for a controlled comparison",
       "experiment_required": "first just measure: what fraction of current real task runs use the batched action vs single steps, before proposing any change to encourage it more",
-      "status": "proposed",
-      "status_reason": null
+      "status": "parked",
+      "status_reason": "Not measurable with anything currently in this repo: no production telemetry (browser_use/telemetry/ is an explicit stub, PostHog client removed), no counter distinguishing evaluate()/batched calls from single-step actions in tools/service.py, and no benchmark harness recording action-type frequency. Requires new instrumentation + a real task corpus before this can even be measured, let alone acted on. Revisit if/when either exists."
     },
     {
       "hypothesis": "Extending browser_use/synthesis (currently a per-origin tool manifest) to also record observed pitfalls and fallback paths, not just available actions, would close a gap against webcmds broader sitemap concept.",
