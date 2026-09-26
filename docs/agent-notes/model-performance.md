@@ -1,10 +1,26 @@
 # Model performance notes
 
+This is a human-readable summary **derived from `performance-registry.json`**
+— that file is the structured source of truth (per-call tokens, duration,
+verified outcome, failure mode); this file is prose written from it, not the
+other way around.
+
 Purpose: when a worker underperforms (finds nothing real, weak self-critique,
 verification claims that don't reproduce), swap that assignment to a
-different model tier next round instead of repeating the same pairing.
-Real constraint: the Workflow tool runs each agent() call to completion —
-there's no live mid-task swap, only a between-rounds decision.
+different model tier — at the next pipeline stage checkpoint (hunt → refute
+→ implement → verify), not mid-call. Real constraint, confirmed by an
+external advisor consultation on 2026-09-26: the Workflow tool runs each
+agent() call to completion — there is no live mid-task swap. Checkpoint-based
+reassignment between stages is the actual mechanism; see
+`README.md` section C.
+
+**Hermes / OpenClaw, checked 2026-09-26**: no API keys or equivalent
+credentials for either exist in this environment (`env | grep`, checked
+directly), no installed binary or config references either name anywhere
+reachable from this session, and outbound network is allowlisted to a fixed
+set of domains (npm, pypi, github, the Anthropic API, cargo, go proxy, jsr)
+that doesn't include either. This was investigated, not assumed — see
+`README.md` section G.
 
 Available tiers: Opus 5.5 (`claude-opus-5-5`), Opus 5 (`claude-opus-5`),
 Sonnet 5 (`claude-sonnet-5`), Haiku 4.5 (`claude-haiku-4-5-20251001`), Fable
