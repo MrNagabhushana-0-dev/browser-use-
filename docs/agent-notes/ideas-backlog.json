@@ -1,111 +1,150 @@
 {
-  "_comment": "Innovation proposals \u2014 a concept a worker found worth cooking, not a bug fix. Nothing here is implemented from the proposal alone; it has to move through the status lifecycle. Never discard an entry for being 'not immediately useful' -- park it with a reason instead of deleting it.",
-  "schema_version": 1,
-  "status_lifecycle": [
-    "proposed",
-    "prototyped",
-    "benchmarked",
-    "accepted",
-    "rejected",
-    "parked"
-  ],
-  "entry_schema": {
-    "hypothesis": "the falsifiable claim, e.g. 'X currently fails at Y; with Z it succeeds' -- not 'would be cool'",
-    "originating_agent": "model + task_key of the worker that proposed it",
-    "supporting_evidence": "what grounds this in an actual observed failure mode -- a scenario-suite result, a ledger entry, a named pattern from comparable tools",
-    "estimated_upside": "concrete and bounded, not a multiplier -- what measurably improves and by roughly how much, with the honesty that this is a pre-benchmark estimate",
-    "implementation_cost": "rough size/risk of the change",
-    "dependencies": "what this needs to exist first",
-    "experiment_required": "the specific benchmark or adversarial test that would confirm or kill it",
-    "status": "see status_lifecycle",
-    "status_reason": "required whenever status is rejected or parked -- why, so it can be revisited if the reason stops applying"
+ "_comment": "Innovation proposals — a concept a worker found worth cooking, not a bug fix. Nothing here is implemented from the proposal alone; it has to move through the status lifecycle. Never discard an entry for being 'not immediately useful' -- park it with a reason instead of deleting it.",
+ "schema_version": 1,
+ "status_lifecycle": [
+  "proposed",
+  "prototyped",
+  "benchmarked",
+  "accepted",
+  "rejected",
+  "parked"
+ ],
+ "entry_schema": {
+  "hypothesis": "the falsifiable claim, e.g. 'X currently fails at Y; with Z it succeeds' -- not 'would be cool'",
+  "originating_agent": "model + task_key of the worker that proposed it",
+  "supporting_evidence": "what grounds this in an actual observed failure mode -- a scenario-suite result, a ledger entry, a named pattern from comparable tools",
+  "estimated_upside": "concrete and bounded, not a multiplier -- what measurably improves and by roughly how much, with the honesty that this is a pre-benchmark estimate",
+  "implementation_cost": "rough size/risk of the change",
+  "dependencies": "what this needs to exist first",
+  "experiment_required": "the specific benchmark or adversarial test that would confirm or kill it",
+  "status": "see status_lifecycle",
+  "status_reason": "required whenever status is rejected or parked -- why, so it can be revisited if the reason stops applying"
+ },
+ "entries": [
+  {
+   "hypothesis": "A priority-ordered, character-budget-aware pruning pass over the DOM/AX snapshot (focused/invalid fields+alerts first, then actionable controls, then repeated records breadth-first, then named sections, then low-value text, with a recoverable omission marker) reduces per-step tokens without losing actionable elements, on pages currently producing oversized snapshots.",
+   "originating_agent": "orchestrator, from reading agentrhq/webcmd (competitive analysis, docs/agent-notes/competitive-analysis.md)",
+   "supporting_evidence": "webcmd cites this as one of three changes behind its BU Bench V1 token/accuracy numbers versus browser-use -- self-reported, not yet independently reproduced, but the technique itself is inspectable in their public writeup",
+   "estimated_upside": "unmeasured -- webcmd claims ~10% fewer tokens than browser-use in their run; ours would need its own measurement, not theirs",
+   "implementation_cost": "medium -- touches the DOM serialization path some existing tests already cover; needs its own scenario coverage before landing",
+   "dependencies": "the local failure-scenario suite (planned, not yet built) to have a real before/after to measure against",
+   "experiment_required": "reproduce BU Bench V1 (or a subset) against current browser-use to get OUR baseline numbers first, before building anything -- a prototype without that baseline cant be judged",
+   "status": "proposed",
+   "status_reason": null
   },
-  "entries": [
-    {
-      "hypothesis": "A priority-ordered, character-budget-aware pruning pass over the DOM/AX snapshot (focused/invalid fields+alerts first, then actionable controls, then repeated records breadth-first, then named sections, then low-value text, with a recoverable omission marker) reduces per-step tokens without losing actionable elements, on pages currently producing oversized snapshots.",
-      "originating_agent": "orchestrator, from reading agentrhq/webcmd (competitive analysis, docs/agent-notes/competitive-analysis.md)",
-      "supporting_evidence": "webcmd cites this as one of three changes behind its BU Bench V1 token/accuracy numbers versus browser-use -- self-reported, not yet independently reproduced, but the technique itself is inspectable in their public writeup",
-      "estimated_upside": "unmeasured -- webcmd claims ~10% fewer tokens than browser-use in their run; ours would need its own measurement, not theirs",
-      "implementation_cost": "medium -- touches the DOM serialization path some existing tests already cover; needs its own scenario coverage before landing",
-      "dependencies": "the local failure-scenario suite (planned, not yet built) to have a real before/after to measure against",
-      "experiment_required": "reproduce BU Bench V1 (or a subset) against current browser-use to get OUR baseline numbers first, before building anything -- a prototype without that baseline cant be judged",
-      "status": "proposed",
-      "status_reason": null
-    },
-    {
-      "hypothesis": "Returning a structural diff of page state after a browser-run program (instead of a fresh full snapshot), with an explicit opt-out for research-style tasks, reduces tokens on form-filling/multi-step workflows without losing the agent visibility into what changed.",
-      "originating_agent": "orchestrator, from reading agentrhq/webcmd",
-      "supporting_evidence": "same source as above; webcmd explicitly reran both task categories to check the opt-out did not regress research-task accuracy before shipping it",
-      "estimated_upside": "unmeasured",
-      "implementation_cost": "medium-high -- needs a real diffing strategy against this repo own snapshot format, plus the same before/after discipline webcmd applied (rerun both task types, not just the one being optimized)",
-      "dependencies": "the failure-scenario suite; also depends on idea 1 if snapshot pruning changes the format being diffed",
-      "experiment_required": "a scenario/benchmark showing token reduction on multi-step form tasks with zero regression on research-style tasks",
-      "status": "proposed",
-      "status_reason": null
-    },
-    {
-      "hypothesis": "Encouraging more aggressive batched code-based execution (multiple browser steps in one agent turn) measurably lowers agent-turns-per-task, the same lever webcmd attributes part of its turn-count advantage to.",
-      "originating_agent": "orchestrator, from reading agentrhq/webcmd",
-      "supporting_evidence": "webcmd states this as one of three factors behind its 9.8-vs-14.8 turns/task number; this repo already has a code-execution-over-page action per its own project history, so the question is usage rate, not whether the capability exists",
-      "estimated_upside": "unmeasured -- needs a baseline read of how often the existing action is actually invoked vs single-step actions across a real task sample",
-      "implementation_cost": "low to start (measurement only), unknown for any follow-on change",
-      "dependencies": "none to start measuring; the failure-scenario suite for a controlled comparison",
-      "experiment_required": "first just measure: what fraction of current real task runs use the batched action vs single steps, before proposing any change to encourage it more",
-      "status": "parked",
-      "status_reason": "Not measurable with anything currently in this repo: no production telemetry (browser_use/telemetry/ is an explicit stub, PostHog client removed), no counter distinguishing evaluate()/batched calls from single-step actions in tools/service.py, and no benchmark harness recording action-type frequency. Requires new instrumentation + a real task corpus before this can even be measured, let alone acted on. Revisit if/when either exists."
-    },
-    {
-      "hypothesis": "Extending browser_use/synthesis (currently a per-origin tool manifest) to also record observed pitfalls and fallback paths, not just available actions, would close a gap against webcmds broader sitemap concept.",
-      "originating_agent": "orchestrator, from reading agentrhq/webcmd",
-      "supporting_evidence": "webcmd README describes its sitemap layer as covering pages, states, actions, workflows, APIs, pitfalls, and fallback paths -- broader than a tool manifest; not yet compared against SiteToolSynthesizer/ManifestStore in detail",
-      "estimated_upside": "unmeasured -- this one needs a real side-by-side reading of both systems before its even clear how big the gap is",
-      "implementation_cost": "unknown -- parked pending the comparison, not sized yet",
-      "dependencies": "a focused read of both browser_use/synthesis/{service,store,views}.py and webcmds src/site-memory/ (concepts only, still no code copying)",
-      "experiment_required": "the comparison itself, before any implementation cost estimate is trustworthy",
-      "status": "parked",
-      "status_reason": "least concrete of the four -- needs a dedicated comparison pass before its even scoped, not ready for a prototype yet"
-    },
-    {
-      "id": "video-seek-bisect-contact-sheet",
-      "title": "Watch a video from its pixels: in-page signatures, best-first seek-bisection, contact-sheet handoff",
-      "hypothesis": "An agent can recover the visual content of a video (what was shown, when it changed) for ~1/250th of the image tokens of a screenshot-per-second, by (a) seeking the <video> instead of playing it, (b) comparing 8x8 in-page thumbnails so the search moves no pixels, (c) spending samples only on the largest changes up to a keyframe budget, and (d) handing the model one contact sheet with timestamps burned in instead of N images.",
-      "originating_agent": "orchestrator (Claude Sonnet 5.5) in response to the owner's request for a low-token, from-pixels video viewer; adversarial review by claude-opus (see findings-log, Round 4)",
-      "supporting_evidence": "Ground truth: a real WebM with cuts at exactly 2/4/6s and a box moving through every scene - cuts located within one min_gap, motion inside a shot produces zero false cuts (mutation-tested: threshold 0 breaks the motion test, threshold 95 breaks the cut tests). Real video: Big Buck Bunny (9:56, H.264, archive.org) watched in 124 seeks / ~42s wall clock, 8 keyframes, contact sheet 1300x372 (~645 tokens by the published w*h/750 area rule) vs ~183k tokens for a screenshot per second at the same resolution.",
-      "estimated_upside": "Token figures are ESTIMATES from the published area formula, not measured billing; I attempted a measurement through this session's own token counter and it moved ~163 tokens for the image read, far below the 645 the formula predicts, so that counter cannot validate the estimate and I am not claiming either figure is the true cost. The ~250x ratio is sheet-vs-1fps-screenshots and depends entirely on that baseline being the one you would otherwise use.",
-      "implementation_cost": "small - one module (browser_use/vision/video.py ~400 lines) reusing live.py's frame_signature/signature_distance; overlay and recorder are separate small modules.",
-      "dependencies": "a Chromium that can decode the video's codec (the default Playwright build cannot decode H.264; /usr/local/bin/chromium could); Pillow.",
-      "experiment_required": "NOT DONE: (1) accuracy across several real videos of different kinds (talking head, slides, sports, screencast) against a labelled set of scene boundaries; (2) head-to-head against PySceneDetect / ffmpeg scene filter on the same videos for cut F1 and cost; (3) a task-level test - can a model answer content questions from the sheet as well as from dense frames; (4) a DRM/MSE player (YouTube, Netflix) - untested, and YouTube refused this sandbox with a bot check, so real-player behaviour is unverified.",
-      "novelty_assessment": "NOT NOVEL as individual techniques: scene-cut detection by thumbnail/histogram differencing (PySceneDetect, ffmpeg scdet), binary search for a change point, storyboard / contact-sheet thumbnails, and canvas drawImage for frame access are all long-established. What is specific here is the COMBINATION aimed at LLM token cost - in-page signatures so the search moves no pixels, best-first refinement that stops at the keyframe budget instead of locating every cut, a min-shot filter, automatic fall-back to screenshots on canvas taint, and a labelled token ledger. That is an engineering recombination; I am not asserting it is patentable or unpublished, and I have not done a prior-art search. Do not cite it as an invention without one.",
-      "status": "prototyped",
-      "status_reason": "Prototype is working and tested on ground truth plus one real video; it has not been benchmarked against an alternative or across videos, so it does not meet 'benchmarked'."
-    },
-    {
-      "id": "vertical-scroll-from-pixels",
-      "title": "Real-time page scroll distance and position from pixels alone, with self-reported uncertainty",
-      "hypothesis": "A perception stream can report how far and which way a page scrolled, and keep a running page position, from consecutive screencast frames with no DOM access and no model, in ~10 tokens per tick, and can say when it does not know instead of drifting silently.",
-      "originating_agent": "orchestrator (Claude Sonnet 5.5), prompted by the owner's request to show scrolling with real-time context; gap found by reading perceive._pan",
-      "supporting_evidence": "Real Wikipedia page, human-style wheel scrolling, ground truth read from window.scrollY: 6 runs, 5 within 0.01h (about 1% of a screen), 1 with one unmeasurable step that the stream flagged uncertain (0.18h off). Before the uncertainty reporting, runs of the same scenario silently lost 1.3-1.9 screens. Unit-level: known-shift and sideways-sprite and repeating-content and weak-match cases, mutation-checked.",
-      "estimated_upside": "Token figures in the demo HUD are estimates (w*h/750 for the screenshot baseline, len/4 for text); they show a stream of ~300-900 tokens against ~80k for a screenshot per tick, which is a comparison against a baseline nobody sensible would use. The honest value is not the ratio; it is knowing where you are in a page in real time when the DOM is unavailable.",
-      "implementation_cost": "small - ~100 lines in perceive.py and a few in stream.py, pure Python, no new dependency (numpy is only an optional extra).",
-      "dependencies": "Pillow; a screencast of the page.",
-      "experiment_required": "NOT DONE: (1) more sites and page types (sticky-header-heavy, infinite scroll, horizontal, zoomed, dark, image-only); (2) compare with an optical-flow / phase-correlation library on accuracy and CPU; (3) verify the new= strip labels against ground truth; (4) long-run drift behaviour over hundreds of steps; (5) behaviour when screencast frames are dropped under load (partly seen: produces 'unknown').",
-      "novelty_assessment": "NOT NOVEL. Row-profile / block matching to detect vertical translation is decades old (scroll detection in remote-desktop and screen-sharing codecs, motion estimation in video coding, image stabilisation, phase correlation). What is specific here is only the packaging: a cumulative page position in screens that marks itself uncertain after an unmeasurable step, as a cheap text line for an agent. That is engineering, not an invention, and I have not searched prior art.",
-      "status": "prototyped",
-      "status_reason": "Works on one site in 6 runs; needs the experiments above before 'benchmarked'."
-    },
-    {
-      "id": "browser-eyes-retina",
-      "title": "The browser as the agent's eyes and ears: in-page retina, event-gated percepts, verified touch",
-      "hypothesis": "An agent can follow short-form video (picture and sound, muted or not) for a few hundred tokens per item, with no screenshots and no HTML, by measuring continuously inside the page and sending compressed percepts only when asked or when something salient happens.",
-      "originating_agent": "orchestrator (Opus 5.5), from the owner's request; research sub-agent for streaming-video and capture-API prior art",
-      "supporting_evidence": "Ground-truth clip through the real browser: cuts within one 10 fps sample, tone 441 Hz for 440, 120 bpm beats, noise and silence located. Real public-domain clips in a local muted feed: all heard, transcripts correct. ~2.5k estimated tokens for ~100 s of video across 5 reels. 19 CI tests.",
-      "estimated_upside": "Against a screenshot a second at 1280x800 (~1.3k tokens each by the 28 px patch rule) 100 s is ~130k tokens; the percepts were ~2.5k. That baseline is naive; against Gemini-style native video at ~300 tokens/s it is ~30k. The real gain is qualitative: sound and words, cuts, loops, and when to move on, which screenshots do not give at any price.",
-      "implementation_cost": "done: ~2k lines (retina.js ~500, sight/hearing/percept/service/asr/hook ~1.3k, touch ~200) plus tests.",
-      "dependencies": "numpy; optional faster-whisper (Silero VAD bundled, Whisper model downloaded on first use).",
-      "experiment_required": "NOT DONE: (1) Instagram/YouTube/TikTok with a real login in Chrome with proprietary codecs; (2) accuracy of speech/music labels on a labelled set (e.g. GTZAN speech-music, MUSAN) instead of a handful of clips; (3) agent-level A/B: does a Claude session answer questions about reels better and cheaper with eyes_* than with browser_screenshot; (4) per-strip OCR-free readability of on-screen text vs sheet size; (5) CPU cost of the retina on a low-end laptop.",
-      "novelty_assessment": "NOT NOVEL as techniques (see findings-log Round 6). Specific packaging for a turn-based model; no prior-art search done beyond the research agent's survey.",
-      "status": "prototyped",
-      "status_reason": "Works end to end on generated and real clips in this sandbox; untested on the target sites."
-    }
-  ]
+  {
+   "hypothesis": "Returning a structural diff of page state after a browser-run program (instead of a fresh full snapshot), with an explicit opt-out for research-style tasks, reduces tokens on form-filling/multi-step workflows without losing the agent visibility into what changed.",
+   "originating_agent": "orchestrator, from reading agentrhq/webcmd",
+   "supporting_evidence": "same source as above; webcmd explicitly reran both task categories to check the opt-out did not regress research-task accuracy before shipping it",
+   "estimated_upside": "unmeasured",
+   "implementation_cost": "medium-high -- needs a real diffing strategy against this repo own snapshot format, plus the same before/after discipline webcmd applied (rerun both task types, not just the one being optimized)",
+   "dependencies": "the failure-scenario suite; also depends on idea 1 if snapshot pruning changes the format being diffed",
+   "experiment_required": "a scenario/benchmark showing token reduction on multi-step form tasks with zero regression on research-style tasks",
+   "status": "proposed",
+   "status_reason": null
+  },
+  {
+   "hypothesis": "Encouraging more aggressive batched code-based execution (multiple browser steps in one agent turn) measurably lowers agent-turns-per-task, the same lever webcmd attributes part of its turn-count advantage to.",
+   "originating_agent": "orchestrator, from reading agentrhq/webcmd",
+   "supporting_evidence": "webcmd states this as one of three factors behind its 9.8-vs-14.8 turns/task number; this repo already has a code-execution-over-page action per its own project history, so the question is usage rate, not whether the capability exists",
+   "estimated_upside": "unmeasured -- needs a baseline read of how often the existing action is actually invoked vs single-step actions across a real task sample",
+   "implementation_cost": "low to start (measurement only), unknown for any follow-on change",
+   "dependencies": "none to start measuring; the failure-scenario suite for a controlled comparison",
+   "experiment_required": "first just measure: what fraction of current real task runs use the batched action vs single steps, before proposing any change to encourage it more",
+   "status": "parked",
+   "status_reason": "Not measurable with anything currently in this repo: no production telemetry (browser_use/telemetry/ is an explicit stub, PostHog client removed), no counter distinguishing evaluate()/batched calls from single-step actions in tools/service.py, and no benchmark harness recording action-type frequency. Requires new instrumentation + a real task corpus before this can even be measured, let alone acted on. Revisit if/when either exists."
+  },
+  {
+   "hypothesis": "Extending browser_use/synthesis (currently a per-origin tool manifest) to also record observed pitfalls and fallback paths, not just available actions, would close a gap against webcmds broader sitemap concept.",
+   "originating_agent": "orchestrator, from reading agentrhq/webcmd",
+   "supporting_evidence": "webcmd README describes its sitemap layer as covering pages, states, actions, workflows, APIs, pitfalls, and fallback paths -- broader than a tool manifest; not yet compared against SiteToolSynthesizer/ManifestStore in detail",
+   "estimated_upside": "unmeasured -- this one needs a real side-by-side reading of both systems before its even clear how big the gap is",
+   "implementation_cost": "unknown -- parked pending the comparison, not sized yet",
+   "dependencies": "a focused read of both browser_use/synthesis/{service,store,views}.py and webcmds src/site-memory/ (concepts only, still no code copying)",
+   "experiment_required": "the comparison itself, before any implementation cost estimate is trustworthy",
+   "status": "parked",
+   "status_reason": "least concrete of the four -- needs a dedicated comparison pass before its even scoped, not ready for a prototype yet"
+  },
+  {
+   "id": "video-seek-bisect-contact-sheet",
+   "title": "Watch a video from its pixels: in-page signatures, best-first seek-bisection, contact-sheet handoff",
+   "hypothesis": "An agent can recover the visual content of a video (what was shown, when it changed) for ~1/250th of the image tokens of a screenshot-per-second, by (a) seeking the <video> instead of playing it, (b) comparing 8x8 in-page thumbnails so the search moves no pixels, (c) spending samples only on the largest changes up to a keyframe budget, and (d) handing the model one contact sheet with timestamps burned in instead of N images.",
+   "originating_agent": "orchestrator (Claude Sonnet 5.5) in response to the owner's request for a low-token, from-pixels video viewer; adversarial review by claude-opus (see findings-log, Round 4)",
+   "supporting_evidence": "Ground truth: a real WebM with cuts at exactly 2/4/6s and a box moving through every scene - cuts located within one min_gap, motion inside a shot produces zero false cuts (mutation-tested: threshold 0 breaks the motion test, threshold 95 breaks the cut tests). Real video: Big Buck Bunny (9:56, H.264, archive.org) watched in 124 seeks / ~42s wall clock, 8 keyframes, contact sheet 1300x372 (~645 tokens by the published w*h/750 area rule) vs ~183k tokens for a screenshot per second at the same resolution.",
+   "estimated_upside": "Token figures are ESTIMATES from the published area formula, not measured billing; I attempted a measurement through this session's own token counter and it moved ~163 tokens for the image read, far below the 645 the formula predicts, so that counter cannot validate the estimate and I am not claiming either figure is the true cost. The ~250x ratio is sheet-vs-1fps-screenshots and depends entirely on that baseline being the one you would otherwise use.",
+   "implementation_cost": "small - one module (browser_use/vision/video.py ~400 lines) reusing live.py's frame_signature/signature_distance; overlay and recorder are separate small modules.",
+   "dependencies": "a Chromium that can decode the video's codec (the default Playwright build cannot decode H.264; /usr/local/bin/chromium could); Pillow.",
+   "experiment_required": "NOT DONE: (1) accuracy across several real videos of different kinds (talking head, slides, sports, screencast) against a labelled set of scene boundaries; (2) head-to-head against PySceneDetect / ffmpeg scene filter on the same videos for cut F1 and cost; (3) a task-level test - can a model answer content questions from the sheet as well as from dense frames; (4) a DRM/MSE player (YouTube, Netflix) - untested, and YouTube refused this sandbox with a bot check, so real-player behaviour is unverified.",
+   "novelty_assessment": "NOT NOVEL as individual techniques: scene-cut detection by thumbnail/histogram differencing (PySceneDetect, ffmpeg scdet), binary search for a change point, storyboard / contact-sheet thumbnails, and canvas drawImage for frame access are all long-established. What is specific here is the COMBINATION aimed at LLM token cost - in-page signatures so the search moves no pixels, best-first refinement that stops at the keyframe budget instead of locating every cut, a min-shot filter, automatic fall-back to screenshots on canvas taint, and a labelled token ledger. That is an engineering recombination; I am not asserting it is patentable or unpublished, and I have not done a prior-art search. Do not cite it as an invention without one.",
+   "status": "prototyped",
+   "status_reason": "Prototype is working and tested on ground truth plus one real video; it has not been benchmarked against an alternative or across videos, so it does not meet 'benchmarked'."
+  },
+  {
+   "id": "vertical-scroll-from-pixels",
+   "title": "Real-time page scroll distance and position from pixels alone, with self-reported uncertainty",
+   "hypothesis": "A perception stream can report how far and which way a page scrolled, and keep a running page position, from consecutive screencast frames with no DOM access and no model, in ~10 tokens per tick, and can say when it does not know instead of drifting silently.",
+   "originating_agent": "orchestrator (Claude Sonnet 5.5), prompted by the owner's request to show scrolling with real-time context; gap found by reading perceive._pan",
+   "supporting_evidence": "Real Wikipedia page, human-style wheel scrolling, ground truth read from window.scrollY: 6 runs, 5 within 0.01h (about 1% of a screen), 1 with one unmeasurable step that the stream flagged uncertain (0.18h off). Before the uncertainty reporting, runs of the same scenario silently lost 1.3-1.9 screens. Unit-level: known-shift and sideways-sprite and repeating-content and weak-match cases, mutation-checked.",
+   "estimated_upside": "Token figures in the demo HUD are estimates (w*h/750 for the screenshot baseline, len/4 for text); they show a stream of ~300-900 tokens against ~80k for a screenshot per tick, which is a comparison against a baseline nobody sensible would use. The honest value is not the ratio; it is knowing where you are in a page in real time when the DOM is unavailable.",
+   "implementation_cost": "small - ~100 lines in perceive.py and a few in stream.py, pure Python, no new dependency (numpy is only an optional extra).",
+   "dependencies": "Pillow; a screencast of the page.",
+   "experiment_required": "NOT DONE: (1) more sites and page types (sticky-header-heavy, infinite scroll, horizontal, zoomed, dark, image-only); (2) compare with an optical-flow / phase-correlation library on accuracy and CPU; (3) verify the new= strip labels against ground truth; (4) long-run drift behaviour over hundreds of steps; (5) behaviour when screencast frames are dropped under load (partly seen: produces 'unknown').",
+   "novelty_assessment": "NOT NOVEL. Row-profile / block matching to detect vertical translation is decades old (scroll detection in remote-desktop and screen-sharing codecs, motion estimation in video coding, image stabilisation, phase correlation). What is specific here is only the packaging: a cumulative page position in screens that marks itself uncertain after an unmeasurable step, as a cheap text line for an agent. That is engineering, not an invention, and I have not searched prior art.",
+   "status": "prototyped",
+   "status_reason": "Works on one site in 6 runs; needs the experiments above before 'benchmarked'."
+  },
+  {
+   "id": "browser-eyes-retina",
+   "title": "The browser as the agent's eyes and ears: in-page retina, event-gated percepts, verified touch",
+   "hypothesis": "An agent can follow short-form video (picture and sound, muted or not) for a few hundred tokens per item, with no screenshots and no HTML, by measuring continuously inside the page and sending compressed percepts only when asked or when something salient happens.",
+   "originating_agent": "orchestrator (Opus 5.5), from the owner's request; research sub-agent for streaming-video and capture-API prior art",
+   "supporting_evidence": "Ground-truth clip through the real browser: cuts within one 10 fps sample, tone 441 Hz for 440, 120 bpm beats, noise and silence located. Real public-domain clips in a local muted feed: all heard, transcripts correct. ~2.5k estimated tokens for ~100 s of video across 5 reels. 19 CI tests.",
+   "estimated_upside": "Against a screenshot a second at 1280x800 (~1.3k tokens each by the 28 px patch rule) 100 s is ~130k tokens; the percepts were ~2.5k. That baseline is naive; against Gemini-style native video at ~300 tokens/s it is ~30k. The real gain is qualitative: sound and words, cuts, loops, and when to move on, which screenshots do not give at any price.",
+   "implementation_cost": "done: ~2k lines (retina.js ~500, sight/hearing/percept/service/asr/hook ~1.3k, touch ~200) plus tests.",
+   "dependencies": "numpy; optional faster-whisper (Silero VAD bundled, Whisper model downloaded on first use).",
+   "experiment_required": "NOT DONE: (1) Instagram/YouTube/TikTok with a real login in Chrome with proprietary codecs; (2) accuracy of speech/music labels on a labelled set (e.g. GTZAN speech-music, MUSAN) instead of a handful of clips; (3) agent-level A/B: does a Claude session answer questions about reels better and cheaper with eyes_* than with browser_screenshot; (4) per-strip OCR-free readability of on-screen text vs sheet size; (5) CPU cost of the retina on a low-end laptop.",
+   "novelty_assessment": "NOT NOVEL as techniques (see findings-log Round 6). Specific packaging for a turn-based model; no prior-art search done beyond the research agent's survey.",
+   "status": "prototyped",
+   "status_reason": "Works end to end on generated and real clips in this sandbox; untested on the target sites."
+  },
+  {
+   "id": "tor-censorship-transport",
+   "title": "Optional Tor transport for censorship/geo-restriction circumvention",
+   "status": "accepted",
+   "hypothesis": "Content a network censors or geo-restricts becomes reachable for research/education by routing the browser's SOCKS5 through Tor, without any change to the agent.",
+   "originating_agent": "orchestrator (Opus 4.8), from the owner's request for an app-level fallback transport",
+   "supporting_evidence": "BrowserProfile.proxy already speaks socks5://; Tor exposes a local SOCKS5 port. Standard control-port NEWNYM (via stem or the raw line protocol) rotates exits with a ~10s cooldown. Shipped as browser_use/net/tor.py with 27 passing pure-logic tests; real-bootstrap test skips when no tor binary present.",
+   "estimated_upside": "Reaches nationally-censored or geo-fenced pages that otherwise fail at the network layer. Bounded: does NOT help with bot-detection walls (Tor exits are on public blocklists, so Google/YouTube challenge them MORE, not less) — verified against multiple sources.",
+   "implementation_cost": "Small, done. No new runtime dependency (raw async control client). Off by default.",
+   "dependencies": "A tor binary on the host, or a Tor the user already runs; obfs4proxy/lyrebird for bridges on censored networks.",
+   "experiment_required": "End-to-end run on a host with tor installed: bootstrap, fetch a geo-restricted test page, rotate circuit, confirm exit country changes. Not runnable in this sandbox (no tor, egress via fixed proxy).",
+   "honest_note": "Explicitly not a bot-detection bypass. should_fall_back() refuses to retry CAPTCHAs/unusual-traffic walls through Tor. For YouTube specifically the real paths are the user's own Chrome (--cdp-url) or an alternative frontend (Invidious/Piped)."
+  },
+  {
+   "id": "chromium-browser-shell",
+   "title": "A real browser UI: Chromium/Electron shell a person could switch to from Edge/Brave",
+   "status": "parked",
+   "hypothesis": "The same engine (CDP + eyes + human input + WebMCP synthesis) wrapped in a latest-Chromium chrome with an address bar, tabs and an agent sidebar becomes a browser a person uses day to day, with the agent as a first-class co-pilot in the same window.",
+   "originating_agent": "owner request (parked for later by owner's own instruction: 'the browser part and the extension part you do this for me later not now')",
+   "supporting_evidence": "Today browser_use is a library/agent driver with no UI of its own: it drives headless or headful Chromium over CDP, and Retinat/cobrowse are the closest thing to a surface. Comparable OSS to study before building: Chromium Embedded Framework (CEF), Electron, Tauri (Rust/webview), the 'Browser Company' Dia/Arc model, Sidekick, Wavebox, and agent-browsers like Perplexity Comet — for how they mount an agent pane beside real browsing.",
+   "estimated_upside": "Turns an agent tool into a product a human lives in; the human-plus-AI shared session the owner keeps asking for, in one window.",
+   "implementation_cost": "Large, multi-week. New process model (UI shell + engine + agent), packaging per-OS, auto-update, security review of the chrome. Separate repo or a heavy new top-level package.",
+   "dependencies": "Decide shell (Electron vs Tauri vs CEF). Reuse cobrowse for the shared-session control arbitration. Latest Chromium pinned.",
+   "experiment_required": "Prototype: Electron window loading a real page, eyes sidebar showing percepts live, one agent action from the sidebar acting on the visible tab.",
+   "honest_note": "This is a product, not a patch. Parked deliberately per owner until the engine-side work (transport, tuning, media) is solid."
+  },
+  {
+   "id": "browser-extension-surface",
+   "title": "A companion browser extension (MV3) exposing the engine in the user's existing browser",
+   "status": "parked",
+   "hypothesis": "An MV3 extension in the person's own Chrome/Edge/Brave gives the agent eyes and hands in the browser they already trust and are already logged into — no separate app, no bot-detection problem, because it IS the human's browser.",
+   "originating_agent": "owner request (parked for later by owner's instruction)",
+   "supporting_evidence": "An extension runs on the user's real profile and connection, which sidesteps the datacenter-IP flagging entirely. WebMCP synthesis and eyes percepts could be fed from a content script + offscreen document; the native-messaging host bridges to the python engine.",
+   "estimated_upside": "The cleanest 'human + AI, zero suspicion' path: the agent works through the user's authenticated, home-IP browser with their consent, so sites see the human they already trust.",
+   "implementation_cost": "Medium-large. MV3 content/background/offscreen scripts, native-messaging host, a permissions and consent model, store review.",
+   "dependencies": "Native-messaging bridge to browser_use; reuse eyes/retina JS in a content-script context; a consent/arbitration model so the human stays in control.",
+   "experiment_required": "MV3 prototype that captures the active tab's video frames via an offscreen document and streams percepts to the python engine over native messaging.",
+   "honest_note": "Later, per owner. This — not Tor — is the correct answer to 'don't get flagged': act as the human, with the human, in the human's browser, not disguised as one."
+  }
+ ]
 }

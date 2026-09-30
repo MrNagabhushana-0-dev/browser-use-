@@ -130,6 +130,42 @@ The navigation error names this setting when it detects such an environment. The
 automatic detection: telling private CAs from public ones automatically was tried, and it
 wrongly trusted public CAs.
 
+## Censorship-resistant transport (optional Tor)
+
+`browser_use/net/tor.py` provides an **opt-in, off-by-default** SOCKS5 path through Tor, for
+reaching content a network **censors or geo-restricts** — the research-and-education case of a
+page that simply won't load from where you are. It manages a `tor` process (or attaches to one
+you already run) and hands its SOCKS5 port to `BrowserProfile.proxy`, which already speaks SOCKS5.
+
+```python
+from browser_use.net import TorConfig, TorTransport, should_fall_back
+
+tor = TorTransport(TorConfig(enabled=True, exit_country='de'))  # prefer a German exit
+await tor.start()                                               # reuses a running Tor, else launches one
+profile = BrowserProfile(proxy=tor.proxy_settings())           # socks5://127.0.0.1:9050
+# ... browse ...
+await tor.new_circuit()                                        # new exit (Tor's ~10s cooldown applies)
+await tor.stop()
+```
+
+On a censored network, set `TorConfig(bridges=[...])` with obfs4/webtunnel bridge lines; an
+`obfs4proxy`/`lyrebird` binary on PATH is picked up automatically. Needs a `tor` binary
+(`apt install tor`, `brew install tor`) or a Tor you already run.
+
+**This is not a bot-detection bypass, and won't unblock YouTube or Google.** The opposite:
+Tor exit-node addresses are on public block lists, so those sites challenge them *more*, not
+less. `should_fall_back(error_text)` reflects this — it retries only network/censorship errors
+(connection reset/refused/timed out, DNS blocked, HTTP 451) through Tor, and **never** retries a
+CAPTCHA or "unusual traffic" wall. For a site that blocks an address range (YouTube on a
+datacenter IP), the honest paths are:
+
+- the person's **own browser and connection** via `--cdp-url` (see "Attaching to your own Chrome"), or
+- an **alternative front end** such as Invidious or Piped, which serve YouTube content through
+  their own API and interface.
+
+Nothing here disguises the agent as a human to defeat a site's abuse protections. When a human
+check appears, it is reported and left to a person.
+
 ## Working on this code
 
 - **Setup:** use `uv`, never `pip`. Use tabs, modern typing, and pydantic v2. See `CLAUDE.md`.
@@ -141,6 +177,7 @@ wrongly trusted public CAs.
   - Retinat server: `browser_use/retinat/`.
   - browser-use MCP server: `browser_use/mcp/server.py`.
   - Real input: `browser_use/human/`.
+  - Optional Tor transport: `browser_use/net/`.
 - **Measured results and limits:** these are in `docs/agent-notes/findings-log.md`. Read them
   before claiming anything works on a site.
 
