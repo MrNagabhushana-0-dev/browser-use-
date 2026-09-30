@@ -474,3 +474,19 @@ The owner's "tried with cognee / claude-mem / superpowers / ponytail" question: 
 not installed. claude-mem and Cognee need persistent state and a worker or API key, so they fit the
 owner's own machine, not this ephemeral container; ponytail and superpowers are plugins the owner
 installs in their Claude Code.
+
+**Full-suite result, and an unresolved flake that is not from this round.** With this round's code,
+full `tests/ci` runs on this VM gave 1 eyes failure (run 1, stopped at first failure) and then 4
+failures of 1,539 passed / 30 skipped (run 2). Two were mine and are fixed: `browser_network_status`
+claimed read-only while its code could start a Tor (now `TorPool.peek`, pinned by a test), and
+`test_no_certificate_means_no_flag` was not hermetic (it read `BROWSER_USE_PROXY_CA_CERT` from the
+environment; it passed without that variable and failed with it). The other two were eyes tests
+(`browse_watches_each_reel_once`, `claude_code_gets_the_percept…`) where the touch feed skipped a reel.
+To separate them from this round, the same full suite was run on the previous commit (`dd5fdb8`) in a
+worktree: it also failed, on a *different* eyes test (`cuts_and_sounds_are_found_where_they_are`), plus
+the same proxy-CA test. So the eyes tests are intermittently red in full-suite runs here regardless of
+this round's changes. Each passes alone (the whole eyes file: 23/23 twice; one test 12/12 under three
+saturated cores), and Round 7's full run on that same commit was green, so it is load- or
+order-dependent. The root cause is not found. It is a real defect in test reliability (or in how
+`Eyes.next` copes with a busy loop), open, and worth its own round: start from why the session-scoped
+event loop or leftover Chromium processes slow the touch and audio timing late in a full run.
