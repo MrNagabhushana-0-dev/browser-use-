@@ -1,0 +1,190 @@
+diff --git a/browser_use/synthesis/scanner.py b/browser_use/synthesis/scanner.py
+index 1eb932d..a2fa171 100644
+--- a/browser_use/synthesis/scanner.py
++++ b/browser_use/synthesis/scanner.py
+@@ -228,20 +228,32 @@ const byRelevance = (elements, limit) => {
+ 	return scored.slice(0, limit).sort((a, b) => a.index - b.index).map(s => s.el);
+ };
+ 
++// What the tool surface is made of, independent of where the reader happens to be
++// looking. byRelevance decides which candidates survive the caps, so on a page with more
++// controls than the budget holds, the published lists are a function of the scroll
++// position. Anything downstream that has to stay stable across scrolls — the fingerprint
++// that decides whether a cached manifest, verified flags and all, is still valid — reads
++// these instead: the full candidate lists, in document order, before the cap.
++const namesOf = (elements) => elements.map(accessibleName);
++const SHAPE_LIMIT = 120;
++
+ const forms = [];
++const formShapes = [];
+ for (const form of deepQuery('form', SCOPE).slice(0, MAX_FORMS)) {
+ 	if (!visible(form)) continue;
+-	const controls = byRelevance(deepQuery(CONTROL_SELECTOR, form).filter(visible), MAX_CONTROLS)
+-		.map(describeControl);
++	const controlCandidates = deepQuery(CONTROL_SELECTOR, form).filter(visible);
++	const controls = byRelevance(controlCandidates, MAX_CONTROLS).map(describeControl);
+ 	if (!controls.length) continue;
+ 	const submit = form.querySelector('button[type=submit], input[type=submit], button:not([type])');
++	const name = formName(form, submit);
+ 	forms.push({
+-		name: formName(form, submit),
++		name: name,
+ 		action: form.getAttribute('action') || '',
+ 		controls: controls,
+ 		submit: submit ? {label: accessibleName(submit), locator: locatorFor(submit)} : null,
+ 		locator: locatorFor(form),
+ 	});
++	formShapes.push({name: name, controls: namesOf(controlCandidates.slice(0, SHAPE_LIMIT))});
+ }
+ 
+ // Buttons that are not inside a form: the standalone verbs of the page.
+@@ -308,8 +320,12 @@ for (const el of deepQuery('input[type=checkbox], [role="switch"], [role="checkb
+ 	toggles.push({name: name, checked: !!(el.checked || el.getAttribute('aria-checked') === 'true'), locator: locatorFor(el)});
+ }
+ 
++// Names only, and only from the uncapped candidate lists: see namesOf.
++const shape = {buttons: namesOf(buttonCandidates), controls: namesOf(looseCandidates), forms: formShapes};
++
+ return {url: location.href, origin: location.origin, title: document.title,
+         modal: MODAL ? (accessibleName(MODAL) || clean(MODAL.innerText).slice(0, 60)) : null,
+         forms: forms, buttons: buttons, controls: loose,
+-        tables: tables, views: views, pagers: pagers, toggles: toggles};
++        tables: tables, views: views, pagers: pagers, toggles: toggles,
++        shape: shape};
+ """
+diff --git a/browser_use/synthesis/store.py b/browser_use/synthesis/store.py
+index 2e9f1b9..cbac524 100644
+--- a/browser_use/synthesis/store.py
++++ b/browser_use/synthesis/store.py
+@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
+ # page. The page fingerprint catches a redesign; it cannot catch us getting better, so
+ # without this a cache written by an older build outlives the improvement that should
+ # have replaced it — a fixed tool goes on being served in its broken shape indefinitely.
+-SYNTHESIS_VERSION = 2
++SYNTHESIS_VERSION = 3
+ 
+ # Origins kept. Past this the oldest go; a manifest costs little but not nothing.
+ MAX_ORIGINS = 200
+@@ -44,12 +44,34 @@ def fingerprint(affordances: dict[str, Any]) -> str:
+ 	Built from what things are *called*, not from counts or positions: a site that adds a
+ 	row to a table has not changed its tool surface, while one that renames "Sign in" to
+ 	"Log in" has. Text is what the locators bind to, so text is what invalidates them.
++
++	Positions include the reader's. The published `buttons` and `controls` lists are capped
++	by viewport relevance, so on a page with more controls than the budget holds, scrolling
++	changes which names survive — and hashing those makes the fingerprint a function of how
++	far down the page someone happened to be. The manifest, and every verified flag on it,
++	would then be discarded and overwritten for nothing. So when the scan offers a `shape`
++	— the same names taken from the full candidate lists in document order, before the cap
++	— that is what gets hashed. A scan from an older scanner has none and falls back.
+ 	"""
+ 	parts: list[str] = []
+-	for form in affordances.get('forms') or []:
+-		controls = ','.join(sorted(str(c.get('name', '')) for c in (form.get('controls') or [])))
+-		parts.append(f'form:{form.get("name", "")}:{controls}')
+-	for key in ('buttons', 'views', 'toggles'):
++	shape = affordances.get('shape')
++	if isinstance(shape, dict):
++		for form in shape.get('forms') or []:
++			controls = ','.join(sorted(str(name) for name in (form.get('controls') or [])))
++			parts.append(f'form:{form.get("name", "")}:{controls}')
++		for key in ('buttons', 'controls'):
++			for name in shape.get(key) or []:
++				parts.append(f'{key[:-1]}:{name}')
++	else:
++		for form in affordances.get('forms') or []:
++			controls = ','.join(sorted(str(c.get('name', '')) for c in (form.get('controls') or [])))
++			parts.append(f'form:{form.get("name", "")}:{controls}')
++		# A form-less search box is a tool like any other, so renaming it has to invalidate
++		# whatever was built from it — which it did not, while this ignored `controls`.
++		for key in ('buttons', 'controls'):
++			for item in affordances.get(key) or []:
++				parts.append(f'{key[:-1]}:{item.get("name", "")}')
++	for key in ('views', 'toggles'):
+ 		for item in affordances.get(key) or []:
+ 			parts.append(f'{key[:-1]}:{item.get("name", "")}')
+ 	for table in affordances.get('tables') or []:
+diff --git a/tests/ci/test_synthesis_fingerprint.py b/tests/ci/test_synthesis_fingerprint.py
+new file mode 100644
+index 0000000..9c69d8b
+--- /dev/null
++++ b/tests/ci/test_synthesis_fingerprint.py
+@@ -0,0 +1,78 @@
++"""A cached tool surface must survive the reader looking somewhere else.
++
++The fingerprint exists to notice a redesign. It must not notice a scroll. The published
++affordance lists are capped by viewport relevance — that is the right trade for what the
++agent gets shown — but hashing them made the cache key a function of the scroll position,
++so a tall page threw away its manifest, verified flags and all, and rewrote it, every time
++the viewport moved. And renaming a form-less control, which is a real tool, changed
++nothing at all, because the hash ignored `controls` outright.
++"""
++
++import asyncio
++
++import pytest
++from pytest_httpserver import HTTPServer
++
++from browser_use.browser.events import NavigateToUrlEvent
++from browser_use.synthesis import SiteToolSynthesizer
++from browser_use.synthesis.store import fingerprint
++
++# More named buttons at the top than the budget holds, and as many again four thousand
++# pixels below it. Whichever end the viewport is at, the capped list is drawn from that
++# end — which is the point of the ranking, and exactly what the fingerprint must ignore.
++TALL_PAGE = (
++	'<html><head><title>Tall</title></head><body style="margin:0">'
++	'<div>' + ''.join(f'<button>Top action {i}</button>' for i in range(30)) + '</div>'
++	'<div style="height:4000px"></div>'
++	'<div>' + ''.join(f'<button>Bottom action {i}</button>' for i in range(30)) + '</div>'
++	'</body></html>'
++)
++
++
++@pytest.fixture(scope='module')
++def tall_server():
++	server = HTTPServer()
++	server.start()
++	server.expect_request('/tall').respond_with_data(TALL_PAGE, content_type='text/html')
++	yield server
++	server.stop()
++
++
++async def _goto(session, url):
++	event = session.event_bus.dispatch(NavigateToUrlEvent(url=url))
++	await event
++	await event.event_result(raise_if_any=True, raise_if_none=False)
++
++
++async def test_the_fingerprint_does_not_move_with_the_scroll_position(browser_session, tall_server):
++	await _goto(browser_session, tall_server.url_for('/tall'))
++
++	synth = SiteToolSynthesizer(browser_session)
++	at_top = await synth.scan()
++
++	await browser_session.run_page_script('window.scrollTo(0, document.body.scrollHeight); return true;')
++	await asyncio.sleep(0.5)
++	at_bottom = await synth.scan()
++
++	top_names = [button['name'] for button in at_top.get('buttons') or []]
++	bottom_names = [button['name'] for button in at_bottom.get('buttons') or []]
++	assert top_names and bottom_names, 'nothing was scanned'
++	# If these matched, the page is not crowded enough to exercise the cap and the test
++	# below would pass for the wrong reason.
++	assert top_names != bottom_names, f'the cap did not bind: {top_names[:3]} vs {bottom_names[:3]}'
++
++	assert fingerprint(at_top) == fingerprint(at_bottom), (
++		'scrolling rewrote the cache key, so the manifest and its verified flags are discarded'
++	)
++
++
++def test_renaming_a_form_less_control_invalidates_the_surface():
++	"""A search box outside a form becomes a tool. Renaming it breaks that tool's locator,
++	which is the whole condition the fingerprint is supposed to detect."""
++	base = {'controls': [{'name': 'Search products'}]}
++	renamed = {'controls': [{'name': 'Find products'}]}
++	assert fingerprint(base) != fingerprint(renamed)
++
++	shaped = {'shape': {'buttons': [], 'controls': ['Search products'], 'forms': []}}
++	shaped_renamed = {'shape': {'buttons': [], 'controls': ['Find products'], 'forms': []}}
++	assert fingerprint(shaped) != fingerprint(shaped_renamed)

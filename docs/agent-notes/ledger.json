@@ -63,19 +63,22 @@
       "round": "0",
       "finder_model": "claude-opus-5",
       "reviewer_model": "claude-opus-5-5",
-      "reason": "Real bug (loose search-box controls never wired into synthesis) but the fix's cache-fingerprint interaction with the loose-controls list wasn't judged safe as submitted. Held rather than landed un-reviewed."
+      "reason": "Real bug, correct core fix (form-less search boxes were scanned, ranked, then discarded). Rejected because the cache fingerprint ignores loose controls, so a later page whose only affordance is a search box can return a stale empty manifest; needs controls folded into fingerprint() plus a regression test for that exact cache case. Also its 'driven' dedup test cannot fail. Verbatim Lead notes in workflow-results/round0-lead-driven-fleet.result.json.",
+      "patch_file": "workflow-results/rejected-round0-patches/FIX-2.patch"
     },
     {
       "key": "browser_use/synthesis/{scanner.py,store.py}:fingerprint:scroll-dependent-cache-key",
       "status": "rejected",
       "round": "0",
-      "reason": "BLOCKING: uncapped name lists (up to 200 button names, 120 loose-control names) added to the scan result could overflow the 60000-char scan budget and silently wipe out synthesis entirely on busy pages. The fix was worse than the bug. Do not re-propose without fixing the budget-overflow risk first."
+      "reason": "BLOCKING, worse than the bug: the new uncapped 'shape' payload (worst case ~220k chars) overflows the 60,000-char scan limit, at which point scan() returns {} and a crowded page gets zero tools. Fix direction from the Lead: collapse shape to a small fixed-size digest (cyrb53/FNV) computed inside the page script, and assert in the tall-page test that the scan did not come back empty. Do not apply the stored patch as-is.",
+      "patch_file": "workflow-results/rejected-round0-patches/FIX-3.patch"
     },
     {
       "key": "browser_use/cobrowse/service.py:launch_for_human:_wait_for_cdp-no-cleanup",
-      "status": "rejected",
+      "status": "held",
       "round": "0",
-      "reason": "Lead review did not accept the patch as submitted (notes not fully captured before advisor hit a usage limit). Real defect class (process/profile-lock leak on failed CDP wait) is still open \u2014 a future round can re-attempt with a cleaner fix."
+      "reason": "Source fix is sound: the Lead's own review says 'No changes needed in browser_use/cobrowse/service.py'. The patch was held because its test 2 was not a real regression test. Needs a fake browser that ignores SIGTERM (trap '' TERM; exec sleep 30) so the old close() provably leaves a zombie, keeping the process.returncode-is-not-None assertion; optionally a cancellation test for the BaseException branch. Near-landable.",
+      "patch_file": "workflow-results/rejected-round0-patches/FIX-6.patch"
     },
     {
       "key": "browser_use/webmcp/bridge.py:loadManifests:manifest-deadline-not-actually-bounded",
