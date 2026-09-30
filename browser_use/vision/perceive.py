@@ -43,6 +43,23 @@ MIN_BLOB_CELLS = 3
 MAX_BLOBS = 6
 
 
+# Vertical scroll estimation works on its own, finer grid than the blob grid: a shift of a few
+# percent of the screen has to be resolvable, and the blob grid's 30 rows cannot do that.
+_SCROLL_ROWS = 160
+_SCROLL_COLS = 16
+# The largest shift considered, as a fraction of the screen. A reader's wheel notches between
+# two frames are well inside this; anything bigger is a jump, which reads as a scene change.
+_SCROLL_MAX = 0.6
+# Below this mean luma difference between frames nothing happened.
+_SCROLL_MIN_CHANGE = 3.0
+# The winner's error must be at most this fraction of any rival's, or the answer is ambiguous.
+_SCROLL_UNIQUENESS = 0.75
+# Offsets this close to the winner are the same match seen through a little blur, not rivals.
+_SCROLL_NEIGHBOUR = 3
+# Mean luma difference that is indistinguishable from JPEG and resampling noise.
+_SCROLL_NOISE_FLOOR = 2.0
+
+
 @dataclass
 class Blob:
 	"""Something that moved, in normalised 0-1 screen coordinates."""
@@ -144,6 +161,98 @@ def _group(mask: list[list[bool]]) -> list[Blob]:
 			)
 	blobs.sort(key=lambda b: b.cells, reverse=True)
 	return blobs[:MAX_BLOBS]
+
+
+def _row_signature(jpeg_bytes: bytes) -> list[list[int]] | None:
+	"""One short vector per pixel row, from the central columns only.
+
+	The middle half of the width: a sticky header's edges, a scrollbar, and a side panel that
+	scrolls on its own are at the sides and would pin the match at zero shift.
+	"""
+	try:
+		from PIL import Image
+
+		image = Image.open(BytesIO(jpeg_bytes)).convert('L')
+		width, height = image.size
+		centre = image.crop((width // 4, 0, width * 3 // 4, height)).resize(
+			(_SCROLL_COLS, _SCROLL_ROWS), Image.Resampling.BILINEAR
+		)
+	except Exception:
+		return None
+	pixels = list(centre.getdata())  # type: ignore[arg-type]
+	return [pixels[row * _SCROLL_COLS : (row + 1) * _SCROLL_COLS] for row in range(_SCROLL_ROWS)]
+
+
+def _row_error(current: list[list[int]], previous: list[list[int]], offset: int, give_up_at: float) -> float | None:
+	"""Mean absolute difference between `current` and `previous` shifted by `offset` rows.
+
+	None when the overlap is too small to mean anything, or when the running error already
+	exceeds `give_up_at` (so the caller never pays to finish a candidate that cannot win).
+	"""
+	rows = range(max(0, -offset), min(_SCROLL_ROWS, _SCROLL_ROWS - offset))
+	if len(rows) < _SCROLL_ROWS * 0.4:
+		return None
+	total, limit = 0, give_up_at * len(rows) * _SCROLL_COLS
+	for row in rows:
+		a, b = current[row], previous[row + offset]
+		total += sum(abs(x - y) for x, y in zip(a, b))
+		if total > limit:
+			return None
+	return total / (len(rows) * _SCROLL_COLS)
+
+
+def scroll_estimate(previous_jpeg: bytes, current_jpeg: bytes) -> tuple[float | None, bool]:
+	"""How far the page scrolled between two frames, and whether a refusal is worth telling anyone.
+
+	Returns `(fraction, ambiguous)`. `fraction` is the shift as a fraction of the screen height,
+	positive down (the content moved up) and negative up, or None. `ambiguous` is True only when
+	some shift fits better than standing still but several fit about equally well: the page very
+	probably moved and how far cannot be told. That is different from nothing having moved, and
+	from a sprite crossing a fixed page, and a reader keeping a running position needs to know
+	which it was, because after an ambiguous step the position can no longer be trusted.
+
+	Units are screens rather than pixels because the stream never needs the viewport: "half a
+	screen down" means the same thing on every page.
+
+	Each row of the new frame is compared with the row `offset` away in the old one, and the
+	offset that matches best wins. It has to win clearly against every other offset, including
+	"no movement", or a blinking cursor, a loading spinner, or a page that repeats itself would be
+	reported as scrolling by some amount.
+	"""
+	previous, current = _row_signature(previous_jpeg), _row_signature(current_jpeg)
+	if previous is None or current is None:
+		return None, False
+	unmoved = _row_error(current, previous, 0, give_up_at=255.0)
+	if unmoved is None or unmoved < _SCROLL_MIN_CHANGE:
+		return None, False
+
+	best_offset, best_error = 0, unmoved
+	reach = int(_SCROLL_ROWS * _SCROLL_MAX)
+	for offset in range(-reach, reach + 1):
+		if offset == 0:
+			continue
+		error = _row_error(current, previous, offset, give_up_at=best_error)
+		if error is not None and error < best_error:
+			best_offset, best_error = offset, error
+	if best_offset == 0:
+		return None, False
+
+	# The best match must also be *the* match, and standing still counts as a rival (offset 0 is in
+	# the loop below), so a shift that is only slightly better than no movement is rejected here.
+	# An absolute floor as well as a ratio: a near-perfect match has an error near zero, and a ratio
+	# of zero rules out every rival, including ones that fit exactly as well.
+	ceiling = max(best_error / _SCROLL_UNIQUENESS, best_error + _SCROLL_NOISE_FLOOR)
+	for offset in range(-reach, reach + 1):
+		if abs(offset - best_offset) <= _SCROLL_NEIGHBOUR:
+			continue
+		if _row_error(current, previous, offset, give_up_at=ceiling) is not None:
+			return None, True
+	return round(best_offset / _SCROLL_ROWS, 3), False
+
+
+def vertical_scroll(previous_jpeg: bytes, current_jpeg: bytes) -> float | None:
+	"""The scroll between two frames as a fraction of the screen height, or None. See `scroll_estimate`."""
+	return scroll_estimate(previous_jpeg, current_jpeg)[0]
 
 
 def _pan(previous: list[list[int]], current: list[list[int]]) -> str:

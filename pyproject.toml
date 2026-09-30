@@ -69,6 +69,9 @@ core = [
 aws = ["boto3==1.42.37"]
 oci = ["oci==2.166.0"]
 video = ["imageio[ffmpeg]==2.37.2", "numpy==2.4.1"]
+# The browser as eyes and ears (browser_use.eyes): numpy for the analysis, and a local voice
+# activity + speech model so percepts can say where the speech is and what it says.
+eyes = ["numpy==2.4.1", "faster-whisper==1.2.1"]
 examples = [
     "agentmail==0.0.59",
     # botocore: only needed for Bedrock Claude boto3 examples/models/bedrock_claude.py
@@ -106,6 +109,7 @@ browseruse = "browser_use.cli:main"  # Alias for browser-use
 bu = "browser_use.cli:main"  # Alias for browser-use
 browser = "browser_use.cli:main"  # Alias for browser-use
 browser-use-tui = "browser_use.cli:browser_use_tui_main"  # Deprecated alias for browser-use
+retinat = "browser_use.retinat.server:cli"  # Retinat MCP server: continuous image/video perception for LLMs
 
 [build-system]
 requires = ["hatchling==1.32.0"]
@@ -183,6 +187,8 @@ include = [
     "browser_use/skills/**/*.md",
     "browser_use/py.typed",
     "browser_use/dom/**/*.js",
+    "browser_use/eyes/*.js",
+    "browser_use/explore/*.js",
     "!tests/**/*.py",
     "!debug/*",
 ]

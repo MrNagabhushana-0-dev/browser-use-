@@ -212,7 +212,22 @@ def test_memory_can_be_turned_off(tmp_path, action_model):
 	assert not (tmp_path / 'workflows.json').exists()
 
 
-async def test_the_agent_records_a_successful_run_and_recalls_it_next_time(tmp_path, action_model, mock_llm):
+@pytest.fixture
+async def stop_agent_bus():
+	"""Register an Agent to have its own EventBus stopped when the test ends.
+
+	An Agent owns a bus whose `_run_loop` task outlives the test. Agent.run() stops it at the end of
+	a run; a test that only builds an Agent never reaches that, so the task is still alive when the
+	event loop shuts down and the loop waits on it until the test timeout - a 300s teardown error in
+	the full suite even though the test itself passed.
+	"""
+	agents = []
+	yield agents.append
+	for agent in agents:
+		await agent.eventbus.stop(clear=True, timeout=3.0)
+
+
+async def test_the_agent_records_a_successful_run_and_recalls_it_next_time(tmp_path, action_model, mock_llm, stop_agent_bus):
 	"""The loop integration: without this, the store is dead weight.
 
 	Builds a real Agent, hands it a real successful history, and checks that the route it
@@ -225,6 +240,7 @@ async def test_the_agent_records_a_successful_run_and_recalls_it_next_time(tmp_p
 	from browser_use.filesystem.file_system import FileSystem
 
 	agent = Agent(task='buy running socks', llm=mock_llm)
+	stop_agent_bus(agent)
 	agent.workflow_memory = WorkflowMemory(path=tmp_path / 'workflows.json')
 
 	url = 'https://shop.example.com/catalog'
@@ -264,13 +280,14 @@ async def test_the_agent_records_a_successful_run_and_recalls_it_next_time(tmp_p
 	assert 'shop.example.com' in rendered
 
 
-async def test_a_broken_memory_store_never_breaks_a_step(tmp_path, mock_llm):
+async def test_a_broken_memory_store_never_breaks_a_step(tmp_path, mock_llm, stop_agent_bus):
 	"""Recall and induction both sit on the agent's hot path, so both must swallow."""
 	from browser_use import Agent
 	from browser_use.browser.views import BrowserStateSummary
 	from browser_use.dom.views import SerializedDOMState
 
 	agent = Agent(task='anything', llm=mock_llm)
+	stop_agent_bus(agent)
 
 	class Exploding(WorkflowMemory):
 		def describe(self, task, url, limit=2):

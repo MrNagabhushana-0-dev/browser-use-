@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 
 from browser_use.vision.label import FrameFeatures, frame_features
-from browser_use.vision.perceive import Blob, Scene, luma_grid, perceive
+from browser_use.vision.perceive import Blob, Scene, luma_grid, perceive, scroll_estimate
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,14 @@ class PerceptionStream:
 	tracker: SceneTracker = field(default_factory=SceneTracker)
 	started: float = field(default_factory=time.monotonic)
 	_previous_grid: list[list[int]] | None = None
+	_previous_jpeg: bytes | None = None
 	lines: list[str] = field(default_factory=list)
+	# Where the page has been scrolled to since the stream began, in screens (1.0 = one full
+	# viewport height). Cumulative, so a reader of the lines knows where in the page they are.
+	position: float = 0.0
+	# False once a step was seen to scroll but could not be measured: from then on the position is a
+	# lower-confidence guess, and every line that prints it says so.
+	position_exact: bool = True
 
 	def observe(self, jpeg_bytes: bytes, at: float | None = None) -> str | None:
 		"""Take one frame. Returns the line describing it, or None for the first."""
@@ -160,7 +167,21 @@ class PerceptionStream:
 			return None
 		if self._previous_grid is None:
 			self._previous_grid = grid
+			self._previous_jpeg = jpeg_bytes
 			return None
+
+		# Scrolling first, because a fast scroll changes most cells and would otherwise be
+		# reported as a scene cut, and the blob tracker is meaningless while everything slides.
+		moved, ambiguous = scroll_estimate(self._previous_jpeg, jpeg_bytes) if self._previous_jpeg else (None, False)
+		self._previous_jpeg = jpeg_bytes
+		if moved is not None or ambiguous:
+			self._previous_grid = grid
+			self.tracker = SceneTracker()
+			line = self._render_scroll(
+				moved, at if at is not None else time.monotonic() - self.started, frame_features(jpeg_bytes)
+			)
+			self.lines.append(line)
+			return line
 
 		scene = perceive(self._previous_grid, grid)
 		self._previous_grid = grid
@@ -170,6 +191,27 @@ class PerceptionStream:
 		line = self._render(scene, at if at is not None else time.monotonic() - self.started, features)
 		self.lines.append(line)
 		return line
+
+	def _render_scroll(self, moved: float | None, at: float, features: FrameFeatures | None) -> str:
+		"""`t=4.0 scroll=down 0.52h pos=2.3h new=text`: which way, how far, where, what arrived.
+
+		The strip that scrolled into view is at the bottom when moving down and the top when
+		moving up; naming its kind (text, media, ...) is the cheapest honest answer to "what
+		is coming into view", short of a model reading it. When the page moved but by an amount
+		that cannot be told (`moved` is None) the line says `scroll=unknown` and the position
+		is marked with a `?` from then on, instead of quietly going stale.
+		"""
+		if moved is None:
+			self.position_exact = False
+			return f't={at:.1f} scroll=unknown pos={self.position:.1f}h?'
+		self.position = round(self.position + moved, 3)
+		size = min(1.0, abs(moved))
+		mark = '' if self.position_exact else '?'
+		parts = [f't={at:.1f}', f'scroll={"down" if moved > 0 else "up"} {size:.2f}h', f'pos={self.position:.1f}h{mark}']
+		if features is not None and features.usable:
+			centre = 1 - size / 2 if moved > 0 else size / 2
+			parts.append(f'new={features.label(0.5, centre, 1.0, size)}')
+		return ' '.join(parts)
 
 	def _render(self, scene: Scene, at: float, features: FrameFeatures | None = None) -> str:
 		if scene.cut:

@@ -31,6 +31,7 @@ os.environ['BROWSER_USE_LOGGING_LEVEL'] = 'critical'
 os.environ['BROWSER_USE_SETUP_LOGGING'] = 'false'
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -514,6 +515,7 @@ class BrowserUseServer:
 					# point of the whole synthesis layer is that `search(query=...)` is simply
 					# there once you are on a site that can search.
 					*self._site_tool_entries(),
+					*self._eyes_tool_entries(),
 				]
 			)
 
@@ -591,6 +593,12 @@ class BrowserUseServer:
 				await self._init_browser_session()
 			return await self._call_site_tool(tool_name, arguments)
 
+		# Watching and moving like a person: see browser_use/eyes.
+		elif tool_name.startswith('eyes_'):
+			if not self.browser_session:
+				await self._init_browser_session()
+			return await self._call_eyes_tool(tool_name, arguments)
+
 		# Direct browser control tools (require active session)
 		elif tool_name.startswith('browser_'):
 			# Ensure browser session exists
@@ -658,6 +666,177 @@ class BrowserUseServer:
 			elif tool_name == 'browser_close_tab':
 				return await self._close_tab(arguments['tab_id'])
 
+		raise ValueError(f'Unknown tool: {tool_name}')
+
+	# -- eyes ----------------------------------------------------------------------------
+
+	def _eyes_tool_entries(self) -> list[types.Tool]:
+		try:
+			import numpy  # noqa: F401
+		except ImportError:
+			return []  # the eyes need numpy: pip install "browser-use[eyes]"
+		detail = {
+			'type': 'string',
+			'enum': ['glance', 'look', 'study'],
+			'default': 'glance',
+			'description': 'How large the keyframes on the sheet are: glance (~200 px rows, cheapest), look, study.',
+		}
+		return [
+			types.Tool(
+				name='eyes_watch',
+				description=(
+					'Watch whatever video is playing in the browser (a reel, a short, any <video>) from its own frames '
+					'and sound, and return one sheet image plus a timeline: shots and cuts, what the sound is doing '
+					'(speech, music, beats, tone, silence, noise; tempo; the words if a speech model is installed), '
+					'loops, and the on-screen caption. Works on muted videos. No screenshots and no HTML: a few hundred '
+					'tokens per item. until=bored stops once the video shows nothing new, like a person would.'
+				),
+				input_schema={
+					'type': 'object',
+					'properties': {
+						'seconds': {
+							'type': 'number',
+							'default': 12,
+							'minimum': 1,
+							'maximum': 90,
+							'description': 'Longest to watch.',
+						},
+						'until': {
+							'type': 'string',
+							'enum': ['bored', 'event', 'time', 'item'],
+							'default': 'bored',
+							'description': 'bored: stop when nothing new is happening. event: stop at the first cut, loop or change in sound. time: watch the full duration. item: stop when the video changes.',
+						},
+						'detail': detail,
+						'hold': {
+							'type': 'boolean',
+							'default': True,
+							'description': 'Pause the video when done so nothing plays unseen; the next eyes_* call resumes it.',
+						},
+					},
+				},
+				# Not read-only: it resumes a held video, and with hold=True pauses it again.
+			),
+			types.Tool(
+				name='eyes_browse',
+				description=(
+					'Scroll a short-video feed (Reels, Shorts, TikTok-style) like a person: watch each item until it '
+					'stops showing anything new (or max_seconds), flick to the next with a real touch swipe, repeat. '
+					'Returns one sheet with a row per item (keyframes + a sound strip) and a line-per-shot timeline.'
+				),
+				input_schema={
+					'type': 'object',
+					'properties': {
+						'items': {'type': 'integer', 'default': 5, 'minimum': 1, 'maximum': 30},
+						'max_seconds': {
+							'type': 'number',
+							'default': 12,
+							'minimum': 2,
+							'maximum': 90,
+							'description': 'Longest to spend on one item.',
+						},
+						'min_seconds': {'type': 'number', 'default': 3, 'minimum': 0.5, 'maximum': 30},
+						'detail': detail,
+					},
+				},
+			),
+			types.Tool(
+				name='eyes_next',
+				description='Move a feed to the next (or previous) item with a thumb flick, falling back to the wheel and then the keyboard, and confirm by sight that a different video is now playing.',
+				input_schema={
+					'type': 'object',
+					'properties': {'direction': {'type': 'string', 'enum': ['down', 'up'], 'default': 'down'}},
+				},
+			),
+			types.Tool(
+				name='eyes_tap',
+				description='Tap the screen at viewport coordinates (CSS pixels) with a real touch event, e.g. to unmute, like, or open a caption. Coordinates come from the sheet or from browser_get_state.',
+				input_schema={
+					'type': 'object',
+					'properties': {'x': {'type': 'number'}, 'y': {'type': 'number'}},
+					'required': ['x', 'y'],
+				},
+			),
+			types.Tool(
+				name='eyes_swipe',
+				description='A thumb swipe across part of the viewport. up moves content up (towards the next item), left moves it left.',
+				input_schema={
+					'type': 'object',
+					'properties': {
+						'direction': {'type': 'string', 'enum': ['up', 'down', 'left', 'right'], 'default': 'up'},
+						'fraction': {'type': 'number', 'default': 0.55, 'minimum': 0.05, 'maximum': 0.9},
+					},
+				},
+			),
+			types.Tool(
+				name='eyes_now',
+				description='One line on what is on screen and audible right now (the attended video, its time, the current shot and sound). Nearly free; no image.',
+				input_schema={'type': 'object', 'properties': {}},
+				annotations=types.ToolAnnotations(read_only_hint=True),
+			),
+		]
+
+	async def _eyes(self):
+		"""The Eyes for the tab in front of us, (re)attached when the tab changes."""
+		from browser_use.eyes import Eyes
+
+		assert self.browser_session is not None
+		focus = self.browser_session.agent_focus_target_id
+		eyes = getattr(self, '_eyes_instance', None)
+		if eyes is not None and (eyes.browser_session is not self.browser_session or (focus and eyes.retina.target_id != focus)):
+			try:
+				await eyes.close()
+			except Exception:
+				pass
+			eyes = None
+		if eyes is None:
+			eyes = Eyes(self.browser_session)
+			await eyes.open(focus)
+			self._eyes_instance = eyes
+		return eyes
+
+	@staticmethod
+	def _percept_content(percept) -> list[types.ContentBlock]:
+		content: list[types.ContentBlock] = [types.TextContent(type='text', text=percept.text)]
+		if percept.image:
+			content.append(
+				types.ImageContent(type='image', data=base64.b64encode(percept.image).decode(), mime_type='image/jpeg')
+			)
+		return content
+
+	async def _call_eyes_tool(self, tool_name: str, arguments: dict[str, Any]) -> str | list[types.ContentBlock]:
+		eyes = await self._eyes()
+		detail = arguments.get('detail', 'glance')
+		if tool_name == 'eyes_watch':
+			percept = await eyes.watch(
+				seconds=float(arguments.get('seconds', 12)),
+				until=arguments.get('until', 'bored'),
+				detail=detail,
+				hold=bool(arguments.get('hold', True)),
+			)
+			return self._percept_content(percept)
+		if tool_name == 'eyes_browse':
+			percept = await eyes.browse(
+				items=int(arguments.get('items', 5)),
+				max_seconds=float(arguments.get('max_seconds', 12)),
+				min_seconds=float(arguments.get('min_seconds', 3)),
+				detail=detail,
+			)
+			return self._percept_content(percept)
+		if tool_name == 'eyes_next':
+			result = await eyes.next(direction=arguments.get('direction', 'down'))
+			if not result.moved:
+				return f'The feed did not move (tried {", ".join(result.tries)} over {result.seconds:.1f}s). {eyes.now_line()}'
+			return f'Moved by {result.method} in {result.seconds:.1f}s. {eyes.now_line()}'
+		if tool_name == 'eyes_tap':
+			await eyes.tap(float(arguments['x']), float(arguments['y']))
+			return f'Tapped ({arguments["x"]}, {arguments["y"]}). {eyes.now_line()}'
+		if tool_name == 'eyes_swipe':
+			info = await eyes.swipe(arguments.get('direction', 'up'), float(arguments.get('fraction', 0.55)))
+			return f'Swiped {arguments.get("direction", "up")} {info["distance_px"]:.0f}px in {info["duration_ms"]:.0f}ms. {eyes.now_line()}'
+		if tool_name == 'eyes_now':
+			await eyes.retina.wait_for_data(1.0)
+			return eyes.now_line()
 		raise ValueError(f'Unknown tool: {tool_name}')
 
 	async def _init_browser_session(self, allowed_domains: list[str] | None = None, **kwargs):
