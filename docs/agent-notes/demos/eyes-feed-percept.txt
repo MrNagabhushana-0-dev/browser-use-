@@ -1,0 +1,55 @@
+👁 5 item(s) watched on http://127.0.0.1:8765/index.html · stopped: browsed 5 item(s)
+[1] video 404x720, 25.0s long, watched 18.0s
+    on screen: "@civil_defense_1951 Bert the Turtle! Duck and Cover (1951) · public domain"
+      2.1s-3.2s   start  black-and-white, moving  | sound (moderate), music ~149 bpm (moderate)
+      3.2s-13.3s  cut->  black-and-white, moving  | music ~149 bpm (moderate), sound (moderate), music (moderate), speech (moderate)
+     13.3s-16.2s  cut->  black-and-white, calm    | speech (moderate), music (moderate), sound (moderate)
+     16.2s-19.9s  cut->  black-and-white, calm    | sound (moderate)
+    sound: sound, music, speech; moderate; tempo ~149 bpm, 39 onsets, muted for the person watching, heard here from the stream
+    said: [5.4s] And the stuff I'm dangerous, but I'm giving ever God hurt, he knew just what?
+    sheet row 1: 4 keyframes at 7.2s 11.3s 14.3s 18.8s (cover 67% of frames)
+[2] video 404x720, 28.0s long, watched 18.2s
+    on screen: "@nasa_archive Apollo 11 launch, 16 July 1969 · public domain"
+      0.2s-9.1s   start  muted colours, still     | silence, sound (moderate), speech (moderate)
+      9.1s-9.4s   cut->  bright muted colours, busy | speech (moderate)
+      9.4s-18.0s  cut->  muted colours, still     | speech (moderate), music (moderate)
+    sound: silence, sound, speech, music; loud; 24 onsets, muted for the person watching, heard here from the stream
+    said: [2.1s] G minus 15 seconds, guidance is in turn. [5.5s] 12, 11, 10, 9. [9.9s] Ignition sequence starts. [12.0s] 6, 5.
+    sheet row 2: 4 keyframes at 5.2s 14.2s 15.7s 16.8s (cover 94% of frames)
+[3] video 404x720, 22.0s long, watched 17.2s
+    on screen: "@blender_foundation Big Buck Bunny · CC BY 3.0"
+      0.2s-0.7s   start  muted colours, calm      | speech (quiet)
+      0.7s-3.2s   cut->  muted colours, moving    | sound (quiet), music (quiet)
+      3.2s-3.8s   cut->  pink, moving             | music (quiet)
+      3.8s-6.8s   cut->  teal/green, still        | music (quiet), sound (quiet)
+      6.8s-7.3s   cut->  muted colours, busy      | sound (quiet)
+      7.3s-9.4s   cut->  teal/brown, busy         | sound (quiet), music (quiet)
+      9.4s-11.3s  cut->  brown, still             | music (quiet)
+     11.3s-13.6s  cut->  brown/green, still       | music (quiet)
+     13.6s-15.1s  cut->  green/brown, busy        | music (quiet)
+     15.1s-15.6s  cut->  teal/brown, busy         | music (quiet)
+     15.6s-17.2s  cut->  brown/green, calm        | music (quiet)
+    sound: speech, sound, music; quiet; 23 onsets, muted for the person watching, heard here from the stream
+    sheet row 3: 8 keyframes at 0.2s 1.7s 3.7s 5.3s 9.9s 12.3s 14.1s 16.2s (cover 64% of frames)
+[4] video 404x720, 24.0s long, watched 18.2s
+    on screen: "@civil_defense_1951 "That's what this film is all about" · public domain"
+      0.0s-18.2s  start  black-and-white, calm    | music (moderate), speech (moderate)
+    sound: music, speech; moderate; 47 onsets, muted for the person watching, heard here from the stream
+    said: [0.0s] Be sure and remember what Bert the Turtle just did, [3.5s] friends, because every one of us must remember to do the same thing. [7.0s] That's what this film is all about. [9.0s] Duck and Cover [11.0s] This is an official Civil Defense film produced in cooperation with the Federal Civil Defense Administration [17.0s] and in consultation.
+    sheet row 4: 4 keyframes at 0.6s 3.2s 9.3s 15.8s (cover 87% of frames)
+[5] video 405x720, 20.0s long, watched 18.0s
+    on screen: "@librivox The Art of War, read aloud · public domain"
+      0.0s-18.0s  start  dark muted colours, still | speech (quiet), sound (very quiet), speech (very quiet)
+    sound: speech, sound; quiet; 49 onsets, muted for the person watching, heard here from the stream
+    said: [0.0s] 4. The Commander, 5. Method and Discipline [5.9s] The moral law causes the people to be in complete accord with their ruler, so that they [10.4s] will follow him regardless of their lives, undismayed by any danger. [15.8s] Heaven signifies night and day,
+    sheet row 5: 1 keyframes at 1.6s (cover 100% of frames)
+~2515 tokens for this percept (sheet 924x1236 ~1485, text ~1030; estimates)
+item 1: watched 16s
+  -> next by swipe in 1.2s
+item 2: watched 16s
+  -> next by swipe in 1.1s
+item 3: watched 16s
+  -> next by swipe in 1.0s
+item 4: watched 16s
+  -> next by swipe in 1.1s
+item 5: watched 16s

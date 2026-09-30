@@ -344,7 +344,13 @@ not streaming, and every tool description says what it is.
 - The VAD called 0.7 s of Big Buck Bunny (no dialogue) speech. Whisper tiny.en is
   English-only; set `BROWSER_USE_EYES_ASR_MODEL=base` for other languages.
 - Screen recordings from the Xvfb recorder have no audio track.
-- One unexplained failure in 8 early full-suite runs predates the aim fix; not seen since.
+- Final stability on the pushed code: 6/6 runs of tests/ci/test_eyes.py (21 tests each), 3
+  idle and 3 with three of four cores saturated. Before the load fixes, half of such runs failed.
+
+Demo assets (`demos/eyes-feed-*`): a local muted feed of Duck and Cover (1951, public
+domain), Apollo 11 launch (1969, NASA, public domain), Big Buck Bunny (c) Blender Foundation,
+CC BY 3.0, and LibriVox's reading of The Art of War (public domain). The recording has no
+audio track (the Xvfb recorder captures video only); the eyes heard every reel.
 
 **Not novel.** Standard web APIs (rVFC, captureStream, AudioWorklet), facility-location
 keyframe selection (video summarization literature), Scheirer-Slaney / Lu et al. audio
