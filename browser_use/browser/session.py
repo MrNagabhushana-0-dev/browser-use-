@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from functools import cached_property
@@ -135,6 +136,28 @@ class ResilientEventBus(EventBus):
 		if self._on_idle is None or self.event_queue is None:
 			return None
 		return await super().wait_until_idle(timeout)
+
+
+def _certificate_hint(error_text: str, profile: 'BrowserProfile') -> str:
+	"""Turn "ERR_CERT_AUTHORITY_INVALID on every site" into the one setting that fixes it.
+
+	In a network that re-signs TLS (a corporate proxy, a CI or agent sandbox) curl, Python and
+	Node trust the operator's CA through SSL_CERT_FILE / REQUESTS_CA_BUNDLE / NODE_EXTRA_CA_CERTS;
+	Chromium honours none of them, so every page fails and the raw error does not say why. The
+	CA cannot be picked out of the bundle automatically without risking trusting public CAs with
+	verification off, so name the knob instead.
+	"""
+	if 'ERR_CERT_AUTHORITY_INVALID' not in error_text or profile.proxy_ca_cert:
+		return ''
+	bundles = [v for v in ('SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS', 'CURL_CA_BUNDLE') if os.environ.get(v)]
+	proxied = bool(os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy'))
+	if not bundles and not proxied:
+		return ''
+	return (
+		f' - this environment sets {", ".join(bundles) or "HTTPS_PROXY"}, which usually means a proxy that re-signs TLS. '
+		'Chromium does not read those variables: set BROWSER_USE_PROXY_CA_CERT (or BrowserProfile(proxy_ca_cert=...)) '
+		"to the PEM of that proxy's CA - only its key is trusted, verification stays on for everything else."
+	)
 
 
 class BrowserSession(BaseModel):
@@ -1211,7 +1234,7 @@ class BrowserSession(BaseModel):
 			raise RuntimeError(f'Page.navigate() timed out after {nav_timeout}s ({duration_ms:.0f}ms) for {url}')
 
 		if nav_result.get('errorText'):
-			raise RuntimeError(f'Navigation failed: {nav_result["errorText"]}')
+			raise RuntimeError(f'Navigation failed: {nav_result["errorText"]}{_certificate_hint(nav_result["errorText"], self.browser_profile)}')
 
 		if wait_until == 'commit':
 			duration_ms = (asyncio.get_event_loop().time() - nav_start_time) * 1000

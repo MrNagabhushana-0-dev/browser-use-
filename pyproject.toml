@@ -187,6 +187,7 @@ include = [
     "browser_use/py.typed",
     "browser_use/dom/**/*.js",
     "browser_use/eyes/*.js",
+    "browser_use/explore/*.js",
     "!tests/**/*.py",
     "!debug/*",
 ]

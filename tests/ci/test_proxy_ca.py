@@ -88,3 +88,57 @@ def test_an_unreadable_certificate_never_stops_the_browser(tmp_path):
 	truncated = tmp_path / 'truncated.crt'
 	truncated.write_text('-----BEGIN CERTIFICATE-----\nnot base64 at all\n-----END CERTIFICATE-----')
 	assert proxy_ca_pins(truncated) == []
+
+
+@pytest.fixture(scope='module')
+def https_site(a_certificate):
+	"""A local HTTPS page signed by a CA Chromium has never heard of, as behind a TLS proxy."""
+	import ssl
+
+	from pytest_httpserver import HTTPServer
+
+	ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+	ctx.load_cert_chain(str(a_certificate), str(a_certificate.with_suffix('.key')))
+	server = HTTPServer(ssl_context=ctx)
+	server.start()
+	server.expect_request('/').respond_with_data('<p>behind the proxy</p>', content_type='text/html')
+	yield server
+	server.stop()
+
+
+async def test_an_untrusted_proxy_ca_fails_with_the_fix_in_the_message(https_site, monkeypatch, a_certificate):
+	"""curl and Python trust the proxy through SSL_CERT_FILE; Chromium does not, and says only
+	ERR_CERT_AUTHORITY_INVALID. The error must name the setting that fixes it."""
+	from browser_use.browser import BrowserSession
+
+	monkeypatch.delenv('BROWSER_USE_PROXY_CA_CERT', raising=False)
+	monkeypatch.setenv('SSL_CERT_FILE', str(a_certificate))
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=False))
+	await session.start()
+	try:
+		with pytest.raises(Exception) as failure:
+			await session.navigate_to(https_site.url_for('/').replace('http://', 'https://'))
+		message = str(failure.value)
+		assert (
+			'ERR_CERT_AUTHORITY_INVALID' in message and 'BROWSER_USE_PROXY_CA_CERT' in message and 'SSL_CERT_FILE' in message
+		), message
+	finally:
+		await session.kill()
+
+
+async def test_the_named_setting_then_opens_the_page(https_site, a_certificate):
+	from browser_use.browser import BrowserSession
+
+	session = BrowserSession(
+		browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=False, proxy_ca_cert=str(a_certificate))
+	)
+	await session.start()
+	try:
+		await session.navigate_to(https_site.url_for('/').replace('http://', 'https://'))
+		cdp = await session.get_or_create_cdp_session(focus=False)
+		body = await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'document.body.innerText', 'returnByValue': True}, session_id=cdp.session_id
+		)
+		assert body['result']['value'] == 'behind the proxy'
+	finally:
+		await session.kill()
