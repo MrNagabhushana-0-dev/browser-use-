@@ -239,12 +239,15 @@ class NetworkRouter:
 		"""A multi-line report: mode, route, the exit Tor says we use, and recent events."""
 		lines = [self.summary()]
 		if self.uses_tor:
-			try:
-				transport = await self._pool.get(self.exit_country)
-				exit_info = await transport.observed_exit()
-			except Exception as e:
-				exit_info = None
-				lines.append(f'Exit: not readable ({e})')
+			exit_info = None
+			transport = self._pool.peek(self.exit_country)  # reading status must never start a Tor
+			if transport is None:
+				lines.append('Exit: Tor is not running yet; it starts on the next page load.')
+			else:
+				try:
+					exit_info = await transport.observed_exit()
+				except Exception as e:
+					lines.append(f'Exit: not readable ({e})')
 			if exit_info:
 				seen = (exit_info.country or 'unknown').upper()
 				lines.append(f'Exit: {exit_info.ip or "unknown ip"} in {seen} (Tor GeoIP, approximate).')

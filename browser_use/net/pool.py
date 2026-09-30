@@ -57,6 +57,10 @@ class TorPool:
 			raise
 		return transport
 
+	def peek(self, country: str | None) -> TorTransport | None:
+		"""The running transport for `country`, without starting, restarting or reordering anything."""
+		return self._transports.get(country)
+
 	async def stop_all(self) -> None:
 		transports, self._transports = list(self._transports.values()), {}
 		for transport in transports:

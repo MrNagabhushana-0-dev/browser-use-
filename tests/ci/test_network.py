@@ -174,6 +174,15 @@ async def test_engaging_without_tor_says_so_instead_of_pretending():
 	assert 'Tor is not installed' in await router.status() or 'Last Tor problem' in await router.status()
 
 
+async def test_reading_the_status_never_starts_a_tor():
+	# `_network_status` is advertised read-only, so asking must not launch or restart anything.
+	router = NetworkRouter(NetworkMode.ALWAYS, 'de')  # constructing it starts nothing
+	assert router._pool.peek('de') is None
+	text = await router.status()
+	assert 'Tor is not running yet' in text
+	assert router._pool.peek('de') is None and router.last_error is None
+
+
 def test_plain_http_is_refused_over_tor_but_https_and_loopback_are_not():
 	router = NetworkRouter(NetworkMode.ALWAYS)  # constructing it starts nothing
 	with pytest.raises(NetworkPolicyError, match='exit relay'):

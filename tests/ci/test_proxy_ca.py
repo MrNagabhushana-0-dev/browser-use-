@@ -62,7 +62,8 @@ def test_the_pin_reaches_the_browser_command_line(a_certificate):
 		assert not any(a == '--ignore-certificate-errors' for a in args)
 
 
-def test_no_certificate_means_no_flag():
+def test_no_certificate_means_no_flag(monkeypatch):
+	monkeypatch.delenv('BROWSER_USE_PROXY_CA_CERT', raising=False)  # the test is about none being set
 	with tempfile.TemporaryDirectory() as user_data_dir:
 		args = BrowserProfile(user_data_dir=user_data_dir).get_args()
 		assert not any('spki-list' in a for a in args)
