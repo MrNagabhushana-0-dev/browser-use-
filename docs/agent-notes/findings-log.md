@@ -490,3 +490,33 @@ saturated cores), and Round 7's full run on that same commit was green, so it is
 order-dependent. The root cause is not found. It is a real defect in test reliability (or in how
 `Eyes.next` copes with a busy loop), open, and worth its own round: start from why the session-scoped
 event loop or leftover Chromium processes slow the touch and audio timing late in a full run.
+
+## Handoff (end of Round 8)
+
+**State.** PR #8 merged the eyes, Retinat and the explorer. This follow-up PR carries the Tor
+transport, the route choice (`browser_use/net`), the two-tool route API on both MCP servers, the
+password-field guard on Tor, the test hermeticity fixes and these notes.
+
+**Run it.** `uv run python -m browser_use.retinat` (add `--cdp-url http://127.0.0.1:9222` to use your own
+Chrome, `--network off|auto|always`, `--exit-country de`). Tests: `uv run pytest -q tests/ci`. Behind a
+TLS-intercepting proxy set `BROWSER_USE_PROXY_CA_CERT`. Read `AI.md` first.
+
+**What is proven, and what is not.** Proven with real browsers: the eyes, Retinat's tools, the explorer,
+the route rules and tools, Chromium through a real SOCKS5 proxy (hostname resolved by the proxy; a dead
+proxy means failure). **Not proven:** anything over a real Tor (bootstrap, exit country, WebRTC leaks; no
+`tor` binary in the sandbox), YouTube and Instagram (YouTube blocks the sandbox IP; Instagram needs a
+login and H.264), and the explorer on anything but one portfolio.
+
+**Open, in priority order.**
+1. Run `test_tor.py` and a manual exit-country check on a machine with `tor` installed; fix what real
+   Tor shows. Add a leak test for WebRTC against a real circuit.
+2. The eyes tests flake intermittently in full-suite runs (see above, it predates Round 8). Find out why
+   before adding more timing-sensitive tests.
+3. Password guard: covers `retinat_type` only, top document only. `browser_type` and iframes are not covered.
+4. Tor-mode politeness (media blocking, rate caps), locale matching, metrics.
+5. The Chromium browser shell and the MV3 extension (`ideas-backlog.json`). The extension in a person's own
+   browser is the right answer to "don't get flagged": act as them, with them, not disguised as one.
+
+**Decisions to revisit.** Retinat defaults to `auto`, against the policy research's advice of `off`: it
+acts only after a clear network or geo failure and needs Tor installed. No attempt was made to avoid bot
+detection, by design; Tor would make it worse.
