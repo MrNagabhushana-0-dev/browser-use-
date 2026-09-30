@@ -89,3 +89,52 @@ Three agents in that round (advisor critique, advisor final sign-off,
 FIX-8 review) hit usage limits mid-run — FIX-8 was held un-landed rather
 than shipped without review, then verified and landed separately as
 Round 1b once credits reset.
+
+## Round 4 - vision: watching a video from its pixels
+
+Asked for: an agent that looks at a video (not its transcript), drives a real browser
+like a person for ~zero tokens, shows a live token meter in the browser, is recorded on
+a screen recorder, and does not get blocked.
+
+**What was built** (`browser_use/vision/{video,overlay,screenrec}.py`, tests in
+`tests/ci/test_{video_watcher,overlay,screenrec}.py`, runnable example
+`examples/features/watch_video.py`): seek-driven video sampling with in-page 8x8
+signatures and best-first bisection to the biggest cuts; a contact sheet; a token ledger
+with a naive-screenshot baseline; an in-page token meter plus a drawn cursor (Chrome does
+not move the OS cursor for synthetic CDP input, so a recording of an agent otherwise shows
+buttons pressing themselves); an Xvfb + ffmpeg recorder that finalizes the MP4 on a clean
+quit. The interaction in the demo is scripted human-like input, so it spends zero model
+tokens; only handing the result to a model costs tokens.
+
+**YouTube was NOT usable, and I did not try to defeat that.** From this sandbox's
+datacenter IP, the YouTube page loads and then shows "Sign in to confirm you're not a
+bot"; the video never starts (`readyState` 0). That is an access control. Getting around it
+(fingerprint spoofing, residential proxies, borrowed cookies) is circumvention and was out of
+bounds. The legitimate routes are the existing co-browse handover (a person signs in once to
+a persistent profile) or a host without a bot wall. The demo uses Big Buck Bunny from
+archive.org, an open-licensed film.
+
+**Findings worth keeping**
+- The default Playwright Chromium in `/opt/pw-browsers` cannot decode H.264
+  (`canPlayType` returns ''); `/usr/local/bin/chromium` can. Nothing failed loudly - the
+  video just would not play. Tests use VP8/WebM so they run on either.
+- This sandbox's HTTPS proxy re-signs traffic, so Chromium fails with
+  `ERR_CERT_AUTHORITY_INVALID` until the proxy CA is pinned. `BrowserProfile.proxy_ca_cert`
+  already did exactly that (SPKI pin, not disabled verification).
+- **My first design was wrong for the real workload.** It located every cut and then merged
+  the excess away to fit the budget. Fine for a 4-shot test, wasteful for a 10-minute film
+  with hundreds of cuts. Replaced by best-first refinement that stops once the budget of
+  cuts is located. The first real run also showed a 0.1s sliver shot burning one of eight
+  keyframes, which produced `min_shot`. Both were caught by looking at the real output, not
+  by the tests, which had passed.
+- A test suite that passes first time is not evidence. Mutation checks (threshold 95, 0;
+  canvas-taint ignored; ffmpeg killed instead of quit; overlay pointer-events on) were each
+  killed by exactly the test meant to kill them.
+- **The session token counter cannot validate an image-token estimate.** One controlled
+  read of the 1300x372 sheet moved it ~163 tokens versus 645 by the published formula. n=1,
+  uncontrolled for caching, so it proves the counter is not a usable instrument, not that
+  the formula is wrong. Every token figure in the HUD and docs is a labelled estimate.
+- Limits that remain: a shot shorter than the coarse step can be missed; a large motion
+  (a bird flapping across the frame) can exceed the cut threshold and read as a cut - a
+  thumbnail difference cannot tell motion from a cut; with a tight budget a "shot" is really
+  a segment between the largest changes; a video in an iframe, or behind DRM, is unreachable.

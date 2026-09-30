@@ -12,6 +12,7 @@ Nothing is implemented from a proposal alone. It moves:
 and `accepted` still requires owner approval before it merges into default
 behavior — cooking on a branch is cheap; landing it is a decision.
 
-Empty as of this write-up — round 3 is the first round giving workers an
-explicit second channel (fix a real defect *and* propose one concept), so
-entries start appearing once that runs.
+Entries live in the JSON; as of this write-up there are five: four proposals
+derived from reading a competitor's public writeup, and one built-and-tested
+prototype (`video-seek-bisect-contact-sheet`, status `prototyped`, with an explicit
+not-novel-as-individual-techniques assessment and the benchmarks still owed).

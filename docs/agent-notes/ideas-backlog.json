@@ -64,6 +64,20 @@
       "experiment_required": "the comparison itself, before any implementation cost estimate is trustworthy",
       "status": "parked",
       "status_reason": "least concrete of the four -- needs a dedicated comparison pass before its even scoped, not ready for a prototype yet"
+    },
+    {
+      "id": "video-seek-bisect-contact-sheet",
+      "title": "Watch a video from its pixels: in-page signatures, best-first seek-bisection, contact-sheet handoff",
+      "hypothesis": "An agent can recover the visual content of a video (what was shown, when it changed) for ~1/250th of the image tokens of a screenshot-per-second, by (a) seeking the <video> instead of playing it, (b) comparing 8x8 in-page thumbnails so the search moves no pixels, (c) spending samples only on the largest changes up to a keyframe budget, and (d) handing the model one contact sheet with timestamps burned in instead of N images.",
+      "originating_agent": "orchestrator (Claude Sonnet 5.5) in response to the owner's request for a low-token, from-pixels video viewer; adversarial review by claude-opus (see findings-log, Round 4)",
+      "supporting_evidence": "Ground truth: a real WebM with cuts at exactly 2/4/6s and a box moving through every scene - cuts located within one min_gap, motion inside a shot produces zero false cuts (mutation-tested: threshold 0 breaks the motion test, threshold 95 breaks the cut tests). Real video: Big Buck Bunny (9:56, H.264, archive.org) watched in 124 seeks / ~42s wall clock, 8 keyframes, contact sheet 1300x372 (~645 tokens by the published w*h/750 area rule) vs ~183k tokens for a screenshot per second at the same resolution.",
+      "estimated_upside": "Token figures are ESTIMATES from the published area formula, not measured billing; I attempted a measurement through this session's own token counter and it moved ~163 tokens for the image read, far below the 645 the formula predicts, so that counter cannot validate the estimate and I am not claiming either figure is the true cost. The ~250x ratio is sheet-vs-1fps-screenshots and depends entirely on that baseline being the one you would otherwise use.",
+      "implementation_cost": "small - one module (browser_use/vision/video.py ~400 lines) reusing live.py's frame_signature/signature_distance; overlay and recorder are separate small modules.",
+      "dependencies": "a Chromium that can decode the video's codec (the default Playwright build cannot decode H.264; /usr/local/bin/chromium could); Pillow.",
+      "experiment_required": "NOT DONE: (1) accuracy across several real videos of different kinds (talking head, slides, sports, screencast) against a labelled set of scene boundaries; (2) head-to-head against PySceneDetect / ffmpeg scene filter on the same videos for cut F1 and cost; (3) a task-level test - can a model answer content questions from the sheet as well as from dense frames; (4) a DRM/MSE player (YouTube, Netflix) - untested, and YouTube refused this sandbox with a bot check, so real-player behaviour is unverified.",
+      "novelty_assessment": "NOT NOVEL as individual techniques: scene-cut detection by thumbnail/histogram differencing (PySceneDetect, ffmpeg scdet), binary search for a change point, storyboard / contact-sheet thumbnails, and canvas drawImage for frame access are all long-established. What is specific here is the COMBINATION aimed at LLM token cost - in-page signatures so the search moves no pixels, best-first refinement that stops at the keyframe budget instead of locating every cut, a min-shot filter, automatic fall-back to screenshots on canvas taint, and a labelled token ledger. That is an engineering recombination; I am not asserting it is patentable or unpublished, and I have not done a prior-art search. Do not cite it as an invention without one.",
+      "status": "prototyped",
+      "status_reason": "Prototype is working and tested on ground truth plus one real video; it has not been benchmarked against an alternative or across videos, so it does not meet 'benchmarked'."
     }
   ]
 }
