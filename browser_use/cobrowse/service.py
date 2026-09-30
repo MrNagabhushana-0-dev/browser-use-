@@ -57,6 +57,47 @@ def find_chrome() -> str:
 	raise RuntimeError('No Chrome/Chromium binary found. Pass executable_path explicitly.')
 
 
+async def _terminate(process: 'asyncio.subprocess.Process | None', grace_period: float = 5.0) -> None:
+	"""Stop a browser process and reap it.
+
+	Both halves matter. Skipping the signal orphans a Chrome that goes on holding the
+	exclusive lock on the persistent profile, so the next launch against the same
+	`user_data_dir` fails; skipping the `wait()` leaves a zombie, because nothing else in
+	the process reaps it. Already-dead is not an error here — the point is that the
+	process is gone by the time this returns, not who killed it.
+	"""
+	if process is None or process.returncode is not None:
+		return
+
+	try:
+		process.terminate()
+	except ProcessLookupError:
+		return
+
+	try:
+		await asyncio.wait_for(process.wait(), timeout=grace_period)
+		return
+	except asyncio.CancelledError:
+		# Being cancelled mid-cleanup is not a reason to leak the process: signal it hard on
+		# the way out, since there is no await left to us.
+		try:
+			process.kill()
+		except ProcessLookupError:
+			pass
+		raise
+	except Exception as e:
+		logger.debug(f'Browser ignored SIGTERM, killing it: {type(e).__name__}: {e}')
+
+	try:
+		process.kill()
+	except ProcessLookupError:
+		return
+	try:
+		await process.wait()
+	except ProcessLookupError:
+		pass
+
+
 @dataclass
 class HumanBrowser:
 	"""A browser a person is driving, which the agent can attach to."""
@@ -88,11 +129,7 @@ class HumanBrowser:
 		except Exception as e:
 			logger.debug(f'Clean shutdown failed, falling back to a signal: {type(e).__name__}: {e}')
 
-		self.process.terminate()
-		try:
-			await asyncio.wait_for(self.process.wait(), timeout=10.0)
-		except Exception:
-			self.process.kill()
+		await _terminate(self.process)
 
 	async def _request_clean_shutdown(self) -> None:
 		"""Ask Chrome to close itself the way clicking the X would."""
@@ -116,6 +153,7 @@ async def launch_for_human(
 	executable_path: str | None = None,
 	extra_args: list[str] | None = None,
 	proxy_ca_cert: Path | str | None = None,
+	launch_timeout: float = LAUNCH_TIMEOUT_S,
 ) -> HumanBrowser:
 	"""Start a browser for a person to use and later hand over.
 
@@ -164,13 +202,20 @@ async def launch_for_human(
 	logger.info(f'🧑‍💻 Launching a browser for you to sign in with, profile at {user_data_dir}')
 	process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
 
-	cdp_url = await _wait_for_cdp(port, process)
+	try:
+		cdp_url = await _wait_for_cdp(port, process, timeout=launch_timeout)
+	except BaseException:
+		# A browser that never opened its port is still a browser holding the profile lock,
+		# and the caller has no handle to it — this is the only place it can be cleaned up.
+		# BaseException because a cancelled launch leaks exactly as badly as a timed-out one.
+		await _terminate(process)
+		raise
 	return HumanBrowser(cdp_url=cdp_url, port=port, user_data_dir=user_data_dir, process=process, args=args)
 
 
-async def _wait_for_cdp(port: int, process: 'asyncio.subprocess.Process | None' = None) -> str:
+async def _wait_for_cdp(port: int, process: 'asyncio.subprocess.Process | None' = None, timeout: float = LAUNCH_TIMEOUT_S) -> str:
 	"""Poll the debugging endpoint until Chrome answers, then return its websocket URL."""
-	deadline = asyncio.get_running_loop().time() + LAUNCH_TIMEOUT_S
+	deadline = asyncio.get_running_loop().time() + timeout
 	last_error: Exception | None = None
 	async with httpx.AsyncClient(timeout=2.0) as client:
 		while asyncio.get_running_loop().time() < deadline:

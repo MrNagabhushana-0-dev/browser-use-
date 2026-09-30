@@ -75,9 +75,9 @@
     },
     {
       "key": "browser_use/cobrowse/service.py:launch_for_human:_wait_for_cdp-no-cleanup",
-      "status": "held",
+      "status": "landed",
       "round": "0",
-      "reason": "Source fix is sound: the Lead's own review says 'No changes needed in browser_use/cobrowse/service.py'. The patch was held because its test 2 was not a real regression test. Needs a fake browser that ignores SIGTERM (trap '' TERM; exec sleep 30) so the old close() provably leaves a zombie, keeping the process.returncode-is-not-None assertion; optionally a cancellation test for the BaseException branch. Near-landable.",
+      "reason": "Landed from the round-0 patch with a strengthened test. launch_for_human now terminates+reaps the browser on timeout/cancel (BaseException); HumanBrowser.close() escalates SIGTERM->SIGKILL and waits. Test 2 now uses a SIGTERM-ignoring fake browser. Verified: against a baseline with the launch_timeout kwarg kept but cleanup removed, both new tests FAIL (orphaned pid; returncode None); on the fix both pass, plus existing test_cobrowse.py (9 passed total); ruff check/format and pyright clean. Full tests/ci not re-run.",
       "patch_file": "workflow-results/rejected-round0-patches/FIX-6.patch"
     },
     {
