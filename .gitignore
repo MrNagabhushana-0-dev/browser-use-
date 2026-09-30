@@ -88,4 +88,8 @@ product_extraction.py
 *report.md
 plot.py
 
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/agents/
+# The project MCP config is shared on purpose: it registers the retinat and browser-use servers.
+!.mcp.json

@@ -482,6 +482,11 @@ def _findings_for(page: PageReport) -> list[Finding]:
 		add('blocked' if blocked else 'unreachable', 'high', page.error.split(';')[0][:120], [page.error])
 		if blocked or not p:
 			return out  # a challenge page's headings and meta tags are not the site's
+	crash = _crash_screen(p.get('text', ''))
+	if crash:
+		# The framework replaced the whole page with its error screen: nothing else on it is the site.
+		add('page-crash', 'high', f'Page crashes: "{crash}"', [*page.console[-3:], url])
+		return out
 	status = page.status
 	if status and status >= 400:
 		# Reached by following the site's own links: that is a broken link, and the error page's
@@ -549,6 +554,23 @@ def _findings_for(page: PageReport) -> list[Finding]:
 	if p.get('blankTargetsWithoutRel'):
 		add('security', 'info', f'{p["blankTargetsWithoutRel"]} target=_blank links without rel=noopener', [url])
 	return out
+
+
+_CRASH_SCREENS = (
+	'Application error: a client-side exception has occurred',  # Next.js production
+	'Unhandled Runtime Error',  # Next.js development overlay
+	'Minified React error #',
+	'The above error occurred in the',
+	'Uncaught runtime errors',  # create-react-app / webpack overlay
+)
+
+
+def _crash_screen(text: str) -> str:
+	"""The crash message if a page's visible text is a framework's error screen."""
+	for marker in _CRASH_SCREENS:
+		if marker in text:
+			return marker
+	return ''
 
 
 def render_markdown(report: ExploreReport, title: str = 'Site exploration report') -> str:

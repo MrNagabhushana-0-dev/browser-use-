@@ -14,7 +14,7 @@ from browser_use.explore import Explorer, detect, render_markdown, render_sheet
 HOME = """<!doctype html><html lang="en"><head><title>Shop | Deals | Deals</title></head><body>
 <h1>Welcome</h1><h1>Also welcome</h1><h3>Skipped a level</h3>
 <a href="/clean">clean</a> <a href="/phone">phone</a> <a href="/missing">gone</a> <a href="/private/x">private</a>
-<a href="/challenge">challenge</a>
+<a href="/challenge">challenge</a> <a href="/crash">crash</a>
 <img src="/nope.png" alt="broken on purpose"> <img src="/ok.png">
 <button><svg width="10" height="10"></svg></button>
 <div style="width:3000px;height:10px;background:#eee"></div>
@@ -29,6 +29,8 @@ CLEAN = """<!doctype html><html lang="en"><head><title>Clean page</title><link r
 PHONE = """<!doctype html><html lang="en"><head><title>Phone</title><link rel="icon" href="/ok.png">
 <meta name="description" content="Too wide for a phone."><meta name="viewport" content="width=device-width">
 </head><body><h1>Phone</h1><div style="width:600px;height:20px;background:#ccc">fixed width</div></body></html>"""
+
+CRASH = '<!doctype html><html><head><title></title></head><body><h2>Application error: a client-side exception has occurred (see the browser console for more information).</h2><script>console.error("TypeError: cannot read properties of null")</script></body></html>'
 
 CHALLENGE = '<!doctype html><html><head><title>Just a moment...</title></head><body>Checking your browser.</body></html>'
 
@@ -47,6 +49,7 @@ def site():
 	server.expect_request('/clean').respond_with_data(CLEAN, content_type='text/html')
 	server.expect_request('/phone').respond_with_data(PHONE, content_type='text/html')
 	server.expect_request('/challenge').respond_with_data(CHALLENGE, content_type='text/html')
+	server.expect_request('/crash').respond_with_data(CRASH, content_type='text/html')
 	server.expect_request('/missing').respond_with_data('not here', status=404, content_type='text/html')
 	server.expect_request('/nope.png').respond_with_data('', status=404)
 	server.expect_request('/favicon.ico').respond_with_data('', status=404)
@@ -115,6 +118,13 @@ async def test_robots_txt_is_obeyed_and_dead_links_are_reported(explored):
 	broken = [f for f in report.findings if f.kind == 'broken-link']
 	assert any('/missing' in f.title and '404' in f.title for f in broken), _titles(report.findings)
 	assert not any('private' in f.title for f in broken), 'a disallowed link is not fetched either'
+
+
+async def test_a_crashed_page_is_one_high_finding_not_a_list_of_symptoms(explored):
+	report = explored[0]
+	crash = _on(report, '/crash')
+	assert [f.kind for f in crash] == ['page-crash'] and crash[0].severity == 'high', _titles(crash)
+	assert any('cannot read properties' in e for e in crash[0].evidence), crash[0].evidence
 
 
 async def test_a_challenge_page_is_a_wall_not_content(explored):

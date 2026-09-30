@@ -1,0 +1,12 @@
+{
+	"mcpServers": {
+		"retinat": {
+			"command": "uv",
+			"args": ["run", "python", "-m", "browser_use.retinat"]
+		},
+		"browser-use": {
+			"command": "uv",
+			"args": ["run", "python", "-m", "browser_use.mcp"]
+		}
+	}
+}

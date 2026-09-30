@@ -109,6 +109,7 @@ browseruse = "browser_use.cli:main"  # Alias for browser-use
 bu = "browser_use.cli:main"  # Alias for browser-use
 browser = "browser_use.cli:main"  # Alias for browser-use
 browser-use-tui = "browser_use.cli:browser_use_tui_main"  # Deprecated alias for browser-use
+retinat = "browser_use.retinat.server:cli"  # Retinat MCP server: continuous image/video perception for LLMs
 
 [build-system]
 requires = ["hatchling==1.32.0"]

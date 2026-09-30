@@ -161,6 +161,16 @@ of the described architecture are real given this tool's constraints (no
 live mid-task model swap, no reachable non-Claude agent frameworks from this
 environment) versus documented intent, so as not to repeat settled ground.
 
+## Eyes, Retinat and site exploration
+
+Read `AI.md` first. It covers the Retinat MCP server (`browser_use/retinat`), the eyes
+(`browser_use/eyes`: video and audio retina, page scans, touch) and the site explorer
+(`browser_use/explore`). There's also a project skill (`.claude/skills/retinat`) and an agent
+(`.claude/agents/retinat-browser.md`).
+
+Never write Playwright, Puppeteer or Selenium code. Drive the browser through this library or its
+MCP tools.
+
 ## Important Development Constraints
 
 - **Always use `uv` instead of `pip`** for dependency management

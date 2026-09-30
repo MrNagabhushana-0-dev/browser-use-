@@ -1,0 +1,156 @@
+# AI.md: how any AI should use this repository
+
+You are an AI (Claude, Codex, Gemini, Cursor, anything else). This repository lets you **see and
+operate a real browser**. It drives Chrome directly over the Chrome DevTools Protocol, with no
+Playwright, Puppeteer or Selenium. Read this before you act.
+
+## The two MCP servers
+
+| Server | Start it with | Use it for |
+|---|---|---|
+| **retinat**: eyes | `uv run python -m browser_use.retinat` (or `retinat`) | Seeing: a playing video or reel with its sound, any page as drawn (canvas and WebGL included), whole-page scans, feeds, touch, and site-wide bug hunts. |
+| **browser-use**: hands on the DOM | `uv run python -m browser_use.mcp` | Structure: element indices, clicking by index, typing into fields, extracting text, a page's own tools, and tabs. |
+
+Use both together. Retinat tells you what the page *looks and sounds like*, and browser-use tells
+you what it *is made of*. Use whichever answers the question for fewer tokens:
+- **Text, lists or forms:** browser-use is usually cheaper.
+- **Video, canvas, animation, or "does this look right":** only Retinat can answer.
+
+### Register them
+
+**Claude Code.** This repository ships `.mcp.json`, so opening the repository in Claude Code offers both servers. Or add them by hand:
+```bash
+claude mcp add retinat -- uv run --directory /path/to/browser-use- python -m browser_use.retinat
+claude mcp add browser-use -- uv run --directory /path/to/browser-use- python -m browser_use.mcp
+```
+
+**Codex:** add this to `~/.codex/config.toml`:
+```toml
+[mcp_servers.retinat]
+command = "uv"
+args = ["run", "--directory", "/path/to/browser-use-", "python", "-m", "browser_use.retinat"]
+```
+
+**Gemini CLI, Cursor, Claude Desktop and anything else that takes JSON:**
+```json
+{"mcpServers": {"retinat": {"command": "uv", "args": ["run", "--directory", "/path/to/browser-use-", "python", "-m", "browser_use.retinat"]}}}
+```
+
+**Attaching to your own Chrome.** Start Chrome yourself, then pass its debugging address. This gives you the person's profile, logins and home connection:
+```bash
+google-chrome --remote-debugging-port=9222 --user-data-dir=$HOME/.config/chrome-retinat
+uv run python -m browser_use.retinat --cdp-url http://127.0.0.1:9222
+```
+
+Install the extras for full hearing, which adds local speech detection and transcription:
+```bash
+uv sync --all-extras
+```
+Without the extras, you get sight plus heuristic sound labels, and the percepts say so.
+
+## Which Retinat tool to call
+
+| You want to... | Call | Typical cost |
+|---|---|---|
+| Open a page, and know if it refused you | `retinat_open` | text only |
+| See what's on screen now | `retinat_look` | 1 image (about 400–900 tokens) |
+| Understand a whole canvas or scroll-driven page | `retinat_scan` | 1 sheet (about 1–1.5k tokens) |
+| Watch a video or reel, including its sound | `retinat_watch` with `until=bored` | 1 sheet plus a timeline (about 300–900 tokens per item) |
+| Scroll Reels or Shorts like a person | `retinat_browse` with `items=N` | 1 sheet, one row per item |
+| Go to the next or previous feed item | `retinat_next` | text only |
+| Tap, swipe, click, type, press a key | `retinat_tap`, `retinat_swipe`, `retinat_click`, `retinat_type`, `retinat_key` | text only |
+| Know what's playing without an image | `retinat_now` | about 30 tokens |
+| Find everything broken on a site | `retinat_explore` | a report plus 1 sheet |
+
+Token figures are estimates. Images are costed at about one token per 28×28 px patch.
+
+Coordinates for `retinat_tap` and `retinat_click` are viewport CSS pixels. Read them off the
+`retinat_look` image, or take them from browser-use's `browser_get_state`.
+
+## Hard rules
+
+1. **Never write Playwright, Puppeteer or Selenium code**, not even "just to test". Use the MCP
+   tools, or this library in Python:
+   - `browser_use.browser.BrowserSession` for the browser.
+   - `browser_use.human.HumanInput` and `browser_use.human.touch.HumanTouch` for real input.
+   - `browser_use.eyes.Eyes` to watch, look, scan, browse and move to the next item.
+   - `browser_use.explore.Explorer` to audit a site.
+
+   For anything CDP-level, call the typed client directly:
+   `cdp.cdp_client.send.Domain.method(params=..., session_id=...)`.
+
+   The library's only Playwright touchpoint is an optional fallback that *downloads a Chromium
+   binary* when no Chrome is installed. No automation goes through it.
+2. **Don't loop on screenshots.** `retinat_look`, `retinat_scan` and `retinat_watch` already send
+   only the frames that differ. The frames come from the compositor or the video element; they
+   are not screenshot calls.
+3. **Never try to get past a bot wall or CAPTCHA.** Retinat reports walls such as Google's
+   "unusual traffic" page, YouTube's "confirm you're not a bot", and Cloudflare challenges as
+   `BLOCKED: ...`. Tell the person. The way through is their own browser and connection
+   (`--cdp-url`, or `python -m browser_use.cobrowse`), with them completing any challenge
+   themselves.
+4. **Never automate a login.** The person signs in, once, in the visible browser, and the profile
+   keeps the session.
+5. **Submit forms, send messages or buy things only when the person explicitly asked** for that
+   exact action.
+6. **Report honestly.** Say what was measured and what was estimated. Say "blocked" when you
+   were blocked, and "couldn't hear it" when there was no audio track. Never describe a
+   challenge page as the site's content.
+
+## Python in 20 lines
+
+```python
+import asyncio
+from browser_use.browser import BrowserProfile, BrowserSession
+from browser_use.eyes import Eyes
+from browser_use.explore import Explorer, render_markdown
+
+async def main():
+    session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=None))
+    await session.start()
+    await session.navigate_to('https://example.com/')
+    eyes = Eyes(session)
+    await eyes.open()
+    page = await eyes.scan()             # the whole page as drawn, a few keyframes
+    print(page.text)                     # page.image is a JPEG sheet
+    report = await Explorer(session).run('https://example.com/')
+    print(render_markdown(report))
+    await session.kill()
+
+asyncio.run(main())
+```
+
+## Networks that re-sign TLS
+
+Corporate proxies and agent sandboxes present their own CA. If every page fails with
+`ERR_CERT_AUTHORITY_INVALID`, set `BROWSER_USE_PROXY_CA_CERT=/path/to/proxy-ca.pem`. Only that
+key is trusted, and verification stays on for everything else.
+
+The navigation error names this setting when it detects such an environment. There is no
+automatic detection: telling private CAs from public ones automatically was tried, and it
+wrongly trusted public CAs.
+
+## Working on this code
+
+- **Setup:** use `uv`, never `pip`. Use tabs, modern typing, and pydantic v2. See `CLAUDE.md`.
+- **Tests:** `uv run pytest -vxs tests/ci`. Tests use a real browser and `pytest-httpserver`.
+  Nothing is mocked except the LLM, and there are no real remote URLs in tests.
+- **Where things live:**
+  - Vision, video and audio: `browser_use/eyes/`.
+  - Site exploration: `browser_use/explore/`.
+  - Retinat server: `browser_use/retinat/`.
+  - browser-use MCP server: `browser_use/mcp/server.py`.
+  - Real input: `browser_use/human/`.
+- **Measured results and limits:** these are in `docs/agent-notes/findings-log.md`. Read them
+  before claiming anything works on a site.
+
+## Known limits
+
+- **Blocked networks:** YouTube and Google refuse datacenter IP ranges before any browser logic
+  runs. Use the person's machine.
+- **Protected video:** DRM video yields no pixels. Cross-origin video without CORS yields no
+  pixels either; this is detected and said.
+- **Missing codecs:** Chromium builds without H.264 can't play Instagram. Use Google Chrome.
+- **Sound labels:** heuristic speech/music labels are unreliable on music. The optional voice
+  model decides speech.
+- **Wheel and arrow-key fallbacks** don't move CSS scroll-snap feeds.

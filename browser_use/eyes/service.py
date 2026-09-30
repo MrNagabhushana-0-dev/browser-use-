@@ -32,6 +32,7 @@ keyboard if the feed did not move.
 """
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -41,7 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from browser_use.eyes import asr, hearing, sight
-from browser_use.eyes.percept import ItemPercept, Keyframe, Percept, assemble
+from browser_use.eyes.percept import ItemPercept, Keyframe, Percept, assemble, estimate_image_tokens
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
 from browser_use.human.input import HumanInput
 from browser_use.human.touch import HumanTouch
@@ -103,6 +104,7 @@ class Eyes:
 		self.now_path = None if now_path is False else (now_path or default_now_path())
 		self._last_now = 0.0
 		self._items_seen = 0
+		self._pages = None
 
 	# -- lifecycle -----------------------------------------------------------------------
 
@@ -113,6 +115,8 @@ class Eyes:
 		return state
 
 	async def close(self) -> None:
+		if self._pages is not None:
+			await self._pages.stop()
 		await self.retina.stop()
 
 	# -- watching ------------------------------------------------------------------------
@@ -291,8 +295,65 @@ class Eyes:
 		return assemble(items, head, detail)
 
 	async def look(self, detail: Detail = 'look', seconds: float = 2.0) -> Percept:
-		"""What is on screen now: a short watch, one keyframe per shot at most."""
-		return await self.watch(seconds=seconds, until='time', min_seconds=seconds, detail=detail, keyframes=2)
+		"""What is on screen now. A playing video is watched briefly; otherwise the page itself is
+		shown as the compositor draws it (canvas and WebGL included), in one frame."""
+		if not self.retina.running:
+			await self.open()
+		await self.retina.wait_for_data(0.6)
+		if self.retina.attended.get('vid'):
+			return await self.watch(seconds=seconds, until='time', min_seconds=seconds, detail=detail, keyframes=2)
+		watcher = self._page_watcher()
+		await watcher.start()
+		await asyncio.sleep(0.5)
+		jpeg = watcher.latest()
+		url = self.retina.state.get('url', '')
+		text = f'👁 no video playing on {url[:120]}; this is the page as drawn now (a compositor frame, not a screenshot call)'
+		if not jpeg:
+			return Percept([], text + '\n    (no frame arrived)', None)
+		from PIL import Image
+
+		with Image.open(io.BytesIO(jpeg)) as img:
+			size = img.size
+		tokens = estimate_image_tokens(*size)
+		text += f'\n~{tokens + len(text) // 4} tokens (frame {size[0]}x{size[1]} ~{tokens}; estimates)'
+		return Percept([], text, jpeg, size, tokens, len(text) // 4)
+
+	def _page_watcher(self):
+		from browser_use.eyes.page import PageWatcher
+
+		if self._pages is None:
+			self._pages = PageWatcher(self.browser_session, self.hand)
+		return self._pages
+
+	async def scan(self, max_screens: int = 25, keyframes: int = 6) -> Percept:
+		"""Scroll the whole page like a reader while watching the rendered frames, and return the
+		few that cover everything seen - canvas, WebGL and scroll-driven animation included."""
+		from browser_use.eyes.page import scan_sheet
+
+		watcher = self._page_watcher()
+		result = await watcher.scan(max_screens=max_screens, keyframes=keyframes)
+		sheet = scan_sheet(result)
+		vh = max(1, result.viewport[1])
+		lines = [
+			f'👁 scanned {self.retina.state.get("url", "")[:120]}: {result.page_height / vh:.1f} screens tall, '
+			f'scrolled {result.screens} times in {result.seconds:.1f}s, {len(result.frames)} frames seen',
+			f'    sheet: {len(result.keyframes)} frames at '
+			+ ', '.join(f'{k.scroll_y / vh:.1f}' for k in result.keyframes)
+			+ f' screens down (cover {result.coverage:.0%} of what was seen)',
+		]
+		if result.moving:
+			lines.append(
+				'    moves on its own (animation/canvas) at '
+				+ ', '.join(f'{y / vh:.1f}' for y in result.moving[:8])
+				+ ' screens down'
+			)
+		image, size, tokens = (
+			(sheet[0], (sheet[1], sheet[2]), estimate_image_tokens(sheet[1], sheet[2])) if sheet else (None, None, 0)
+		)
+		text = '\n'.join(lines)
+		if size:
+			text += f'\n~{tokens + len(text) // 4} tokens (sheet {size[0]}x{size[1]} ~{tokens}; estimates)'
+		return Percept([], text, image, size, tokens, len(text) // 4)
 
 	async def _hold(self) -> None:
 		try:

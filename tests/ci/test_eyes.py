@@ -544,3 +544,46 @@ async def test_two_tabs_each_see_only_their_own_video(session, site):
 	finally:
 		await second.close()
 		await first.close()
+
+
+# -- pages drawn on canvas: no <video>, nothing useful in the DOM -------------------------
+
+CANVAS_PAGE = """<!doctype html><html><body style="margin:0;background:#000">
+<canvas id="c" width="800" height="500" style="width:100%;height:100vh;display:block"></canvas>
+<section style="height:100vh;background:#1d4ed8"></section><section style="height:100vh;background:#16a34a"></section>
+<script>
+const g = document.getElementById('c').getContext('2d'); let t = 0;
+(function frame() { t += 1; g.fillStyle = `hsl(${(t * 4) % 360}, 90%, 50%)`; g.fillRect(0, 0, 800, 500); requestAnimationFrame(frame) })();
+</script></body></html>"""
+
+
+@pytest.fixture(scope='module')
+def canvas_site():
+	server = HTTPServer()
+	server.start()
+	server.expect_request('/canvas').respond_with_data(CANVAS_PAGE, content_type='text/html')
+	yield server
+	server.stop()
+
+
+async def test_look_shows_a_canvas_page_as_drawn_when_nothing_is_playing(eyes, session, canvas_site):
+	await _open(eyes, session, canvas_site.url_for('/canvas'))
+	p = await eyes.look()
+	assert p.image and 'no video playing' in p.text, p.text
+	img = Image.open(io.BytesIO(p.image)).convert('RGB')
+	r, g, b = img.resize((1, 1)).getpixel((0, 0))  # type: ignore[misc]
+	assert max(r, g, b) > 100, 'the canvas colour is in the frame, not a blank page'
+
+
+async def test_scan_covers_the_whole_page_and_notices_what_moves_on_its_own(eyes, session, canvas_site):
+	await _open(eyes, session, canvas_site.url_for('/canvas'))
+	p = await eyes.scan(max_screens=6, keyframes=4)
+	assert p.image and 'screens tall' in p.text, p.text
+	assert '3.0 screens tall' in p.text, p.text
+	assert 'moves on its own' in p.text, 'the animating canvas at the top is noticed'
+	sheet = Image.open(io.BytesIO(p.image)).convert('RGB')
+	strip = sheet.resize((4, 1))
+	colours: list[tuple[int, int, int]] = [strip.getpixel((i, 0)) for i in range(4)]  # type: ignore[misc]
+	assert any(c[2] > 150 and c[0] < 90 for c in colours) and any(c[1] > 120 and c[0] < 90 for c in colours), (
+		f'the blue and green sections further down are on the sheet: {colours}'
+	)

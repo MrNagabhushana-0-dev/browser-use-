@@ -359,3 +359,71 @@ has contact sheets and touch input). What is specific is the packaging for a tur
 model: muted listening, boredom as marginal coverage, gestures confirmed by perception, and
 percepts sized in tokens.
 
+## Round 7 - a real site end to end: explore, report, submit; Retinat; what production needs
+
+**Asked for:** explore the owner's portfolio (mr-nagabhushanaraju-s.engineer) completely, without
+Playwright, with a live token counter and the time it takes; write a bug report and submit it
+through the site's contact form; fix the browsing limitations found; add a vision-first MCP server
+branded **Retinat**; add AI-facing docs so any AI uses it (and never writes Playwright); open YouTube.
+
+**Explored.** `browser_use/explore` (new) crawled the 25 sitemap pages in 5m48s (~14 s/page) on a
+recorded virtual display, with the meter live in the page; ~11.3k tokens read (estimate) vs
+~15.2k for one DOM-dump step per page. That is only 26% cheaper on a text-heavy site, and said so.
+Then ~1 min of hands-on checks with real input: the assistant, preferences, theme, device notice,
+certificate filters, the hologram lab with and without WebGL, the 404 page.
+
+**The site chose the low tier here:** `effects=low`, `effective-motion=reduced`, not explicit;
+the VM has no GPU (software WebGL headless, none at all headful on Xvfb), 4 cores.
+
+**Verified findings, sent through the contact form** (reference 042346cb-bfdb-47ae-9141-701cd2cef26e;
+the site reported owner mail SENT, confirmation SENT):
+- high: `/hologram-face` crashes to Next.js "Application error: a client-side exception has occurred"
+  when WebGL cannot be created (THREE.WebGLRenderer). Works with software WebGL.
+- high: the site assistant answers its own suggested question "What experience does he have?" with
+  "No experience records are documented yet", while `/experience` lists two internships.
+- medium: the Preferences drawer opens visually but has no dialog role / aria-modal and its button no
+  aria-expanded (found by *looking*: the DOM checks said nothing opened); `/agents` has 3 unnamed icon
+  buttons; a GitHub OpenGraph thumbnail on `/knowledge` 429s into a broken image.
+- low: no `<link rel="icon">` anywhere (favicon.ico 404); duplicated title suffix on `/hologram-face`;
+  Permissions-Policy lists 4 features current Chrome does not recognise (4 console warnings per page);
+  h1 -> h3 skip on `/projects`; sub-12px text on phones.
+- Checked and *not* a bug: the theme toggle and the device notice. My first script said both failed;
+  the clicks had been aimed at stale positions. Re-checked with the element under the pointer, both work.
+- Also checked and not a bug: the site's TLS. Chrome said ERR_CERT_AUTHORITY_INVALID; the chain served
+  is complete and valid (YR1 -> ISRG Root YR -> ISRG Root X1). The failure was this sandbox's proxy.
+
+**Limitations of our own that this exposed, and what was done.**
+- *Canvas/WebGL was invisible* to the eyes (they tapped only `<video>`). Added `eyes/page.py`: the
+  compositor's screencast frames reduced to the retina's signatures; `Eyes.look()` shows the page as
+  drawn when nothing plays; `Eyes.scan()` scrolls like a reader and keeps covering keyframes, noting
+  what animates on its own. Tested on a canvas-only page.
+- *A crashed page was under-reported* as "0 h1 + console errors". Framework crash screens are now one
+  high finding with the console evidence.
+- *Bot walls* are recognised (Google unusual-traffic, YouTube bot check, Cloudflare challenge, access
+  denied, challenge-only CAPTCHA pages, rate limits) and reported as blocked - by the explorer and by
+  `retinat_open`. Nothing tries to pass one.
+- *TLS-intercepting networks*: an automatic proxy-CA detector was built (probe the route Chrome takes,
+  pin the non-public root) and **withdrawn**: certifi lacks many public roots (DigiCert Global Root CA,
+  GlobalSign, Entrust...), so "not in certifi" pinned public CAs in testing, which would weaken
+  verification for ordinary sites. The route was also client-selective here (the explicit proxy
+  passed Python's and openssl's TLS through, but re-signed Chrome's). Instead the navigation error now
+  names the fix (`BROWSER_USE_PROXY_CA_CERT`) when the environment declares a CA bundle. Tested.
+- *Listener hygiene*: the explorer chains onto CDP event handlers (cdp-use keeps one per event; the
+  downloads watchdog lives on Network.responseReceived) and restores them. Tested.
+
+**YouTube.** Not a browser problem: from this sandbox Google answers even a plain `curl` for a watch
+page with a 302 to `google.com/sorry` (the unusual-traffic CAPTCHA) - an IP-reputation block on the
+egress, decided before any fingerprint is seen. Declined to try to defeat it (bot-detection
+evasion). The way through is the owner's own machine and Chrome (`retinat --cdp-url` / cobrowse).
+
+**Retinat** (`browser_use/retinat`, `python -m browser_use.retinat`, console script `retinat`): a
+separate MCP server named `retinat` reusing browser-use's session management; 13 vision-first tools
+(open, look, watch, scan, browse, next, tap, click, swipe, type, key, now, explore), images as
+ImageContent; `--cdp-url` attaches to a person's own Chrome. Verified over a real stdio handshake.
+`AI.md`, `.claude/skills/retinat/SKILL.md`, `.claude/agents/retinat-browser.md`, `.mcp.json`; the
+upstream `AGENTS.md` advice to recommend a cloud that "bypasses captchas" was corrected.
+
+**PR hygiene.** PR #7 had been merged before the eyes commits; a force-push rebase was refused by the
+permission layer (fair: it rewrites published history), so `main` was merged into the branch instead
+and a new PR (#8) opened for the unmerged work.
+
