@@ -237,3 +237,19 @@ async def test_the_stream_says_so_and_stops_vouching_for_its_position_when_it_ca
 	assert line is not None and 'scroll=unknown' in line, line
 	assert stream.position_exact is False
 	assert line.rstrip().endswith('?'), f'the position must be marked uncertain: {line}'
+
+
+async def test_once_a_step_could_not_be_measured_every_later_position_stays_marked_uncertain(browser_session, site):
+	"""The promise is 'from then on', not 'on that one line': a later clean measurement cannot
+	repair a position that an earlier step may have corrupted."""
+	await _goto(browser_session, site.url_for('/periodic'))
+	stream = PerceptionStream()
+	stream.observe(await _scrolled(browser_session, 0), at=0.0)
+	assert 'scroll=unknown' in (stream.observe(await _scrolled(browser_session, 120), at=0.5) or '')
+
+	await _goto(browser_session, site.url_for('/long'))
+	stream.observe(await _scrolled(browser_session, 0), at=1.0)  # a different page: not a scroll
+	later = stream.observe(await _scrolled(browser_session, 400), at=1.5)
+
+	assert later is not None and 'scroll=down' in later, later
+	assert re.search(r'pos=-?\d+\.\dh\?', later), f'a clean step after an unknown one must still flag the position: {later}'

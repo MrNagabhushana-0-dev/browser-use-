@@ -32,6 +32,7 @@ dist/
 *.jsonl
 !docs/agent-notes/workflow-results/*.json
 !docs/agent-notes/workflow-results/*.jsonl
+!docs/agent-notes/demos/*.txt
 *.log
 *.bak
 

@@ -184,3 +184,77 @@ but `rect()` still scrolls the page to centre the video, and the video is left p
 confident-wrong-answer paths, because the author only wrote inputs the author imagined. The
 review is the part that found them.
 
+## Round 5 - scrolling and real-time context (asked for after the video demo missed it)
+
+The owner's complaint was fair: the first demo showed a cursor click and a video watched by
+seeking, not scrolling and not real-time perception. Rebuilt around what was actually asked.
+
+**Gap found.** `PerceptionStream`'s pan detector (`perceive._pan`) only tests left/right shifts
+along one row, because it was built for side-scrolling games. Vertical page scrolling was
+invisible to it, and a fast scroll changes over 55% of cells, which got reported as a scene cut.
+
+**Built.** `perceive.scroll_estimate` (row-profile matching over the central columns, result as a
+fraction of the screen), wired into the stream as `scroll=down 0.52h pos=2.3h new=text`, plus
+`examples/features/scroll_and_perceive.py` (human wheel input, live HUD, recorded). No model is
+involved in the live stream.
+
+**What the tests found in my own code** (each re-verified, each mutation-checked):
+- A first version returned a confident wrong number on sparse content. The fix was a uniqueness
+  check against every rival offset, including standing still.
+- That check failed on truly periodic content because its ceiling was a *ratio* of the best
+  error, which collapses to zero for a near-perfect match and rules out rivals that fit exactly
+  as well. Needed an absolute noise floor. Found by a failing test, not by thought.
+- A guard ("twice as good as no movement") survived every mutant, was shown to be subsumed by the
+  uniqueness check (offset 0 is one of the rivals), and was deleted rather than kept untested.
+- My first "identical page" test passed for the wrong reason (no change at all, not ambiguity).
+
+**The finding that mattered most: silent drift.** I added a ground-truth check to the demo
+(page `scrollY` vs the stream's inferred position). Before the uncertainty work, repeated runs on
+a real Wikipedia page gave error 0.00-0.03h in most runs and **1.3-1.9 screens of silent drift** in
+some: near the bottom (reference lists, category links) rows repeat, the estimator correctly
+refused to guess, and the stream said nothing while its position went stale. Fixed by returning
+`(fraction, ambiguous)`, emitting `scroll=unknown`, and marking the position `?` from then on.
+After the fix, 6 real runs: 5 within 0.01h (about 1% of a screen), 1 hit an unmeasurable step
+and reported itself uncertain (0.18h off). n=6 on one site; not a benchmark.
+
+**Limits, stated plainly.**
+- The `new=text|media|panel|region` label for the strip that scrolled into view comes from the
+  existing coarse region labeller; I did not verify it per strip, and the demo's values
+  (`panel` most of the time) say little. Treat as a hint.
+- What the page *says* cannot come from this. The contact sheet at this size shows structure
+  (section order, image vs text) but not readable body text; reading text from pixels costs real
+  image tokens (~1,200 per screen), and DOM extraction is far cheaper and exact for text pages.
+  Pixels are for what the DOM cannot give you (video, canvas, games).
+- Horizontal scrolling, sticky-header-heavy pages, infinite scroll and zoom are untested.
+
+## Round 5 addendum - the test suite and the machine
+
+**The "full suite" results earlier in this session were not full.** The project's pytest
+`addopts` contains `-x`, so every run stopped at its first failure; everything alphabetically
+after it never ran, including all my new vision tests in suite context. A genuinely complete run
+(`-o addopts` without `-x`): 1436 passed, 2 failed, 1 error, none in the vision code.
+
+**Three of my own earlier tests were fragile in the same two ways:**
+1. `browser_use/mcp/server.py` runs `logging.disable(logging.CRITICAL)` at *import time*, and
+   pytest imports every test module at collection, so in a full run all logging is off before
+   any test starts. Tests that read log output (`test_crash_watchdog_health_check`,
+   `test_next_action_summary_logging`) passed alone and failed in the suite. Reproduced
+   deterministically (import `browser_use.mcp.server`, then run the test alone), fixed by
+   re-enabling logging for the capture only. The import-time side effect itself is left alone
+   (out of scope) and is worth an issue: importing a module should not silence a process.
+2. An `Agent` owns an `EventBus` whose `_run_loop` task outlives `session.kill()` and
+   `agent.close()`; only `Agent.run()` stops it (service.py, end of run). Tests that build an
+   Agent or call `step()` directly left it alive and the event loop could not shut down at
+   module teardown: a 60-300s teardown error although every test passed. I first blamed the
+   shared keep_alive session; that was wrong (disproved by giving the file its own session, then
+   by listing the live tasks). Fixed with a fixture that stops the agent's bus.
+   Not audited: other tests that build Agents without `run()`; `grep eventbus.stop tests/ci`
+   shows only one other file does it.
+
+**The machine ran out of disk, and it was the library.** Crashed/flaky runs late in the round
+were `ENOSPC`. `/tmp` held **25,369** `browser-use-*` directories (per-session downloads and
+temp profiles) plus 111 UUID profile directories, tens of GB in total, left by repeated suite
+runs. Freeing them took the disk from 100% used to 27%. This is a real leak in
+`BrowserSession` (temp dirs are not removed on kill) and is not fixed in this PR; it is the
+kind of thing that surfaces as "the agent crashed" in a long-lived deployment.
+

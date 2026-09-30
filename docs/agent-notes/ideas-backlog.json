@@ -78,6 +78,20 @@
       "novelty_assessment": "NOT NOVEL as individual techniques: scene-cut detection by thumbnail/histogram differencing (PySceneDetect, ffmpeg scdet), binary search for a change point, storyboard / contact-sheet thumbnails, and canvas drawImage for frame access are all long-established. What is specific here is the COMBINATION aimed at LLM token cost - in-page signatures so the search moves no pixels, best-first refinement that stops at the keyframe budget instead of locating every cut, a min-shot filter, automatic fall-back to screenshots on canvas taint, and a labelled token ledger. That is an engineering recombination; I am not asserting it is patentable or unpublished, and I have not done a prior-art search. Do not cite it as an invention without one.",
       "status": "prototyped",
       "status_reason": "Prototype is working and tested on ground truth plus one real video; it has not been benchmarked against an alternative or across videos, so it does not meet 'benchmarked'."
+    },
+    {
+      "id": "vertical-scroll-from-pixels",
+      "title": "Real-time page scroll distance and position from pixels alone, with self-reported uncertainty",
+      "hypothesis": "A perception stream can report how far and which way a page scrolled, and keep a running page position, from consecutive screencast frames with no DOM access and no model, in ~10 tokens per tick, and can say when it does not know instead of drifting silently.",
+      "originating_agent": "orchestrator (Claude Sonnet 5.5), prompted by the owner's request to show scrolling with real-time context; gap found by reading perceive._pan",
+      "supporting_evidence": "Real Wikipedia page, human-style wheel scrolling, ground truth read from window.scrollY: 6 runs, 5 within 0.01h (about 1% of a screen), 1 with one unmeasurable step that the stream flagged uncertain (0.18h off). Before the uncertainty reporting, runs of the same scenario silently lost 1.3-1.9 screens. Unit-level: known-shift and sideways-sprite and repeating-content and weak-match cases, mutation-checked.",
+      "estimated_upside": "Token figures in the demo HUD are estimates (w*h/750 for the screenshot baseline, len/4 for text); they show a stream of ~300-900 tokens against ~80k for a screenshot per tick, which is a comparison against a baseline nobody sensible would use. The honest value is not the ratio; it is knowing where you are in a page in real time when the DOM is unavailable.",
+      "implementation_cost": "small - ~100 lines in perceive.py and a few in stream.py, pure Python, no new dependency (numpy is only an optional extra).",
+      "dependencies": "Pillow; a screencast of the page.",
+      "experiment_required": "NOT DONE: (1) more sites and page types (sticky-header-heavy, infinite scroll, horizontal, zoomed, dark, image-only); (2) compare with an optical-flow / phase-correlation library on accuracy and CPU; (3) verify the new= strip labels against ground truth; (4) long-run drift behaviour over hundreds of steps; (5) behaviour when screencast frames are dropped under load (partly seen: produces 'unknown').",
+      "novelty_assessment": "NOT NOVEL. Row-profile / block matching to detect vertical translation is decades old (scroll detection in remote-desktop and screen-sharing codecs, motion estimation in video coding, image stabilisation, phase correlation). What is specific here is only the packaging: a cumulative page position in screens that marks itself uncertain after an unmeasurable step, as a cheap text line for an agent. That is engineering, not an invention, and I have not searched prior art.",
+      "status": "prototyped",
+      "status_reason": "Works on one site in 6 runs; needs the experiments above before 'benchmarked'."
     }
   ]
 }
