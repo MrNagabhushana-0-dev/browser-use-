@@ -44,6 +44,11 @@ def _capture_browser_use_logs(handler: logging.Handler):
 	"""
 	root = logging.getLogger('browser_use')
 	previous_level = root.level
+	# `import browser_use.mcp.server` runs logging.disable(logging.CRITICAL) at import time, and pytest
+	# imports every test module at collection, so in a full run all logging is already off before this
+	# test starts. Re-enable it for the duration of the capture and put it back exactly as found.
+	previous_disable = logging.root.manager.disable
+	logging.disable(logging.NOTSET)
 	root.addHandler(handler)
 	root.setLevel(logging.DEBUG)
 	try:
@@ -51,6 +56,7 @@ def _capture_browser_use_logs(handler: logging.Handler):
 	finally:
 		root.removeHandler(handler)
 		root.setLevel(previous_level)
+		logging.disable(previous_disable)
 
 
 @pytest.fixture
