@@ -12,8 +12,8 @@ Nothing is implemented from a proposal alone. It moves:
 and `accepted` still requires owner approval before it merges into default
 behavior — cooking on a branch is cheap; landing it is a decision.
 
-Entries live in the JSON; as of this write-up there are six: four proposals derived
-from reading a competitor's public writeup, and two built-and-tested prototypes
-(`video-seek-bisect-contact-sheet` and `vertical-scroll-from-pixels`, both status
-`prototyped`, each with an explicit not-novel-as-individual-techniques assessment and the
+Entries live in the JSON; as of this write-up there are seven: four proposals derived
+from reading a competitor's public writeup, and three built-and-tested prototypes
+(`video-seek-bisect-contact-sheet`, `vertical-scroll-from-pixels` and
+`browser-eyes-retina`, all status `prototyped`, each with an explicit not-novel-as-individual-techniques assessment and the
 benchmarks still owed).

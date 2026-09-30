@@ -258,3 +258,98 @@ runs. Freeing them took the disk from 100% used to 27%. This is a real leak in
 `BrowserSession` (temp dirs are not removed on kill) and is not fixed in this PR; it is the
 kind of thing that surfaces as "the agent crashed" in a long-lived deployment.
 
+## Round 6 - the browser as eyes and ears (browser_use/eyes)
+
+**Asked for:** the browser as the agent's eyes: no screenshot loop, no HTML dumps, short-video
+feeds (Reels/Shorts) "streamed into the model" with their sound, human touch scrolling, low
+tokens and latency.
+
+**What is physically possible, stated first.** Claude takes text and images per turn; there
+is no continuous video or audio input. So the build is the closest real thing: perception runs
+*continuously in the page* at zero token cost, and the model receives compressed *percepts*
+when it asks (`eyes_watch`, which can return early on a salient event), plus one line of text
+injected into every turn by a Claude Code hook without asking. `hold=True` pauses the video
+while the model thinks, so nothing plays unseen. That is event-gated, turn-based perception,
+not streaming, and every tool description says what it is.
+
+**Built.**
+- `retina.js` in an *isolated world* (page scripts cannot see or tamper with it): picks the
+  video a person would look at (largest, playing), taps its decoded frames with
+  `requestVideoFrameCallback` (16x16 luma + 4x4 colour per sample, a ring of JPEG keyframes
+  drawn from the element, never a screenshot) and its audio with `captureStream()` into an
+  AudioWorklet (per 22 ms: loudness, ZCR, centroid, flux, flatness, pitch peak, 24-band
+  spectrum; optional 16 kHz PCM). Pushed to Python over a CDP binding ~5x a second.
+- `sight.py`: adaptive cuts (floor + MADs), loops vs rewinds, motion, colourfulness (Hasler &
+  Susstrunk) and hues; keyframes by greedy facility location (monotone submodular, (1-1/e)),
+  whose marginal gain is also the "bored" test.
+- `hearing.py`: change points on the band spectrum (Foote novelty), then silence / tone /
+  noise / beats / music / speech per stretch, onsets, tempo; `asr.py`: Silero VAD decides
+  speech, Whisper tiny.en transcribes (optional extra, local, CPU).
+- `percept.py`: one sheet (keyframe row + spectrogram strip per item, one time axis) + text.
+- `human/touch.py`: CDP touch flicks on a truncated minimum-jerk profile (lifts off while
+  moving), taps, long-press; `Eyes.next()` flicks, then *confirms by sight* that a different
+  item settled, falling back to a longer flick, the wheel, the keyboard.
+- MCP: `eyes_watch`, `eyes_browse`, `eyes_next`, `eyes_tap`, `eyes_swipe`, `eyes_now`
+  (images as `ImageContent`); `eyes/hook.py` for UserPromptSubmit/PostToolUse context.
+
+**Measured.**
+- Synthetic ground truth through the real pipeline: cuts at 3.07/6.07/9.07/12.07 s for true
+  3/6/9/12 (one 10 fps sample late); tone 441 Hz for 440; beats 120 bpm for 120; noise and
+  silence where they are. CI asserts these (`tests/ci/test_eyes.py`, 19 tests).
+- Real public-domain clips (Duck and Cover 1951, Apollo 11 launch 1969, Big Buck Bunny,
+  LibriVox Sun Tzu), served as a *local* muted vertical feed: all five heard while muted;
+  transcripts correct to the ear ("T minus 15 seconds... ignition sequence start", the Bert
+  the Turtle song, the Sun Tzu passage); the ignition flash found as a 0.3 s bright shot.
+  ~100 s of video watched in ~2.5k tokens of percept (estimate, 28 px patch rule).
+- Flick reliability: 16/16 one-item moves on a scroll-snap feed; after the aim fix below,
+  12/12 runs of the movement tests (36 executions) against 3/12 failing before.
+
+**Corrections to my own work, each found by a test or a measurement.**
+- My first muted-audio probe said a muted video's captured audio is silent. The research
+  agent read Chromium's source and said the opposite; a careful re-test (unmuted, muted,
+  volume 0) showed -21 dB in all three. The probe was wrong, not the source.
+- The heuristic speech/music split fails on real pumping electronic music (it shares the
+  4 Hz envelope). Measured HZCRR 0.21 (speech) vs 0.11 (music) per 1.5 s window, with
+  overlap; I did not tune thresholds to one clip. Speech is decided by the VAD when the extra
+  is installed and every heuristic-only percept says so.
+- A feed rewinding a reel when it scrolls into view was reported as a loop; now a jump back
+  is a loop only from near the end, a rewind otherwise, and ignored in the first second.
+- `next()` declared success at the first change of attention, i.e. mid-scroll; now it waits
+  for the new item to stay attended 0.6 s.
+- Intermittent "feed did not move": instrumented, the flick's touches all arrived and the
+  container scrolled then snapped back; the stroke was aimed at the reel's rect captured
+  mid-scroll and got clamped against the screen edge. Now aimed at mid-screen like a thumb.
+
+- Under CPU load the tests failed in new ways, and three fixes came from measuring them:
+  (1) audio hops were stamped with media time on *arrival*, so bursts piled onto one instant
+  and smeared change points; they are now stamped from the audio clock minus the delivery
+  lag. (2) A fast flick could fling a CSS scroll-snap feed past the next item; `next()` now
+  reads the videos' document order and flicks back once if it skipped. (3) Touch samples
+  are taken at real elapsed time, so an oversleeping loop cannot send two stale points back
+  to back. Stamping touch events with planned `timestamp`s was tried first and made it
+  **worse** (3-4 failures per run); reverted.
+- A click train looked like a tone once silent hops were ignored for steadiness; a tone now
+  also has to be continuous. Revisiting a reel created a new item; identity is now element
+  plus source.
+
+**Limits, plainly.**
+- Instagram and YouTube were **not** tested: Instagram needs your login; YouTube served a
+  bot check to this sandbox earlier; and this Chromium build cannot decode H.264, which
+  Instagram serves (VP9/WebM plays). The demo feed is local, with real clips.
+- DRM (EME) video gives no pixels; cross-origin video without CORS taints the canvas
+  (detected and said, no picture); videos in iframes are not attended.
+- Wheel and ArrowDown do **not** move a CSS scroll-snap feed here (measured), so the fallbacks
+  only help feeds with their own wheel/key handlers.
+- 16x16 grids see composition, not detail; on-screen text is only readable on the sheet.
+- The VAD called 0.7 s of Big Buck Bunny (no dialogue) speech. Whisper tiny.en is
+  English-only; set `BROWSER_USE_EYES_ASR_MODEL=base` for other languages.
+- Screen recordings from the Xvfb recorder have no audio track.
+- One unexplained failure in 8 early full-suite runs predates the aim fix; not seen since.
+
+**Not novel.** Standard web APIs (rVFC, captureStream, AudioWorklet), facility-location
+keyframe selection (video summarization literature), Scheirer-Slaney / Lu et al. audio
+features, Foote novelty, minimum-jerk motion, contact sheets (vercel-labs/agent-browser also
+has contact sheets and touch input). What is specific is the packaging for a turn-based
+model: muted listening, boredom as marginal coverage, gestures confirmed by perception, and
+percepts sized in tokens.
+

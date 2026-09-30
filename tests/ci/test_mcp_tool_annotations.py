@@ -21,6 +21,7 @@ from browser_use.mcp.server import BrowserUseServer
 EXPECTED_READ_ONLY_TOOLS = frozenset(
 	{
 		'browser_get_state',
+		'eyes_now',  # reports the retina's latest reading; touches neither page nor playback
 		'browser_get_html',
 		'browser_screenshot',
 		'browser_list_tabs',

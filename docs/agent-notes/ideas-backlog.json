@@ -92,6 +92,20 @@
       "novelty_assessment": "NOT NOVEL. Row-profile / block matching to detect vertical translation is decades old (scroll detection in remote-desktop and screen-sharing codecs, motion estimation in video coding, image stabilisation, phase correlation). What is specific here is only the packaging: a cumulative page position in screens that marks itself uncertain after an unmeasurable step, as a cheap text line for an agent. That is engineering, not an invention, and I have not searched prior art.",
       "status": "prototyped",
       "status_reason": "Works on one site in 6 runs; needs the experiments above before 'benchmarked'."
+    },
+    {
+      "id": "browser-eyes-retina",
+      "title": "The browser as the agent's eyes and ears: in-page retina, event-gated percepts, verified touch",
+      "hypothesis": "An agent can follow short-form video (picture and sound, muted or not) for a few hundred tokens per item, with no screenshots and no HTML, by measuring continuously inside the page and sending compressed percepts only when asked or when something salient happens.",
+      "originating_agent": "orchestrator (Opus 5.5), from the owner's request; research sub-agent for streaming-video and capture-API prior art",
+      "supporting_evidence": "Ground-truth clip through the real browser: cuts within one 10 fps sample, tone 441 Hz for 440, 120 bpm beats, noise and silence located. Real public-domain clips in a local muted feed: all heard, transcripts correct. ~2.5k estimated tokens for ~100 s of video across 5 reels. 19 CI tests.",
+      "estimated_upside": "Against a screenshot a second at 1280x800 (~1.3k tokens each by the 28 px patch rule) 100 s is ~130k tokens; the percepts were ~2.5k. That baseline is naive; against Gemini-style native video at ~300 tokens/s it is ~30k. The real gain is qualitative: sound and words, cuts, loops, and when to move on, which screenshots do not give at any price.",
+      "implementation_cost": "done: ~2k lines (retina.js ~500, sight/hearing/percept/service/asr/hook ~1.3k, touch ~200) plus tests.",
+      "dependencies": "numpy; optional faster-whisper (Silero VAD bundled, Whisper model downloaded on first use).",
+      "experiment_required": "NOT DONE: (1) Instagram/YouTube/TikTok with a real login in Chrome with proprietary codecs; (2) accuracy of speech/music labels on a labelled set (e.g. GTZAN speech-music, MUSAN) instead of a handful of clips; (3) agent-level A/B: does a Claude session answer questions about reels better and cheaper with eyes_* than with browser_screenshot; (4) per-strip OCR-free readability of on-screen text vs sheet size; (5) CPU cost of the retina on a low-end laptop.",
+      "novelty_assessment": "NOT NOVEL as techniques (see findings-log Round 6). Specific packaging for a turn-based model; no prior-art search done beyond the research agent's survey.",
+      "status": "prototyped",
+      "status_reason": "Works end to end on generated and real clips in this sandbox; untested on the target sites."
     }
   ]
 }
