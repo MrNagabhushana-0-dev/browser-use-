@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 
 # How long ffmpeg gets to write its index after being asked to quit.
 _FINALIZE_TIMEOUT = 15.0
-_DISPLAY_SOCKET_DIR = Path('/tmp/.X11-unix')
+_DISPLAY_START_TIMEOUT = 10.0
+# Long enough for ffmpeg to reject an unreachable display, which it does immediately.
+_STARTUP_GRACE = 0.4
 
 
 class RecorderUnavailable(RuntimeError):
@@ -43,40 +45,62 @@ def _ffmpeg() -> str:
 		raise RecorderUnavailable(f'No ffmpeg binary found ({type(e).__name__}: {e})') from e
 
 
-def _free_display() -> int:
-	for number in range(99, 140):
-		if not (_DISPLAY_SOCKET_DIR / f'X{number}').exists() and not Path(f'/tmp/.X{number}-lock').exists():
-			return number
-	raise RecorderUnavailable('No free X display number between :99 and :139')
+class RecordingFailed(RuntimeError):
+	"""ffmpeg could not record, or finished without producing a file."""
+
+
+async def _read_display_number(read_fd: int) -> int:
+	"""The display number Xvfb chose, written to a pipe once the server is ready to accept clients."""
+	loop = asyncio.get_running_loop()
+	reader = asyncio.StreamReader()
+	transport, _ = await loop.connect_read_pipe(
+		lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(read_fd, 'rb', buffering=0)
+	)
+	try:
+		line = await asyncio.wait_for(reader.readline(), timeout=_DISPLAY_START_TIMEOUT)
+	except TimeoutError as e:
+		raise RecorderUnavailable('Xvfb did not report a display in time') from e
+	finally:
+		transport.close()
+	if not line.strip():
+		raise RecorderUnavailable('Xvfb exited before opening a display')
+	return int(line)
 
 
 @contextlib.asynccontextmanager
 async def virtual_display(width: int = 1280, height: int = 800) -> AsyncIterator[str]:
-	"""Run an Xvfb display for the duration of the block and yield its name, e.g. ':99'."""
+	"""Run an Xvfb display for the duration of the block and yield its name, e.g. ':99'.
+
+	Xvfb picks the display number itself (`-displayfd`) and reports it only once it is ready.
+	Choosing a free number here and starting Xvfb on it is a race: two callers at the same
+	moment pick the same number, the loser's server dies, and its caller quietly talks to the
+	winner's display, which the winner tears down when it exits.
+	"""
 	xvfb = shutil.which('Xvfb')
 	if xvfb is None:
 		raise RecorderUnavailable('Xvfb is not installed')
-	number = _free_display()
-	process = await asyncio.create_subprocess_exec(
-		xvfb,
-		f':{number}',
-		'-screen',
-		'0',
-		f'{width}x{height}x24',
-		'-nolisten',
-		'tcp',
-		stdout=asyncio.subprocess.DEVNULL,
-		stderr=asyncio.subprocess.DEVNULL,
-	)
+	read_fd, write_fd = os.pipe()
 	try:
-		for _ in range(100):
-			if (_DISPLAY_SOCKET_DIR / f'X{number}').exists():
-				break
-			if process.returncode is not None:
-				raise RecorderUnavailable(f'Xvfb exited immediately with code {process.returncode}')
-			await asyncio.sleep(0.05)
-		else:
-			raise RecorderUnavailable('Xvfb did not open its display socket')
+		process = await asyncio.create_subprocess_exec(
+			xvfb,
+			'-displayfd',
+			str(write_fd),
+			'-screen',
+			'0',
+			f'{width}x{height}x24',
+			'-nolisten',
+			'tcp',
+			stdout=asyncio.subprocess.DEVNULL,
+			stderr=asyncio.subprocess.DEVNULL,
+			pass_fds=(write_fd,),
+		)
+	except BaseException:
+		os.close(read_fd)
+		raise
+	finally:
+		os.close(write_fd)  # the child holds its own copy; ours must close for EOF to mean 'Xvfb died'
+	try:
+		number = await _read_display_number(read_fd)
 		yield f':{number}'
 	finally:
 		if process.returncode is None:
@@ -126,10 +150,28 @@ async def record_display(display: str, output: Path | str, width: int, height: i
 		stderr=asyncio.subprocess.PIPE,
 		env={**os.environ, 'DISPLAY': display},
 	)
+	await asyncio.sleep(_STARTUP_GRACE)
+	if process.returncode is not None:
+		raise RecordingFailed(f'ffmpeg exited at start-up with code {process.returncode}: {await _stderr_tail(process)}')
 	try:
 		yield output
-	finally:
+	except BaseException:
+		# Whatever is unwinding is the more important error; still stop ffmpeg cleanly.
 		await _finalize(process)
+		raise
+	await _finalize(process)
+	if process.returncode != 0 or not output.exists() or output.stat().st_size == 0:
+		raise RecordingFailed(f'ffmpeg finished with code {process.returncode} and no usable file: {await _stderr_tail(process)}')
+
+
+async def _stderr_tail(process: 'asyncio.subprocess.Process', limit: int = 400) -> str:
+	if process.stderr is None:
+		return ''
+	try:
+		data = await asyncio.wait_for(process.stderr.read(), timeout=2.0)
+	except TimeoutError:
+		return ''
+	return data.decode(errors='replace').strip()[-limit:]
 
 
 async def _finalize(process: 'asyncio.subprocess.Process') -> None:

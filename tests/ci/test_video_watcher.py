@@ -6,6 +6,7 @@ as a cut, and a cut must not hide behind it. Nothing is mocked — a real browse
 real video served over HTTP with range support.
 """
 
+import asyncio
 import re
 import subprocess
 from io import BytesIO
@@ -25,8 +26,9 @@ from browser_use.vision.video import (
 
 CUTS = [2.0, 4.0, 6.0]
 DURATION = 8.0
-# Two frames at 25fps: how close a detected cut must be to count as found.
-TOLERANCE = 0.45
+# A cut is located by halving until the interval is no wider than min_gap (0.25s), so that is
+# the honest accuracy to ask for. Measured error on this video is about 0.1s.
+TOLERANCE = 0.25
 
 PAGE = """<!DOCTYPE html><html><head><title>Player</title></head>
 <body style="margin:0;background:#111">
@@ -40,15 +42,18 @@ def _ffmpeg() -> str:
 	return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def _encode(path, scenes: list[str], seconds_each: float | list[float]) -> None:
+def _encode(path, scenes: list[str], seconds_each: float | list[float], box: bool = True) -> None:
 	"""A WebM of solid scenes back to back with a white box sliding across all of them."""
 	lengths = seconds_each if isinstance(seconds_each, list) else [seconds_each] * len(scenes)
 	inputs = []
 	for colour, length in zip(scenes, lengths):
 		inputs += ['-f', 'lavfi', '-i', f'color=c={colour}:s=480x270:d={length}:r=25']
-	inputs += ['-f', 'lavfi', '-i', f'color=c=white:s=40x40:d={sum(lengths)}:r=25']
 	concat = ''.join(f'[{i}]' for i in range(len(scenes)))
-	graph = f'{concat}concat=n={len(scenes)}:v=1:a=0[bg];[bg][{len(scenes)}]overlay=x=20+t*50:y=110[out]'
+	if box:
+		inputs += ['-f', 'lavfi', '-i', f'color=c=white:s=40x40:d={sum(lengths)}:r=25']
+		graph = f'{concat}concat=n={len(scenes)}:v=1:a=0[bg];[bg][{len(scenes)}]overlay=x=20+t*50:y=110[out]'
+	else:
+		graph = f'{concat}concat=n={len(scenes)}:v=1:a=0[out]'
 	subprocess.run(
 		[_ffmpeg(), '-y', '-loglevel', 'error', *inputs, '-filter_complex', graph, '-map', '[out]']
 		+ ['-c:v', 'libvpx', '-b:v', '600k', '-g', '25', '-pix_fmt', 'yuv420p', str(path)],
@@ -66,7 +71,33 @@ def videos(tmp_path_factory):
 	# Two real scenes, then a blue flash of 0.3s at the very end.
 	sliver = root / 'sliver.webm'
 	_encode(sliver, ['red', '0x00a000', 'blue'], [2.0, 2.0, 0.3])
-	return {'cuts': cuts.read_bytes(), 'still': still.read_bytes(), 'sliver': sliver.read_bytes()}
+	black = root / 'black.webm'
+	_encode(black, ['black'], 4.0, box=False)  # pure black: no sliding box this time
+	# A sound with no picture: a <video> element that has nothing to look at.
+	audio = root / 'audio.webm'
+	subprocess.run(
+		[
+			_ffmpeg(),
+			'-y',
+			'-loglevel',
+			'error',
+			'-f',
+			'lavfi',
+			'-i',
+			'sine=frequency=440:duration=3',
+			'-c:a',
+			'libvorbis',
+			str(audio),
+		],
+		check=True,
+	)
+	return {
+		'cuts': cuts.read_bytes(),
+		'still': still.read_bytes(),
+		'sliver': sliver.read_bytes(),
+		'black': black.read_bytes(),
+		'audio': audio.read_bytes(),
+	}
 
 
 def _serve(server: HTTPServer, path: str, data: bytes, cors: bool = False) -> None:
@@ -107,6 +138,29 @@ def page_origin(videos):
 	_serve(server, '/cuts.webm', videos['cuts'])
 	_serve(server, '/still.webm', videos['still'])
 	_serve(server, '/sliver.webm', videos['sliver'])
+	_serve(server, '/black.webm', videos['black'])
+	_serve(server, '/audio.webm', videos['audio'])
+	_serve(server, '/cuts-cors.webm', videos['cuts'], cors=True)
+	for name, body in {
+		'/black': PAGE.format(src='/black.webm'),
+		'/audio': PAGE.format(src='/audio.webm'),
+		'/preload-none': PAGE.format(src='/cuts.webm').replace('preload="auto"', 'preload="none"'),
+		# A page whose requestAnimationFrame never fires, which is what a hidden tab is.
+		'/no-raf': PAGE.format(src='/cuts.webm').replace(
+			'<video', '<script>window.requestAnimationFrame = () => 0</script><video', 1
+		),
+		# A decorative clip in the page and the real player one frame down, bigger than it.
+		'/decoy': (
+			'<!DOCTYPE html><html><body style="margin:0">'
+			'<video src="/still.webm" muted preload="auto" width="200" height="112"></video>'
+			'<iframe src="/same-origin" width="640" height="360" style="border:0"></iframe></body></html>'
+		),
+		'/framed': '<!DOCTYPE html><html><body><iframe id="f" src="/same-origin" width="640" height="360"></iframe></body></html>',
+	}.items():
+		server.expect_request(name).respond_with_data(body, content_type='text/html')
+	server.expect_request('/cors-page').respond_with_data(
+		PAGE.format(src='http://localhost:0/x').replace('<video', '<video crossorigin="anonymous"'), content_type='text/html'
+	)
 	server.expect_request('/sliver').respond_with_data(PAGE.format(src='/sliver.webm'), content_type='text/html')
 	server.expect_request('/same-origin').respond_with_data(PAGE.format(src='/cuts.webm'), content_type='text/html')
 	server.expect_request('/same-origin-still').respond_with_data(PAGE.format(src='/still.webm'), content_type='text/html')
@@ -145,6 +199,7 @@ async def test_finds_the_scene_cuts_using_in_page_signatures(browser_session, pa
 	# Keyframes are real decodable images of the video, not placeholders.
 	for shot in summary.shots:
 		assert Image.open(BytesIO(shot.keyframe)).size[0] > 0
+		assert shot.start <= shot.at <= shot.end, 'the keyframe must come from inside its own shot'
 
 
 async def test_motion_inside_a_shot_is_not_a_cut(browser_session, page_origin):
@@ -205,7 +260,8 @@ async def test_contact_sheet_is_one_image_carrying_every_keyframe(browser_sessio
 	# One image, however many shots: that is what makes it cheap to hand to a model.
 	tokens = summary.ledger.total_image_tokens
 	assert tokens > 0
-	assert tokens < estimate_image_tokens(480, 270) * len(summary.shots)
+	separate = sum(estimate_image_tokens(shot.width, shot.height) for shot in summary.shots)
+	assert tokens < separate, f'one sheet ({tokens}) should cost less than the same keyframes sent separately ({separate})'
 
 
 async def test_marked_overlays_are_hidden_for_the_capture_and_restored_after(browser_session, page_origin):
@@ -238,6 +294,72 @@ async def test_a_sliver_of_a_shot_does_not_spend_a_keyframe(browser_session, pag
 	await _goto(browser_session, page_origin.url_for('/sliver'))
 	fine = await VideoWatcher(browser_session).watch(min_shot=0.2)
 	assert len(fine.cuts) == 2 and abs(fine.cuts[1] - 4.0) <= TOLERANCE, fine.cuts
+
+
+async def test_a_cross_origin_video_with_cors_stays_in_page(browser_session, page_origin, media_origin):
+	"""Served with CORS headers and asked for with `crossorigin`, the canvas is not tainted, so
+	the cheap path must be kept: falling back here would be slower for nothing."""
+	page_origin.expect_request('/cors-ok').respond_with_data(
+		PAGE.format(src=media_origin.url_for('/cuts-cors.webm')).replace('<video', '<video crossorigin="anonymous"'),
+		content_type='text/html',
+	)
+	await _goto(browser_session, page_origin.url_for('/cors-ok'))
+	summary = await VideoWatcher(browser_session).watch()
+
+	assert summary.signature_mode == 'in-page'
+	_assert_cuts_found(summary.cuts)
+
+
+async def test_a_hidden_tab_cannot_hang_the_watch(browser_session, page_origin):
+	"""requestAnimationFrame never fires in a background tab. The wait for a paint must give
+	up, or `seek_timeout` is a promise the watcher cannot keep."""
+	await _goto(browser_session, page_origin.url_for('/no-raf'))
+	summary = await asyncio.wait_for(VideoWatcher(browser_session).watch(seek_timeout=5.0), timeout=90)
+
+	_assert_cuts_found(summary.cuts)
+
+
+async def test_a_video_with_no_picture_is_an_error_not_a_static_video(browser_session, page_origin):
+	"""Audio in a <video> element has nothing to look at. Reporting 'one shot, static' would be a
+	confident wrong answer, which is worse than refusing."""
+	await _goto(browser_session, page_origin.url_for('/audio'))
+	with pytest.raises(NoVideoError, match='picture'):
+		await VideoWatcher(browser_session).watch()
+
+
+async def test_an_all_black_result_is_reported_as_a_warning(browser_session, page_origin):
+	"""Black is either a black video or a player withholding its pixels (DRM). From here those
+	cannot be told apart, so the result must say so rather than pass as a finding."""
+	await _goto(browser_session, page_origin.url_for('/black'))
+	summary = await VideoWatcher(browser_session).watch()
+
+	assert any('black' in warning for warning in summary.warnings), summary.warnings
+	assert 'black' in summary.describe()
+
+
+async def test_a_bigger_player_in_an_iframe_is_flagged_not_silently_ignored(browser_session, page_origin):
+	"""The top document holds only a small decorative clip; the real player is in an iframe. The
+	watcher looks at the top document, so it must say that it may be looking at the wrong video."""
+	await _goto(browser_session, page_origin.url_for('/decoy'))
+	summary = await VideoWatcher(browser_session).watch()
+
+	assert any('iframe' in warning for warning in summary.warnings), summary.warnings
+	assert 'iframe' in summary.describe()
+
+
+async def test_a_clean_page_has_no_warnings(browser_session, page_origin):
+	await _goto(browser_session, page_origin.url_for('/same-origin'))
+	summary = await VideoWatcher(browser_session).watch()
+
+	assert summary.warnings == []
+
+
+async def test_preload_none_does_not_stall_on_metadata(browser_session, page_origin):
+	"""With preload="none" the browser never volunteers the duration. Asking for it is not optional."""
+	await _goto(browser_session, page_origin.url_for('/preload-none'))
+	summary = await VideoWatcher(browser_session).watch(seek_timeout=8.0)
+
+	_assert_cuts_found(summary.cuts)
 
 
 async def test_a_page_without_a_video_says_so(browser_session, page_origin):

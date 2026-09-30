@@ -22,6 +22,9 @@ def site():
 	server = HTTPServer()
 	server.start()
 	server.expect_request('/one').respond_with_data(PAGE.format(title='one'), content_type='text/html')
+	server.expect_request('/outer').respond_with_data(
+		'<html><body><iframe id="f" src="/one" width="400" height="200"></iframe></body></html>', content_type='text/html'
+	)
 	server.expect_request('/two').respond_with_data(PAGE.format(title='two'), content_type='text/html')
 	yield server
 	server.stop()
@@ -87,6 +90,20 @@ async def test_the_cursor_follows_the_pointer_the_agent_drives(browser_session, 
 	)
 	assert cursor[0] == 'block'
 	assert abs(cursor[1] - 321) < 2 and abs(cursor[2] - 222) < 2
+
+
+async def test_an_iframe_does_not_get_its_own_stale_copy(browser_session, site):
+	"""The init script runs in every frame. A second meter inside an iframe would be a copy that
+	`show()` never updates, sitting on top of the page showing old numbers."""
+	await _goto(browser_session, site.url_for('/outer'))
+	overlay = Overlay(browser_session)
+	await overlay.install()
+	await _goto(browser_session, site.url_for('/outer'))
+	await overlay.show(['fresh'])
+
+	inside = await _js(browser_session, "document.getElementById('f').contentDocument.getElementById('__bu_overlay') !== null")
+	assert inside is False, 'an iframe grew its own overlay'
+	assert await _js(browser_session, HUD_TEXT) == 'fresh'
 
 
 def test_ledger_lines_state_what_was_sent_and_what_the_alternative_costs():

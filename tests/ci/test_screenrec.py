@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from browser_use.vision.screenrec import RecorderUnavailable, _ffmpeg, record_display, virtual_display
+from browser_use.vision.screenrec import RecorderUnavailable, RecordingFailed, _ffmpeg, record_display, virtual_display
 
 pytestmark = pytest.mark.skipif(shutil.which('Xvfb') is None, reason='Xvfb is not installed')
 
@@ -44,6 +44,25 @@ async def test_displays_are_released_when_the_block_exits():
 	async with virtual_display(320, 200) as second:
 		# The socket of the first is gone, so its number is free to be handed out again.
 		assert second == first
+
+
+async def test_displays_opened_at_the_same_moment_are_distinct():
+	"""Two callers must never be handed the same display, or the first to exit kills the other's."""
+
+	async def open_one():
+		async with virtual_display(320, 200) as display:
+			await asyncio.sleep(0.5)
+			return display
+
+	first, second = await asyncio.gather(open_one(), open_one())
+	assert first != second
+
+
+async def test_a_recording_that_cannot_start_raises_instead_of_producing_nothing(tmp_path):
+	"""ffmpeg dying at start-up (here: no such display) used to leave no file and no error."""
+	with pytest.raises(RecordingFailed):
+		async with record_display(':250', tmp_path / 'never.mp4', 320, 200, fps=10):
+			await asyncio.sleep(0.5)
 
 
 async def test_a_missing_xvfb_is_a_clear_error(monkeypatch):

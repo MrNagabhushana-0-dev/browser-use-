@@ -138,3 +138,49 @@ archive.org, an open-licensed film.
   (a bird flapping across the frame) can exceed the cut threshold and read as a cut - a
   thumbnail difference cannot tell motion from a cut; with a tight budget a "shot" is really
   a segment between the largest changes; a video in an iframe, or behind DRM, is unreachable.
+
+### Round 4 addendum - what the independent review found (and what it got wrong)
+
+A different model reviewed the new code in an isolated worktree and tried to falsify it.
+Every claim was re-verified by writing a failing test first. Outcome:
+
+**Confirmed and fixed** (each with a test that failed on the old code, then mutation-checked):
+- BLOCKING: the paint wait used `requestAnimationFrame`, which never fires in a hidden tab,
+  with no timeout - `watch()` hung forever despite `seek_timeout`, contradicting the docstring.
+  Now bounded at 150ms.
+- BLOCKING: an audio-only `<video>` gave "1 shot, static, in-page" with no error; an all-black
+  result did the same. A confident wrong answer is worse than an error. Now: no picture is a
+  `NoVideoError`; all-black adds a `warnings` entry (a black video and a DRM player withholding
+  pixels are indistinguishable from here, so it says so instead of choosing).
+- REAL: the largest `<video>` by box area was chosen even if `visibility:hidden` or `opacity:0`,
+  and a bigger player in an iframe was invisible to the search. Now: visible elements only, and
+  a larger iframe raises a warning that the real player may be inside it.
+- REAL: `preload="none"` never fires `loadedmetadata`; it timed out with a raw `RuntimeError`.
+  Now nudges `preload='metadata'` (not `load()`, which would restart an MSE player).
+- REAL: two concurrent `virtual_display()` calls both picked `:99`; the loser's server died and
+  its caller silently used the winner's display. Replaced with Xvfb's own `-displayfd`.
+- REAL: ffmpeg dying at start-up left no file and no error. Now `RecordingFailed`.
+- REAL: the overlay init script ran in every frame, giving iframes a stale duplicate meter.
+- REAL: the "gradual change" branch put a cut at the midpoint of a possibly very wide interval;
+  now keeps refining the steeper half.
+- Cleanup: a per-shot sample computed and never used (wasted a seek, and a screenshot in
+  fallback mode); a test tolerance whose comment said 0.08s but whose value was 0.45s (tightened
+  to min_gap, 0.25); a vacuous tiling assertion (replaced by "keyframe lies inside its shot");
+  a contact-sheet test that held only because of tile width (now compares against the real
+  sizes of the separate keyframes).
+
+**Did not hold up:** the reviewer's CORS concern (a CORS-served video with `crossorigin` stays
+on the cheap in-page path - the new test passed without any change), and its tolerance concern
+as a *defect* (measured error was already inside 0.25).
+
+**Implemented but NOT test-covered:** canvas taint appearing mid-watch now restarts on
+screenshot signatures instead of comparing two different measurements. I could not produce the
+trigger deterministically, so this path has no test. The reviewer also could not reproduce it.
+
+**Left as a documented limit:** a player that re-`play()`s itself is now re-paused on every seek,
+but `rect()` still scrolls the page to centre the video, and the video is left paused. Not undone.
+
+**Lesson, again:** the author's own tests passed 100% and could not have found the two
+confident-wrong-answer paths, because the author only wrote inputs the author imagined. The
+review is the part that found them.
+

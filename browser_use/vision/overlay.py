@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 OVERLAY_ATTRIBUTE = 'data-bu-overlay'
 
 _OVERLAY_JS = """(() => {
-	if (window.__buOverlay) return;
+	// The init script runs in every frame. A meter inside an iframe would be a stale copy that
+	// show() never updates, so only the top document gets one.
+	if (window.top !== window || window.__buOverlay) return;
 	const host = document.createElement('div');
 	host.id = '__bu_overlay';
 	host.setAttribute('data-bu-overlay', '');

@@ -33,7 +33,7 @@ but it finds the same cuts.
 
 Limits, stated rather than discovered: a shot shorter than the coarse grid step can fall
 between two samples and be missed, which is what `coarse` trades against cost; a fade is
-reported as one cut in the middle of the fade; and a video inside an iframe, or one behind
+reported as one cut where it changes fastest; and a video inside an iframe, or one behind
 DRM, is not reachable from here.
 """
 
@@ -77,7 +77,11 @@ _MAX_PIXELS = 1_150_000
 
 
 class NoVideoError(RuntimeError):
-	"""The page has no visible video element to watch."""
+	"""The page has no visible video element to watch, or it has no picture."""
+
+
+class _TaintedMidWatch(Exception):
+	"""Pixels stopped being readable after some in-page signatures were already taken."""
 
 
 def estimate_image_tokens(width: int, height: int) -> int:
@@ -159,6 +163,9 @@ class VideoSummary:
 	video_width: int = 0
 	video_height: int = 0
 	ledger: TokenLedger = field(default_factory=TokenLedger)
+	# Things the caller should know before trusting the result. A result that may be wrong and
+	# does not say so is worse than an error.
+	warnings: list[str] = field(default_factory=list)
 
 	@property
 	def cuts(self) -> list[float]:
@@ -171,6 +178,8 @@ class VideoSummary:
 			f'video {_clock(self.duration)}, {len(self.shots)} shots: {spans} '
 			f'[{self.samples_taken} samples, {self.signature_mode} comparison]'
 		)
+		if self.warnings:
+			text += ' WARNING: ' + ' '.join(self.warnings)
 		self.ledger.add_text(text, 'timeline')
 		return text
 
@@ -220,6 +229,11 @@ def _clock(seconds: float) -> str:
 _INSTALL_JS = """(() => {
 	if (window.__buVideo) return true;
 	const area = (el) => { const r = el.getBoundingClientRect(); return r.width * r.height; };
+	// A box with area is not necessarily something a person can see.
+	const visible = (el) => {
+		const cs = getComputedStyle(el);
+		return area(el) > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && parseFloat(cs.opacity) > 0;
+	};
 	const waitFor = (el, event, ms, what) => new Promise((resolve, reject) => {
 		const timer = setTimeout(() => { el.removeEventListener(event, on); reject(new Error(what + ' timed out')); }, ms);
 		const on = () => { clearTimeout(timer); el.removeEventListener(event, on); resolve(); };
@@ -233,25 +247,37 @@ _INSTALL_JS = """(() => {
 	window.__buVideo = {
 		el: null,
 		async find(ms) {
-			const videos = [...document.querySelectorAll('video')].filter((v) => area(v) > 0);
+			const videos = [...document.querySelectorAll('video')].filter(visible);
 			videos.sort((a, b) => area(b) - area(a));
 			const el = videos[0];
 			if (!el) return null;
 			this.el = el;
 			el.pause();
+			// With preload="none" the browser never volunteers the duration; asking for metadata
+			// does not restart playback or touch the source, unlike load().
+			if (el.readyState < 1 && el.preload === 'none') el.preload = 'metadata';
 			if (el.readyState < 1) await waitFor(el, 'loadedmetadata', ms, 'loading video metadata');
-			return { duration: el.duration, width: el.videoWidth, height: el.videoHeight };
+			// Frames are only reachable from this document, so a larger player in an iframe may be
+			// the one the page is really about. Reported, not chased.
+			const framed = [...document.querySelectorAll('iframe')].filter((f) => area(f) > area(el)).length;
+			return { duration: el.duration, width: el.videoWidth, height: el.videoHeight, framed };
 		},
 		async seek(t, ms) {
 			const v = this.el;
+			v.pause();  // a player that resumes itself would drift while we sample
 			if (Math.abs(v.currentTime - t) > 1e-3) {
 				const seeked = waitFor(v, 'seeked', ms, 'seek');
 				v.currentTime = t;
 				await seeked;
 			}
 			if (v.readyState < 2) await waitFor(v, 'canplay', ms, 'buffering');
-			// Let the compositor paint the frame that was just decoded.
-			await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+			// Let the compositor paint the frame that was just decoded. requestAnimationFrame never
+			// fires in a hidden tab, so the wait is bounded: the decoded frame is readable
+			// regardless, and a wait with no timeout would make seek_timeout a promise we cannot keep.
+			await Promise.race([
+				new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+				new Promise((r) => setTimeout(r, 150)),
+			]);
 			return v.currentTime;
 		},
 		signature() {
@@ -319,14 +345,33 @@ class VideoWatcher:
 
 		self._seek_timeout = seek_timeout
 		self._samples_taken = 0
-		self._cache = {}
-		self._mode = 'in-page'
 		self._cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		try:
+			return await self._watch(max_frames, coarse, min_gap, min_shot, cut_threshold, screenshots=False)
+		except _TaintedMidWatch:
+			# Pixels became unreadable after some had been read. In-page and screenshot signatures
+			# are different measurements (screenshots carry letterboxing and player controls), so
+			# mixing them invents cuts; start over on one kind.
+			logger.debug('🎞️ Canvas became tainted mid-watch; restarting on screenshot signatures')
+			return await self._watch(max_frames, coarse, min_gap, min_shot, cut_threshold, screenshots=True)
+
+	async def _watch(
+		self, max_frames: int, coarse: int | None, min_gap: float, min_shot: float, cut_threshold: int, screenshots: bool
+	) -> VideoSummary:
+		self._cache = {}
+		self._mode = 'screenshot' if screenshots else 'in-page'
 
 		await self._eval(_INSTALL_JS)
-		info = await self._eval(f'window.__buVideo.find({int(seek_timeout * 1000)})', await_promise=True)
+		try:
+			info = await self._eval(f'window.__buVideo.find({int(self._seek_timeout * 1000)})', await_promise=True)
+		except RuntimeError as e:
+			raise TimeoutError(f'The video never reported its length: {e}') from e
 		if not info:
 			raise NoVideoError('There is no visible <video> element on this page.')
+		if not info['width'] or not info['height']:
+			raise NoVideoError(
+				'The media element has no picture (audio only, or nothing decoded), so there is nothing to look at.'
+			)
 		duration = info['duration']
 		if not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration <= 0:
 			raise NoVideoError(f'The video has no finite duration ({duration!r}); a live stream cannot be seeked.')
@@ -336,18 +381,25 @@ class VideoWatcher:
 		grid = [end * i / intervals for i in range(intervals + 1)]
 		sigs = [await self._sample(t) for t in grid]
 
+		warnings: list[str] = []
+		if info['framed']:
+			warnings.append(
+				f'{info["framed"]} iframe(s) larger than this video exist, and the real player may be inside one; '
+				'only the top document is searched.'
+			)
+		if not any(any(sig) for sig in sigs):
+			warnings.append(
+				'every sampled frame was pure black: either the video is black, or the player withholds its pixels (DRM).'
+			)
+
 		cuts = await self._locate_cuts(grid, cut_threshold, min_gap, min_shot, duration, wanted=max_frames - 1)
 
 		bounds = [0.0, *cuts, duration]
-		shots = []
-		for start, stop in zip(bounds, bounds[1:]):
-			mid = (start + stop) / 2
-			shots.append({'start': start, 'end': stop, 'at': mid, 'sig': await self._sample(mid)})
-
 		final = []
-		for shot in shots:
-			jpeg, width, height = await self._keyframe(shot['at'])
-			final.append(Shot(shot['start'], shot['end'], shot['at'], jpeg, width, height))
+		for start, stop in zip(bounds, bounds[1:]):
+			at = (start + stop) / 2
+			jpeg, width, height = await self._keyframe(at)
+			final.append(Shot(start, stop, at, jpeg, width, height))
 
 		summary = VideoSummary(
 			duration=duration,
@@ -356,8 +408,9 @@ class VideoWatcher:
 			signature_mode=self._mode,
 			video_width=info['width'],
 			video_height=info['height'],
+			warnings=warnings,
 		)
-		assert summary.shots[0].start == 0.0 and all(a.end == b.start for a, b in zip(summary.shots, summary.shots[1:]))
+		assert all(shot.start <= shot.at <= shot.end for shot in summary.shots), 'a keyframe fell outside its shot'
 		return summary
 
 	async def _locate_cuts(
@@ -393,9 +446,10 @@ class VideoWatcher:
 			sa, sm, sb = self._cache[round(ta, 3)], await self._sample(mid), self._cache[round(tb, 3)]
 			left, right = signature_distance(sa, sm), signature_distance(sm, sb)
 			if left <= threshold and right <= threshold:
-				# Each half looks like its own end but the ends differ: a gradual change. One
-				# boundary in the middle of it, rather than chasing a cut that is not there.
-				take(mid)
+				# Each half looks like its own end but the ends differ: a gradual change, or a cut
+				# sitting near the threshold under some motion. Follow the steeper half rather than
+				# settling for the middle of what may be a very wide interval.
+				heapq.heappush(queue, (-left, ta, mid) if left >= right else (-right, mid, tb))
 				continue
 			if left > threshold:
 				heapq.heappush(queue, (-left, ta, mid))
@@ -418,6 +472,8 @@ class VideoWatcher:
 			else:
 				# Tainted canvas: the page may not read back a cross-origin video's pixels.
 				logger.debug(f'🎞️ In-page comparison unavailable ({result.get("error")}); comparing screenshots')
+				if self._cache:
+					raise _TaintedMidWatch
 				self._mode = 'screenshot'
 		if self._mode == 'screenshot':
 			jpeg, _, _ = await self._screenshot(scale_to=160)
