@@ -246,6 +246,20 @@ class RetinatServer(BrowserUseServer):
 			return f'BLOCKED: {wall.kind} ({wall.evidence}). {wall.advice}.{through_tor}'
 		return f'Opened "{info.get("title", "")}" at {info.get("url", "")}.'
 
+	async def _secret_field_focused(self) -> bool:
+		"""Whether the focused element is a password, card or one-time-code field (top document only)."""
+		assert self.browser_session is not None
+		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		r = await cdp.cdp_client.send.Runtime.evaluate(
+			params={
+				'expression': "(() => { const e = document.activeElement; if (!e || e.tagName !== 'INPUT') return false;"
+				" return e.type === 'password' || /password|cc-number|cc-csc|one-time-code/.test(e.autocomplete || ''); })()",
+				'returnByValue': True,
+			},
+			session_id=cdp.session_id,
+		)
+		return bool((r.get('result') or {}).get('value'))
+
 	async def _call_retinat(self, name: str, args: dict[str, Any]) -> str | list['types.ContentBlock']:
 		if not name.startswith(TOOL_PREFIX):
 			raise ValueError(f'Unknown tool: {name}')
@@ -313,6 +327,11 @@ class RetinatServer(BrowserUseServer):
 			info = await eyes.swipe(args.get('direction', 'up'), float(args.get('fraction', 0.55)))
 			return f'Swiped {args.get("direction", "up")} {info["distance_px"]:.0f}px in {info["duration_ms"]:.0f}ms. {eyes.now_line()}'
 		if name == 'retinat_type':
+			if self.network.uses_tor and await self._secret_field_focused():
+				raise ValueError(
+					'Refusing to type into a password or payment field while routed through Tor: the exit relay is '
+					'on the path. Set the route to off (retinat_network), or ask the person to enter it themselves.'
+				)
 			await eyes.hand.type_text(str(args['text']))
 			return f'Typed {len(str(args["text"]))} characters.'
 		if name == 'retinat_key':

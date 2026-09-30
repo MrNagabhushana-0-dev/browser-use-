@@ -400,3 +400,30 @@ async def test_chromium_uses_the_proxy_resolves_names_there_and_fails_closed(sit
 	finally:
 		proxy.close()
 		await session.kill()
+
+
+FORM = '<!doctype html><title>Form</title><body><input id="user" type="text"><input id="pw" type="password"></body>'
+
+
+async def _focus_and_type(server, element_id: str, text: str):
+	cdp = await server.browser_session.get_or_create_cdp_session(focus=False)
+	await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': f'document.getElementById("{element_id}").focus()'}, session_id=cdp.session_id
+	)
+	return await _call(server, 'retinat_type', {'text': text})
+
+
+async def test_nothing_is_typed_into_a_password_field_while_routed_through_tor(retinat, site):
+	site.expect_request('/form').respond_with_data(FORM, content_type='text/html')
+	await _call(retinat, 'retinat_network', {'mode': 'off'})
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/form')})
+
+	direct = await _focus_and_type(retinat, 'pw', 'hunter2')  # direct: the person's own business
+	assert not direct.is_error
+
+	retinat.network.mode = NetworkMode.ALWAYS  # the browser is open; the route is now Tor
+	refused = await _focus_and_type(retinat, 'pw', 'hunter2')
+	assert refused.is_error and 'password' in _text(refused), _text(refused)
+
+	ordinary = await _focus_and_type(retinat, 'user', 'hello')
+	assert not ordinary.is_error, _text(ordinary)
