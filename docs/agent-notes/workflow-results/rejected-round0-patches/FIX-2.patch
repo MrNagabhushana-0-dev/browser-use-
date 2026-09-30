@@ -1,0 +1,250 @@
+diff --git a/browser_use/synthesis/service.py b/browser_use/synthesis/service.py
+index 169cecf..c5f0a15 100644
+--- a/browser_use/synthesis/service.py
++++ b/browser_use/synthesis/service.py
+@@ -293,6 +293,32 @@ class SiteToolSynthesizer:
+ 			spec['enum'] = options[:25]
+ 		return key, spec
+ 
++	@staticmethod
++	def _looks_like_search(label: str, roles: set[str | None], types: set[str | None], keys: set[str]) -> bool:
++		"""Whether this reads as a search affordance, by wording or by markup.
++
++		The commonest affordance on the web deserves a predictable name, and recognising it
++		by wording alone misses what large sites actually ship: a bare `<input name="q">`
++		with no label and no submit button is still a search box. Shared by the form path
++		and the loose-control path deliberately — the same box recognised inside a <form>
++		and missed outside one is drift nobody would notice until a site went unsearchable.
++		"""
++		text = f'{label} {" ".join(sorted(keys))}'.lower()
++		return any(hint in text for hint in _SEARCH_HINTS) or 'searchbox' in roles or 'search' in types or keys == {'q'}
++
++	@staticmethod
++	def _is_text_entry(control: dict) -> bool:
++		"""True for controls you type into, as opposed to press, tick or pick from.
++
++		A native <select> also reports combobox, but it arrives carrying its options and
++		has to be driven through the DOM; an ARIA combobox with no options is a text field
++		wearing a listbox, which is what a typeahead search box is.
++		"""
++		role = control.get('role')
++		if role in ('textbox', 'searchbox'):
++			return True
++		return role == 'combobox' and not control.get('options')
++
+ 	def _tool_from_form(self, form: dict, used: set[str]) -> SynthesizedTool | None:
+ 		controls = form.get('controls') or []
+ 		label = form.get('name') or (form.get('submit') or {}).get('label') or 'submit form'
+@@ -340,14 +366,13 @@ class SiteToolSynthesizer:
+ 			# No submit button: Enter on the last field is how a person sends it.
+ 			steps.append(ToolStep(action='press', locator=steps[-1].locator, key='Enter'))
+ 
+-		# The commonest affordance on the web deserves a predictable name. Recognise it by
+-		# the markup as well as the wording: a bare <input name="q"> with no label and no
+-		# submit button is still a search box, and is exactly what large sites ship.
+-		text = f'{label} {" ".join(properties)}'.lower()
+-		roles = {c.get('role') for c in controls}
+-		types = {c.get('type') for c in controls}
+-		is_search = (
+-			any(hint in text for hint in _SEARCH_HINTS) or 'searchbox' in roles or 'search' in types or set(properties) == {'q'}
++		# Same test the loose-control path uses, so a search box cannot be recognised inside
++		# a <form> and missed outside one.
++		is_search = self._looks_like_search(
++			label,
++			{c.get('role') for c in controls},
++			{c.get('type') for c in controls},
++			set(properties),
+ 		)
+ 		name = 'search' if is_search and len(properties) == 1 else to_identifier(label, fallback='submit_form')
+ 		name = self._unique(name, used)
+@@ -369,6 +394,45 @@ class SiteToolSynthesizer:
+ 			steps=steps,
+ 		)
+ 
++	def _tool_from_control(self, control: dict, used: set[str]) -> SynthesizedTool | None:
++		"""A search box that belongs to no <form> at all.
++
++		This is the normal single-page-app shape: an `<input type=search>` with a keydown
++		handler and no form to submit, which is why ToolStep carries a key in the first
++		place. The scanner has always reported these as `controls`; without this they were
++		scanned, ranked, budgeted and then thrown away, so the sites that build search the
++		modern way were the ones left with no search tool.
++
++		Only search, and only text entry. A loose checkbox is already a toggle tool, a
++		loose button is already a button tool, and a lone text field that is not a search
++		box has no submit affordance to pair with — pressing Enter in it is a guess.
++		"""
++		if control.get('sensitive') or not self._is_text_entry(control):
++			return None
++		label = control.get('name') or ''
++		key = to_identifier(label, fallback='value')
++		if not self._looks_like_search(label, {control.get('role')}, {control.get('type')}, {key}):
++			return None
++
++		locator = Locator.model_validate(control.get('locator') or {})
++		name = self._unique('search', used)
++		return SynthesizedTool(
++			name=name,
++			description=f'{(label or "Search").strip()} — synthesized from a search box on this page',
++			input_schema={
++				'type': 'object',
++				'properties': {'query': {'type': 'string', 'description': label[:100] or 'What to search for'}},
++				# Always required, for the same reason the form path makes it required: a
++				# search with no query is not a call anyone meant to make.
++				'required': ['query'],
++			},
++			# There is no submit button to click, so Enter in the box is the submit.
++			steps=[
++				ToolStep(action='fill', locator=locator, param='query'),
++				ToolStep(action='press', locator=locator, key='Enter'),
++			],
++		)
++
+ 	def _tool_from_button(self, button: dict, used: set[str]) -> SynthesizedTool | None:
+ 		label = button.get('name') or ''
+ 		if not label or looks_like_content(label):
+@@ -491,6 +555,18 @@ class SiteToolSynthesizer:
+ 			if tool := self._tool_from_form(form, used):
+ 				tools.append(tool)
+ 
++		# A search box outside any form is the one loose control worth a tool of its own,
++		# and it is what most sites ship. Skip anything a form tool already drives: a field
++		# the scanner also happened to report loose must not come back as a second tool.
++		driven = {step.locator.model_dump_json() for tool in tools for step in tool.steps}
++		for control in affordances.get('controls') or []:
++			if len(tools) >= MAX_TOOLS_PER_SITE:
++				break
++			if Locator.model_validate(control.get('locator') or {}).model_dump_json() in driven:
++				continue
++			if tool := self._tool_from_control(control, used):
++				tools.append(tool)
++
+ 		# Read tools first among the rest: data access is what an agent needs most and what
+ 		# costs most without it.
+ 		for table in affordances.get('tables') or []:
+diff --git a/tests/ci/test_synthesis_loose_controls.py b/tests/ci/test_synthesis_loose_controls.py
+new file mode 100644
+index 0000000..4c03d66
+--- /dev/null
++++ b/tests/ci/test_synthesis_loose_controls.py
+@@ -0,0 +1,120 @@
++"""A search box that belongs to no <form> — which is how most of the modern web ships it.
++
++The scanner has always collected visible controls outside any form and reported them as
++`controls`, on the reasoning that "a site-wide search box usually lives here". Synthesis
++never read that list, so the single commonest affordance on the web went missing on every
++site that wires its search box to a keydown handler instead of a form submit. The page
++below is exactly that shape: one `<input type=search>`, no form, Enter handled in JS.
++"""
++
++import json
++
++import pytest
++from pytest_httpserver import HTTPServer
++
++from browser_use.browser.events import NavigateToUrlEvent
++from browser_use.synthesis import SiteToolSynthesizer
++
++# No <form> anywhere. The checkbox is deliberately labelled with a search word: it must be
++# rejected for being a checkbox, not for what it happens to be called.
++SPA_PAGE = """&lt;!DOCTYPE html&gt;
++&lt;html&gt;&lt;head&gt;&lt;title&gt;SPA Shop&lt;/title&gt;&lt;/head&gt;&lt;body&gt;
++	&lt;input type="search" placeholder="Search products" id="s"&gt;
++	&lt;input type="checkbox" id="stock" aria-label="Find in stock only"&gt;
++	&lt;div id="out"&gt;idle&lt;/div&gt;
++&lt;script&gt;
++	s.addEventListener('keydown', e =&gt; { if (e.key === 'Enter') out.textContent = s.value; });
++&lt;/script&gt;
++&lt;/body&gt;&lt;/html&gt;"""
++
++# A loose text field that is nothing to do with search. Pressing Enter in it is a guess,
++# so it must not become a tool.
++PLAIN_PAGE = """&lt;!DOCTYPE html&gt;
++&lt;html&gt;&lt;head&gt;&lt;title&gt;Notes&lt;/title&gt;&lt;/head&gt;&lt;body&gt;
++	&lt;input type="text" aria-label="Nickname" id="nick"&gt;
++	&lt;input type="password" aria-label="Search vault" id="pw"&gt;
++&lt;/body&gt;&lt;/html&gt;"""
++
++
++@pytest.fixture(scope='module')
++def spa_server():
++	server = HTTPServer()
++	server.start()
++	server.expect_request('/spa').respond_with_data(SPA_PAGE, content_type='text/html')
++	server.expect_request('/plain').respond_with_data(PLAIN_PAGE, content_type='text/html')
++	yield server
++	server.stop()
++
++
++async def _goto(session, url):
++	event = session.event_bus.dispatch(NavigateToUrlEvent(url=url))
++	await event
++	await event.event_result(raise_if_any=True, raise_if_none=False)
++
++
++async def _out_text(session) -&gt; str:
++	out = await session.run_page_script("return document.getElementById('out').textContent;")
++	return json.loads(out.value)
++
++
++async def test_a_form_less_search_box_becomes_a_search_tool(browser_session, spa_server):
++	"""No &lt;form&gt;, so nothing in the forms list — and previously nothing at all."""
++	await _goto(browser_session, spa_server.url_for('/spa'))
++	page_tools = await browser_session.get_webmcp_tools()
++	names = [tool.name for tool in page_tools.tools]
++
++	assert 'search' in names, f'the form-less search box yielded no tool: {sorted(names)}'
++	search = next(tool for tool in page_tools.tools if tool.name == 'search')
++	assert search.source == 'synthesized'
++	assert search.input_schema['properties']['query']['type'] == 'string'
++	assert search.input_schema['required'] == ['query']
++
++
++async def test_the_form_less_search_tool_really_searches(browser_session, spa_server):
++	"""Enter in the box is the submit, which is what ToolStep.key exists for."""
++	await _goto(browser_session, spa_server.url_for('/spa'))
++	await browser_session.get_webmcp_tools()
++
++	result = await browser_session.call_webmcp_tool('search', {'query': 'lamp'})
++	assert result.ok, result.error
++	assert await _out_text(browser_session) == 'lamp'
++
++
++async def test_a_loose_checkbox_does_not_become_a_search_tool(browser_session, spa_server):
++	"""Its label says "Find", which is a search word. Its role says checkbox, which wins."""
++	await _goto(browser_session, spa_server.url_for('/spa'))
++	page_tools = await browser_session.get_webmcp_tools()
++	names = [tool.name for tool in page_tools.tools]
++
++	assert [n for n in names if n.startswith('search')] == ['search'], f'a checkbox became a search tool: {sorted(names)}'
++	# It is still offered — as the toggle it actually is.
++	assert any(n.startswith('set_') for n in names), f'the checkbox lost its toggle tool: {sorted(names)}'
++
++
++async def test_a_loose_field_that_is_not_search_is_left_alone(browser_session, spa_server):
++	"""And a password field stays out of the surface however it is labelled."""
++	await _goto(browser_session, spa_server.url_for('/plain'))
++	manifest = await SiteToolSynthesizer(browser_session).synthesize()
++	names = [tool.name for tool in manifest.tools]
++
++	assert names == [], f'a plain text field and a password box became tools: {names}'
++
++
++async def test_a_form_field_is_not_also_offered_loose(browser_session):
++	"""Belt and braces: whatever a form tool already drives must not come back twice."""
++	server = HTTPServer()
++	server.start()
++	try:
++		server.expect_request('/both').respond_with_data(
++			'&lt;html&gt;&lt;body&gt;&lt;form&gt;&lt;input type="search" aria-label="Search products"&gt;'
++			'&lt;button type="submit"&gt;Go&lt;/button&gt;&lt;/form&gt;&lt;/body&gt;&lt;/html&gt;',
++			content_type='text/html',
++		)
++		await _goto(browser_session, server.url_for('/both'))
++		manifest = await SiteToolSynthesizer(browser_session).synthesize()
++		names = [tool.name for tool in manifest.tools]
++
++		assert names.count('search') == 1, names
++		assert 'search_2' not in names, f'the form field came back as a second tool: {names}'
++	finally:
++		server.stop()
