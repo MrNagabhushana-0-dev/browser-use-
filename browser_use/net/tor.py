@@ -52,6 +52,16 @@ from typing import Annotated
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from browser_use.browser.profile import ProxySettings
+from browser_use.net.control import (
+	MIN_TOR_VERSION,
+	ExitInfo,
+	parse_circuit_exit,
+	parse_country,
+	parse_router_ip,
+	parse_stream_circuit,
+	parse_version,
+	read_reply,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +293,49 @@ class TorTransport:
 				pass
 			writer.close()
 
+	async def _control_query(self, *commands: str) -> list[list[str]]:
+		"""Authenticate once, send each command, and return each command's reply lines."""
+		reader, writer = await self._open_control()
+		try:
+			await self._authenticate(reader, writer)
+			replies: list[list[str]] = []
+			for command in commands:
+				writer.write(f'{command}\r\n'.encode())
+				await writer.drain()
+				replies.append(await read_reply(reader))
+			return replies
+		finally:
+			writer.write(b'QUIT\r\n')
+			try:
+				await writer.drain()
+			except (ConnectionError, OSError):
+				pass
+			writer.close()
+
+	async def tor_version(self) -> tuple[str, tuple[int, ...]] | None:
+		"""Tor's version text and tuple, or None if it can't be read."""
+		(reply,) = await self._control_query('GETINFO version')
+		return parse_version(reply)
+
+	async def observed_exit(self) -> ExitInfo | None:
+		"""The exit Tor says carries our traffic: its address and GeoIP country, from the control port.
+
+		Asks Tor itself rather than a third-party "what is my IP" site. The country is Tor's GeoIP, so
+		it is approximate; callers compare it with the requested country and report a mismatch. Returns
+		None when there is no built circuit yet.
+		"""
+		streams, circuits = await self._control_query('GETINFO stream-status', 'GETINFO circuit-status')
+		fingerprint = parse_circuit_exit(circuits, prefer_circuit=parse_stream_circuit(streams))
+		if fingerprint is None:
+			return None
+		(router,) = await self._control_query(f'GETINFO ns/id/{fingerprint}')
+		ip = parse_router_ip(router)
+		country = None
+		if ip:
+			(geo,) = await self._control_query(f'GETINFO ip-to-country/{ip}')
+			country = parse_country(geo)
+		return ExitInfo(fingerprint=fingerprint, ip=ip, country=country)
+
 	async def _open_control(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
 		try:
 			return await asyncio.open_connection('127.0.0.1', self.config.control_port)
@@ -376,6 +429,26 @@ class TorTransport:
 
 	def _log_new_circuit(self) -> str:
 		return '🧅 Requested a fresh Tor circuit (new exit)'
+
+
+# Flags that keep Chromium from bypassing the Tor proxy. SOCKS5 carries TCP only, so QUIC (UDP) and
+# WebRTC's UDP candidates would otherwise go out directly and reveal the real address. Proxy-side DNS
+# comes with `socks5://` itself (Chromium never resolves proxied hostnames locally).
+TOR_CHROMIUM_ARGS: tuple[str, ...] = (
+	'--disable-quic',
+	'--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+	'--disable-ipv6',
+)
+
+
+def tor_chromium_args() -> list[str]:
+	"""The Chromium flags to add when the browser is routed through Tor."""
+	return list(TOR_CHROMIUM_ARGS)
+
+
+def tor_version_is_supported(version: tuple[int, ...]) -> bool:
+	"""Whether a Tor is new enough (0.4.8.13 fixed a Conflux client bug that added extra circuits)."""
+	return version >= MIN_TOR_VERSION
 
 
 def should_fall_back(error_text: str) -> bool:

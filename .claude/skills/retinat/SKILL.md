@@ -28,6 +28,14 @@ user's own Chrome.
 5. **Find bugs across a site:** `retinat_explore(url)` returns a report plus a sheet of every
    page. Present the findings with their evidence.
 
+## Geo-blocked or censored pages
+
+If `retinat_open` fails with a network error or the page says it isn't available in your country,
+Retinat (default `auto`) retries once through Tor when Tor is installed, and says so. To choose:
+`retinat_network(mode='always', exit_country='de')`, then `retinat_network_status` to see the exit Tor
+reports. It restarts the browser. This is for reading public pages. It does not get past bot walls
+(reported, never retried), and you never log in over Tor.
+
 ## Rules
 
 - **No Playwright, Puppeteer or Selenium code.** Use the MCP tools, or `browser_use`'s own Python

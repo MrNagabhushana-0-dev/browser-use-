@@ -109,7 +109,7 @@
   },
   {
    "id": "tor-censorship-transport",
-   "title": "Optional Tor transport for censorship/geo-restriction circumvention",
+   "title": "Route choice: direct or Tor with an exit country, for geo-blocked and censored research",
    "status": "accepted",
    "hypothesis": "Content a network censors or geo-restricts becomes reachable for research/education by routing the browser's SOCKS5 through Tor, without any change to the agent.",
    "originating_agent": "orchestrator (Opus 4.8), from the owner's request for an app-level fallback transport",
@@ -118,7 +118,18 @@
    "implementation_cost": "Small, done. No new runtime dependency (raw async control client). Off by default.",
    "dependencies": "A tor binary on the host, or a Tor the user already runs; obfs4proxy/lyrebird for bridges on censored networks.",
    "experiment_required": "End-to-end run on a host with tor installed: bootstrap, fetch a geo-restricted test page, rotate circuit, confirm exit country changes. Not runnable in this sandbox (no tor, egress via fixed proxy).",
-   "honest_note": "Explicitly not a bot-detection bypass. should_fall_back() refuses to retry CAPTCHAs/unusual-traffic walls through Tor. For YouTube specifically the real paths are the user's own Chrome (--cdp-url) or an alternative frontend (Invidious/Piped)."
+   "honest_note": "Explicitly not a bot-detection bypass. should_fall_back() refuses to retry CAPTCHAs/unusual-traffic walls through Tor. For YouTube specifically the real paths are the user's own Chrome (--cdp-url) or an alternative frontend (Invidious/Piped).",
+   "evidence_update": "Round 8: NetworkRouter/TorPool built; one Tor per country because Chromium SOCKS5 has no auth; 30 network tests with real browsers; Chromium verified against a real SOCKS5 proxy (hostname resolved proxy-side, fails closed). Real Tor bootstrap and exit-country verification remain unverified (no tor binary here).",
+   "not_built": [
+    "block images/media in Tor mode (off by default: Retinat is vision-first)",
+    "per-host/global rate caps",
+    "code guard against typing into password fields on Tor",
+    "locale/Accept-Language match to exit country",
+    "OpenTelemetry metrics",
+    "ConfluxClientUX setting",
+    "VPS-fleet routing via gost or sing-box (faster and steadier than Tor, costs money, flagged as datacenter)",
+    "Psiphon as blocked-ISP fallback"
+   ]
   },
   {
    "id": "chromium-browser-shell",

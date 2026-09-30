@@ -37,6 +37,7 @@ import logging
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from browser_use.llm import ChatAWSBedrock
 
@@ -96,6 +97,7 @@ from browser_use.browser import BrowserProfile, BrowserSession
 from browser_use.config import get_default_llm, get_default_profile, load_browser_use_config
 from browser_use.filesystem.file_system import FileSystem
 from browser_use.llm.openai.chat import ChatOpenAI
+from browser_use.net import NetworkPolicyError, NetworkRouter, Outcome, classify_navigation
 from browser_use.tools.service import Tools
 
 logger = logging.getLogger(__name__)
@@ -191,7 +193,7 @@ def get_parent_process_cmdline() -> str | None:
 class BrowserUseServer:
 	"""MCP Server for browser-use capabilities."""
 
-	def __init__(self, session_timeout_minutes: int = 10):
+	def __init__(self, session_timeout_minutes: int = 10, network: NetworkRouter | None = None):
 		# Ensure all logging goes to stderr (in case new loggers were created)
 		_ensure_all_loggers_use_stderr()
 
@@ -208,6 +210,10 @@ class BrowserUseServer:
 		# The URL the snapshot above describes, so a page change by any route invalidates it.
 		self._site_tools_url: str = ''
 		self._start_time = time.time()
+		# Direct, or Tor with a chosen exit country: see browser_use/net/policy.py.
+		self.network = network or NetworkRouter.from_env()
+		# Set by servers that attach to a Chrome the person runs; its proxy isn't ours to change.
+		self.cdp_url: str | None = None
 
 		# Session management
 		self.active_sessions: dict[str, dict[str, Any]] = {}  # session_id -> session info
@@ -514,6 +520,7 @@ class BrowserUseServer:
 					# client to call browser_list_page_tools first means most never will; the
 					# point of the whole synthesis layer is that `search(query=...)` is simply
 					# there once you are on a site that can search.
+					*self._network_tool_entries('browser'),
 					*self._site_tool_entries(),
 					*self._eyes_tool_entries(),
 				]
@@ -576,8 +583,14 @@ class BrowserUseServer:
 				use_vision=arguments.get('use_vision', True),
 			)
 
+		# The route (direct or Tor) is a property of the server, not of a page: no session needed.
+		if tool_name == 'browser_network':
+			return await self._network_set(arguments)
+		elif tool_name == 'browser_network_status':
+			return await self.network.status()
+
 		# Browser session management tools (don't require active session)
-		if tool_name == 'browser_list_sessions':
+		elif tool_name == 'browser_list_sessions':
 			return await self._list_sessions()
 
 		elif tool_name == 'browser_close_session':
@@ -872,6 +885,11 @@ class BrowserUseServer:
 		for key, value in kwargs.items():
 			profile_data[key] = value
 
+		# Through Tor the profile gets the SOCKS proxy, leak-guard flags and a throwaway profile. An
+		# attached Chrome keeps its own connection: there is nothing of ours to route.
+		if not profile_data.get('cdp_url'):
+			profile_data.update(await self.network.session_kwargs())
+
 		# Create browser profile
 		profile = BrowserProfile(**profile_data)
 
@@ -1009,6 +1027,124 @@ class BrowserUseServer:
 			# Clean up
 			await agent.close()
 
+	def _network_tool_entries(self, prefix: str) -> list[types.Tool]:
+		"""The two tools an agent (or a UI toggle) uses to choose the route."""
+		return [
+			types.Tool(
+				name=f'{prefix}_network',
+				description=(
+					'Choose how the browser reaches the web. mode "off" = direct; "auto" = direct, then retry once '
+					'through Tor after a network failure or a "not available in your country" page; "always" = '
+					'through Tor. exit_country is a two-letter code such as "de" or "jp" (omit for any). Use it '
+					'for public pages a network censors or geo-fences. It does NOT get past bot walls or CAPTCHAs '
+					'(Tor exits are challenged more, and walls are reported, never bypassed), and you must never '
+					'log in or enter credentials over Tor. Changing route restarts the browser and closes its tabs.'
+				),
+				input_schema={
+					'type': 'object',
+					'properties': {
+						'mode': {'type': 'string', 'enum': ['off', 'auto', 'always']},
+						'exit_country': {'type': 'string', 'description': 'Two-letter country code, e.g. "de".'},
+						'reason': {'type': 'string', 'description': 'Why, for the session log.'},
+					},
+					'required': ['mode'],
+				},
+			),
+			types.Tool(
+				name=f'{prefix}_network_status',
+				description='The current route, the exit Tor reports (address and country), and recent route events.',
+				input_schema={'type': 'object', 'properties': {}},
+				annotations=types.ToolAnnotations(read_only_hint=True),
+			),
+		]
+
+	async def _network_set(self, arguments: dict[str, Any]) -> str:
+		"""Change the route; if it changed, drop the browser so the next call starts on the new one."""
+		if self.cdp_url and arguments.get('mode') != 'off':
+			return (
+				'Error: this server is attached to a Chrome you run (--cdp-url), which keeps its own connection. '
+				'Set a proxy in that browser instead, or start the server without --cdp-url.'
+			)
+		before = self.network.route
+		try:
+			summary = await self.network.set_network(
+				arguments['mode'], arguments.get('exit_country'), arguments.get('reason', '')
+			)
+		except NetworkPolicyError as e:
+			return f'Error: {e}'
+		if self.network.route != before:
+			await self._drop_browser_session()
+			summary += ' The browser restarts on this route at the next call; open tabs were closed.'
+		return summary
+
+	async def _drop_browser_session(self) -> None:
+		"""Close the current browser and its eyes so the next call launches fresh (new route, new proxy)."""
+		eyes, self._eyes_instance = getattr(self, '_eyes_instance', None), None
+		if eyes is not None:
+			try:
+				await eyes.close()
+			except Exception:
+				pass
+		if self.browser_session is not None:
+			await self._close_session(self.browser_session.id)
+		self.browser_session = None
+		self.tools = None
+
+	async def _page_outcome(self) -> Outcome:
+		"""Classify the page now in front of us: ok, geo_blocked or walled."""
+		from browser_use.explore import walls
+
+		assert self.browser_session is not None
+		try:
+			cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+			r = await cdp.cdp_client.send.Runtime.evaluate(
+				params={'expression': walls.PROBE_JS, 'returnByValue': True}, session_id=cdp.session_id
+			)
+			info = json.loads((r.get('result') or {}).get('value') or '{}')
+		except Exception:
+			return 'ok'
+		return classify_navigation(**info) if info else 'ok'
+
+	async def _navigate_routed(self, url: str, new_tab: bool = False, strict: bool = False) -> str:
+		"""Navigate; in `auto`, retry once through Tor after a network failure or a geo-block.
+
+		Returns a short note for the reply ('' when nothing notable happened). A bot wall is never
+		retried. `strict` raises navigation errors; without it they stay as quiet as they always were here.
+		"""
+		from browser_use.browser.events import NavigateToUrlEvent
+
+		assert self.browser_session is not None
+		self.network.check_url(url)
+
+		async def go() -> Exception | None:
+			assert self.browser_session is not None
+			try:
+				event = self.browser_session.event_bus.dispatch(NavigateToUrlEvent(url=url, new_tab=new_tab))
+				await event
+				await event.event_result(raise_if_any=True, raise_if_none=False)
+			except Exception as e:
+				return e
+			return None
+
+		error = await go()
+		outcome = classify_navigation(str(error)) if error else await self._page_outcome()
+		self.network.note_outcome(outcome)
+		note = ''
+		if self.network.wants_fallback(outcome) and not self.cdp_url:
+			host = urlparse(url).hostname or url
+			if await self.network.engage(f'{outcome} at {host}'):
+				await self._drop_browser_session()
+				await self._init_browser_session()
+				self.network.check_url(url)
+				error = await go()
+				self.network.note_outcome('ok' if error is None else 'network_error')
+				note = f' (retried through Tor, exit {(self.network.exit_country or "any").upper()}, after a {outcome.replace("_", " ")})'
+			elif self.network.last_error:
+				note = f' Tor fallback unavailable: {self.network.last_error}'
+		if error is not None and strict:
+			raise RuntimeError(f'{error}{note}') from error
+		return note
+
 	async def _navigate(self, url: str, new_tab: bool = False) -> str:
 		"""Navigate to a URL."""
 		if not self.browser_session:
@@ -1017,16 +1153,8 @@ class BrowserUseServer:
 		# Update session activity
 		self._update_session_activity(self.browser_session.id)
 
-		from browser_use.browser.events import NavigateToUrlEvent
-
-		if new_tab:
-			event = self.browser_session.event_bus.dispatch(NavigateToUrlEvent(url=url, new_tab=True))
-			await event
-			opened = f'Opened new tab with URL: {url}'
-		else:
-			event = self.browser_session.event_bus.dispatch(NavigateToUrlEvent(url=url))
-			await event
-			opened = f'Navigated to: {url}'
+		note = await self._navigate_routed(url, new_tab)
+		opened = (f'Opened new tab with URL: {url}' if new_tab else f'Navigated to: {url}') + note
 
 		# The tool surface belongs to the page, so it changes when the page does.
 		await self._refresh_site_tools()

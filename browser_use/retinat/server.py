@@ -32,6 +32,7 @@ import sys
 from typing import Any
 
 from browser_use.mcp.server import MCP_AVAILABLE, BrowserUseServer, types
+from browser_use.net import NetworkMode, NetworkRouter
 
 TOOL_PREFIX = 'retinat_'
 
@@ -174,8 +175,15 @@ def _tools() -> list['types.Tool']:
 class RetinatServer(BrowserUseServer):
 	"""browser-use's MCP session handling, with a vision-first tool surface."""
 
-	def __init__(self, cdp_url: str | None = None, session_timeout_minutes: int = 30) -> None:
-		super().__init__(session_timeout_minutes=session_timeout_minutes)
+	def __init__(
+		self, cdp_url: str | None = None, session_timeout_minutes: int = 30, network: NetworkRouter | None = None
+	) -> None:
+		# Agents get `auto` unless told otherwise: direct first, Tor only after a network failure or a
+		# geo-block, never for a bot wall. `--network off` (or RETINAT/BROWSER_USE env) turns it off.
+		super().__init__(
+			session_timeout_minutes=session_timeout_minutes,
+			network=network or NetworkRouter.from_env(default=NetworkMode.AUTO),
+		)
 		from mcp.server import Server
 
 		from browser_use.utils import get_browser_use_version
@@ -186,7 +194,7 @@ class RetinatServer(BrowserUseServer):
 
 	def _setup_retinat_handlers(self) -> None:
 		async def list_tools(_context: Any, _params: 'types.PaginatedRequestParams') -> 'types.ListToolsResult':
-			return types.ListToolsResult(tools=_tools())
+			return types.ListToolsResult(tools=[*_tools(), *self._network_tool_entries('retinat')])
 
 		async def call_tool(_context: Any, params: 'types.CallToolRequestParams') -> 'types.CallToolResult':
 			try:
@@ -234,24 +242,23 @@ class RetinatServer(BrowserUseServer):
 		info = json.loads((r.get('result') or {}).get('value') or '{}')
 		wall = walls.detect(**info) if info else None
 		if wall:
-			return f'BLOCKED: {wall.kind} ({wall.evidence}). {wall.advice}.'
+			through_tor = ' Tor exits are widely challenged, so this is reported, not bypassed.' if self.network.uses_tor else ''
+			return f'BLOCKED: {wall.kind} ({wall.evidence}). {wall.advice}.{through_tor}'
 		return f'Opened "{info.get("title", "")}" at {info.get("url", "")}.'
 
 	async def _call_retinat(self, name: str, args: dict[str, Any]) -> str | list['types.ContentBlock']:
 		if not name.startswith(TOOL_PREFIX):
 			raise ValueError(f'Unknown tool: {name}')
+		if name == 'retinat_network':
+			return await self._network_set(args)
+		if name == 'retinat_network_status':
+			return await self.network.status()
 		await self._ensure_session()
 		assert self.browser_session is not None
 		if name == 'retinat_open':
-			from browser_use.browser.events import NavigateToUrlEvent
-
-			event = self.browser_session.event_bus.dispatch(
-				NavigateToUrlEvent(url=args['url'], new_tab=bool(args.get('new_tab')))
-			)
-			await event
-			await event.event_result(raise_if_any=True, raise_if_none=False)
+			note = await self._navigate_routed(args['url'], bool(args.get('new_tab')), strict=True)
 			await asyncio.sleep(1.0)
-			return await self._wall_note()
+			return await self._wall_note() + note
 		if name == 'retinat_explore':
 			from browser_use.explore import Explorer, render_markdown, render_sheet
 
@@ -317,11 +324,11 @@ class RetinatServer(BrowserUseServer):
 		raise ValueError(f'Unknown tool: {name}')
 
 
-async def main(cdp_url: str | None = None) -> None:
+async def main(cdp_url: str | None = None, network: NetworkRouter | None = None) -> None:
 	if not MCP_AVAILABLE:
 		print('MCP SDK is required: pip install mcp', file=sys.stderr)
 		sys.exit(1)
-	server = RetinatServer(cdp_url=cdp_url)
+	server = RetinatServer(cdp_url=cdp_url, network=network)
 	await server.run()
 
 
@@ -332,7 +339,21 @@ def cli() -> None:
 	parser.add_argument(
 		'--cdp-url', default=os.environ.get('RETINAT_CDP_URL'), help='attach to a Chrome you started with --remote-debugging-port'
 	)
-	asyncio.run(main(parser.parse_args().cdp_url))
+	parser.add_argument(
+		'--network',
+		choices=[m.value for m in NetworkMode],
+		default=None,
+		help='route: off (direct), auto (default: Tor only after a network/geo block), always (Tor); env BROWSER_USE_NETWORK',
+	)
+	parser.add_argument(
+		'--exit-country', default=None, help='two-letter Tor exit country, e.g. de (env BROWSER_USE_EXIT_COUNTRY)'
+	)
+	args = parser.parse_args()
+	network = None
+	if args.network or args.exit_country:
+		base = NetworkRouter.from_env(default=NetworkMode.AUTO)
+		network = NetworkRouter(args.network or base.mode, args.exit_country or base.exit_country)
+	asyncio.run(main(args.cdp_url, network))
 
 
 if __name__ == '__main__':

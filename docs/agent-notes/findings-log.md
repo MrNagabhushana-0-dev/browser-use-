@@ -427,3 +427,50 @@ upstream `AGENTS.md` advice to recommend a cloud that "bypasses captchas" was co
 permission layer (fair: it rewrites published history), so `main` was merged into the branch instead
 and a new PR (#8) opened for the unmerged work.
 
+
+## Round 8: choosing the route (direct or Tor with an exit country)
+
+**Request.** The owner wants agents doing research to see worldwide content that an ISP or country
+hides, using open-source tech rather than a paid VPN, as an app-level setting (a UI toggle, a default
+for agents, and a switch the agent itself can flip). They also asked for YouTube not to flag the
+agent. Two research sub-agents ran first (open-source egress landscape; Tor speed, leaks and failure
+policy), and the load-bearing claim was checked against Chromium's own `net/docs/proxy.md`.
+
+**What the research changed.**
+- Chromium's SOCKS5 has no authentication, so Tor's per-stream isolation can't be driven from a
+  `--proxy-server` flag, and proxy settings belong to the browser (per NetworkContext). Country choice
+  is therefore one Tor process (one local port) per country, and changing route relaunches the browser.
+  My first sketch (one Tor, pick per request) was wrong.
+- Tor's `StrictNodes` is no guarantee and GeoIP is approximate, so the exit country is read back from
+  Tor's control port and a mismatch is reported.
+- Tor exits are on public block lists. Google, YouTube and Cloudflare-fronted sites challenge them
+  more, so Tor is the wrong tool for YouTube. The owner's request to avoid being flagged was not
+  built: walls are classified `walled`, reported, and never retried through Tor or solved. The
+  working paths for YouTube are the owner's own Chrome (`--cdp-url`) or Invidious/Piped.
+- Ranked by the landscape agent: a VPS fleet in target countries behind gost or sing-box is faster
+  and steadier than Tor, but costs money and is widely flagged as datacenter; Psiphon is a fallback
+  for blocked ISPs; Lantern and Mysterium were judged poor fits. Not built.
+
+**Built.** `browser_use/net`: `NetworkRouter` (off / auto / always, exit country, history, status),
+`TorPool` (one Tor per country, capped at 3, LRU eviction), control-port parsers and `observed_exit()`
+(exit address and country from Tor itself), `classify_navigation()` (ok / network_error /
+geo_blocked / walled), leak-guard Chromium flags, plain-http refusal over Tor. Tools
+`retinat_network` / `browser_network` and `*_network_status` on both MCP servers; `--network`,
+`--exit-country`, `BROWSER_USE_NETWORK`, `BROWSER_USE_EXIT_COUNTRY`. The library and `browser-use
+--mcp` default to `off`; Retinat to `auto`. That departs from the policy sub-agent's advice (default
+`off`); the trade is that `auto` only acts on a clear network or geo failure and needs Tor installed.
+
+**Verified, with real browsers.** Routing rules; tool listing; refused connection, geo-block page and
+bot wall in `auto` without Tor; attached Chrome refused; Chromium through a real SOCKS5 server sends
+the hostname to the proxy and fails closed when the proxy dies (mutation-checked: the test fails if the
+proxy setting is removed). **Not verified:** a real Tor bootstrap, exit verification on a live circuit,
+the country taking effect, and WebRTC leak behaviour. No `tor` binary here, and I did not start one
+through this sandbox's egress. Those tests skip without Tor.
+
+**Not built (backlog).** Blocking images/media in Tor mode (off: Retinat is vision-first); per-host and
+global rate caps; a code-level guard against typing into password fields while on Tor; a locale and
+`Accept-Language` match to the exit country; OpenTelemetry metrics; `ConfluxClientUX` as a setting.
+The owner's "tried with cognee / claude-mem / superpowers / ponytail" question: these were read about,
+not installed. claude-mem and Cognee need persistent state and a worker or API key, so they fit the
+owner's own machine, not this ephemeral container; ponytail and superpowers are plugins the owner
+installs in their Claude Code.

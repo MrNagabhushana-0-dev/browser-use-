@@ -130,41 +130,65 @@ The navigation error names this setting when it detects such an environment. The
 automatic detection: telling private CAs from public ones automatically was tried, and it
 wrongly trusted public CAs.
 
-## Censorship-resistant transport (optional Tor)
+## Choosing the route: direct, or Tor with an exit country
 
-`browser_use/net/tor.py` provides an **opt-in, off-by-default** SOCKS5 path through Tor, for
-reaching content a network **censors or geo-restricts** — the research-and-education case of a
-page that simply won't load from where you are. It manages a `tor` process (or attaches to one
-you already run) and hands its SOCKS5 port to `BrowserProfile.proxy`, which already speaks SOCKS5.
+Some public pages load from one country and not another: a network censors them, or the site
+geo-fences them. For research and education you can route the browser through Tor and pick the exit
+country. Both MCP servers have two tools for it, and a person's UI toggle calls the same method:
+
+| Tool | Does |
+|---|---|
+| `retinat_network` / `browser_network` | `mode` = `off` (direct), `auto` (direct, then Tor after a network failure or a "not available in your country" page), `always` (Tor). Optional `exit_country` (`de`, `jp`, ...) and `reason`. |
+| `retinat_network_status` / `browser_network_status` | The route, the exit address and country **as Tor reports them**, and recent route events. |
+
+Defaults: the library and `browser-use --mcp` start at `off`. Retinat starts at `auto`, which only
+acts on a clear network or geo failure, never on a bot wall, and never when attached to a Chrome you
+run (`--cdp-url` keeps its own connection). Change it with `--network off|auto|always`,
+`--exit-country de`, or the `BROWSER_USE_NETWORK` / `BROWSER_USE_EXIT_COUNTRY` environment variables.
+Changing the route restarts the browser and closes its tabs, because a proxy belongs to the browser.
 
 ```python
-from browser_use.net import TorConfig, TorTransport, should_fall_back
+from browser_use.net import NetworkMode, NetworkRouter
 
-tor = TorTransport(TorConfig(enabled=True, exit_country='de'))  # prefer a German exit
-await tor.start()                                               # reuses a running Tor, else launches one
-profile = BrowserProfile(proxy=tor.proxy_settings())           # socks5://127.0.0.1:9050
-# ... browse ...
-await tor.new_circuit()                                        # new exit (Tor's ~10s cooldown applies)
-await tor.stop()
+router = NetworkRouter(NetworkMode.AUTO, exit_country='jp')
+await router.set_network('always', 'kr', reason='compare Korean listings')   # starts Tor now
+profile = BrowserProfile(**await router.session_kwargs())                     # SOCKS5 + leak guards + throwaway profile
+print(await router.status())                                                  # exit ip/country from Tor itself
 ```
 
-On a censored network, set `TorConfig(bridges=[...])` with obfs4/webtunnel bridge lines; an
-`obfs4proxy`/`lyrebird` binary on PATH is picked up automatically. Needs a `tor` binary
-(`apt install tor`, `brew install tor`) or a Tor you already run.
+**Needs Tor installed** (`apt install tor`, `brew install tor`) or one you already run. Without it,
+`auto` says "Tor fallback unavailable" and continues to fail normally, and `always` refuses up front.
+On a network that blocks Tor, `TorConfig(bridges=[...])` takes obfs4/webtunnel lines.
 
-**This is not a bot-detection bypass, and won't unblock YouTube or Google.** The opposite:
-Tor exit-node addresses are on public block lists, so those sites challenge them *more*, not
-less. `should_fall_back(error_text)` reflects this — it retries only network/censorship errors
-(connection reset/refused/timed out, DNS blocked, HTTP 451) through Tor, and **never** retries a
-CAPTCHA or "unusual traffic" wall. For a site that blocks an address range (YouTube on a
-datacenter IP), the honest paths are:
+How a country is chosen, and why it is built this way:
+- Chromium's SOCKS5 has no authentication, and Tor's `ExitNodes` is per process. So there is **one
+  Tor process per country**, each on its own local port (`TorPool`, at most 3, least recently used
+  stopped first), and the browser is launched against the port it wants.
+- Tor's country data is approximate, and `StrictNodes` is no guarantee. `status` reports the country
+  Tor itself says the exit is in and warns on a mismatch. Do not assume the country.
+- Through Tor the browser gets `--disable-quic`, `--disable-ipv6` and
+  `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` (SOCKS5 carries TCP only, so QUIC and
+  WebRTC would otherwise go around it), proxy-side DNS, no extensions and a throwaway profile (no
+  cookies or logins carried in). Plain `http://` is refused, because the exit relay can read and alter
+  it; `allow_http=True` is the opt-out.
 
-- the person's **own browser and connection** via `--cdp-url` (see "Attaching to your own Chrome"), or
-- an **alternative front end** such as Invidious or Piped, which serve YouTube content through
-  their own API and interface.
+**What this does not do, and what to do instead**
+- **It does not get past bot detection, and it will not try.** Tor exit addresses are on public
+  block lists, so Google, YouTube and Cloudflare-fronted sites challenge them *more*. A wall is
+  classified `walled`, reported as `BLOCKED`, never retried through Tor, and never solved.
+  For YouTube, use the person's own Chrome (`--cdp-url`) or an alternative front end (Invidious, Piped).
+- **Never log in or enter credentials over Tor.** Exits can read and tamper with traffic, and a
+  signed-in session defeats the point. The route tools say so to the model; it is not enforced in code yet.
+- **Be a good guest.** Tor is run by volunteers. Don't use it for bulk downloads, video or scraping
+  at volume; read pages, don't crawl them. Tor speed is a few Mbit/s with 1-3 s to first byte: expect
+  60-90 s navigation timeouts to be reasonable. Using it to get around a geo-restriction can breach a
+  site's terms; that is the person's call, not something this library decides.
 
-Nothing here disguises the agent as a human to defeat a site's abuse protections. When a human
-check appears, it is reported and left to a person.
+Verified here with real browsers: the routing rules, the agent tools, and Chromium sending traffic
+through a real SOCKS5 proxy with the hostname resolved by the proxy and a dead proxy meaning failure
+rather than a direct connection. **Not verified: a real Tor bootstrap, exit verification against a
+live circuit, and the country actually taking effect.** Those need a host with `tor` installed; the
+tests for them skip elsewhere.
 
 ## Working on this code
 
