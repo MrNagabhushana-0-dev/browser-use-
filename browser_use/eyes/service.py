@@ -302,10 +302,7 @@ class Eyes:
 		await self.retina.wait_for_data(0.6)
 		if self.retina.attended.get('vid'):
 			return await self.watch(seconds=seconds, until='time', min_seconds=seconds, detail=detail, keyframes=2)
-		watcher = self._page_watcher()
-		await watcher.start()
-		await asyncio.sleep(0.5)
-		jpeg = watcher.latest()
+		jpeg = await self._page_watcher().wait_latest()
 		url = self.retina.state.get('url', '')
 		text = f'👁 no video playing on {url[:120]}; this is the page as drawn now (a compositor frame, not a screenshot call)'
 		if not jpeg:

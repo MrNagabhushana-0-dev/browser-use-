@@ -209,6 +209,30 @@ def _near(value: float, target: float, tol: float) -> bool:
 # -- sight and hearing against ground truth -------------------------------------------------
 
 
+def test_a_heuristic_speech_sliver_the_voice_model_rejects_does_not_become_its_own_segment():
+	# The heuristic sometimes calls the half-second straddling a boundary "speech"; the voice model
+	# then (rightly) finds none and it becomes "sound". It is a mix of both sides, not a sound of
+	# its own, and must fold into a neighbour like any other sliver: this was a flaky CI failure.
+	from browser_use.eyes.hearing import Hearing, Segment, apply_speech_regions
+
+	h = Hearing(
+		segments=[
+			Segment(0.0, 2.5, 'silence', -90.0),
+			Segment(2.5, 5.0, 'tone', -20.0, '441 Hz'),
+			Segment(5.0, 7.4, 'beats', -25.0, '~120 bpm'),
+			Segment(7.4, 8.1, 'speech', -22.0),
+			Segment(8.1, 10.0, 'noise', -24.0),
+		]
+	)
+	out = apply_speech_regions(h, regions=[])
+	assert [s.kind for s in out.segments] == ['silence', 'tone', 'beats', 'noise'], out.segments
+	assert out.segments[-1].t0 == 7.4 and out.speech_by == 'vad'
+
+	# Real speech the model confirms stays speech, however short the heuristic made it.
+	h2 = Hearing(segments=[Segment(0.0, 1.0, 'silence', -90.0), Segment(1.0, 1.6, 'speech', -20.0)])
+	assert [s.kind for s in apply_speech_regions(h2, regions=[(1.0, 1.6)]).segments] == ['silence', 'speech']
+
+
 async def test_cuts_and_sounds_are_found_where_they_are(eyes, session, site):
 	await _open(eyes, session, site.url_for('/calib'))
 	p = await eyes.watch(seconds=4 * SECTION + 1.0, until='time')
