@@ -520,3 +520,45 @@ login and H.264), and the explorer on anything but one portfolio.
 **Decisions to revisit.** Retinat defaults to `auto`, against the policy research's advice of `off`: it
 acts only after a clear network or geo failure and needs Tor installed. No attempt was made to avoid bot
 detection, by design; Tor would make it worse.
+
+## Round 9: the eyes flakes, a phone-home, and an agentic-vision research workflow
+
+**Eyes flakes.** Captured a real failing run instead of guessing. `test_cuts_and_sounds` failed with
+`[silence, tone, beats, sound, noise]`: the heuristic called the half-second straddling a boundary
+"speech", the voice model rejected it, and `apply_speech_regions` (which ran after `_smooth` and only
+dropped slivers under 0.2 s) left a 0.5-1 s orphan "sound". It now reuses `_smooth`; a unit test fails
+on the old code. `Eyes.look()` slept a fixed 0.5 s for a frame and now waits for one (up to 4 s): that
+canvas failure was seen once and never reproduced (0/8 alone), so it is a robustness fix, not a proven
+cause. **Ruled out by experiment:** a starved Python loop (5/5 pass with the loop busy 80% of the time),
+renderer main-thread jank (4/4 pass), and resource leaks (one browser's processes, flat memory). An
+apparent order dependence (2/8 in a 4-file subset vs 0/10 alone) is not significant (Fisher p≈0.18).
+**Still open:** the feed sometimes advancing two reels. Full suite after the fixes: 1,547 passed, 30
+skipped, 0 failed (one run; the flakes were intermittent, so one green run is weak evidence).
+
+**Phone-home found while chasing the flake.** The sandbox proxy logged `cf.browser-use.com`: the
+about:blank loading screen fetched its logo on every browser start. Now inline; tested. Chromium also
+reached `mtalk.google.com:5228` (push messaging) and `www.google.com` during tests despite
+`--disable-background-networking`; not attributed yet.
+
+**Research workflow** (11 agents: 3 surveys, 2 scientists, 6 prior-art examiners; full data in
+`research-agentic-vision-2026-10.json`, ideas in `ideas-backlog.json` as `r9-*`). The surveys' most
+decision-relevant findings, each with a source in the JSON:
+- **AOI** (arXiv 2606.29472, open code): on dynamic browser tasks, *how* keyframes are chosen barely
+  matters (five strategies within noise), while keeping the model's narration as text memory adds
+  ~+8 pp and writing it ~+10 pp; keyframe images cost Gemini 3 Flash 12 pp. This challenges the eyes'
+  emphasis on keyframe selection. One group, n=100; not yet replicated.
+- **Pull, not push:** Gemini's `processing='agentic'` lets the model fetch transcript and frames at
+  chosen times. Retinat only pushes; the retina already keeps a 240-frame ring that could serve pulls.
+- **Per-model costs:** `percept.py` uses one Claude-style estimate; Claude's documented caps differ by
+  model tier, and on Gemini a 1 FPS frame list or raw audio can be cheaper than a sheet.
+- **Gap nobody has filled:** renderer damage signals (`HeadlessExperimental.beginFrame` hasDamage,
+  `LayerTree.layerPainted`) as an event-camera-like attention stream for a browser agent.
+
+The two scientists proposed six techniques. **All six came back `partially_exists`; none was new as a
+whole**, and the examiners (17-25 searches each) found real technical flaws in several, for example
+the sham-diff idea's significance test can never fire as specified. What survives as narrow novelty is
+recorded per idea.
+
+**Next, in order:** (1) a pull tool over the retina's ring (`frames at t0-t1`, by time); (2) per-model
+image-token caps in `percept.py` from the providers' docs; (3) text narration memory across steps, then
+an A/B against sheets on this repo's own feed pages; (4) the feed two-reel skip.
