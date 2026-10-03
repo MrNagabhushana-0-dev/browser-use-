@@ -618,3 +618,28 @@ recall: persist keyframes beside the journal so recall reaches back hours, not t
 rotation; (3) the A/B of sheet vs recall vs journal; (4) per-model image-token caps; (5) opt-in desktop
 eyes on the person's own screen; (6) the feed two-reel skip. Honest limit to keep stating: the model does
 not perceive between turns; "unlimited" means nothing is lost and any moment can be pulled.
+
+## Round 12: recall from disk, so vision is not limited to the last two minutes
+
+**Built.** `browser_use/eyes/archive.py` (`FrameArchive`): keyframes copied out of the page's 240-frame
+ring to `frames/` beside the journal, with an index (item id, media time, 16x16 signature, RGB). Capped at
+200 MB by default, oldest first; reloads its index on start. `Eyes(archive=True)` runs an archiver task
+every 2 s while open (`archive_now()` on demand); `recall` and `held` merge disk and memory, reading JPEGs
+from disk when it has them. Frames are of whatever was watched, stored only on the local machine.
+
+**Verified.** A fresh `Eyes` with an empty retina, never started, recalled the calibration video's blue
+section with only blue frames, which can only have come from disk. The cap test keeps the directory under
+its byte limit, drops the oldest first and survives a reload. Eyes + Retinat files 35/35.
+**Not measured:** archiver cost on a long real session (CPU, disk per hour).
+
+**Owner ideas this round, assessed:** (a) "retina sends signals, not images": the honest version is a
+local open-source image-embedding model turning archived keyframes into vectors, so the model can search
+what it saw by meaning ("the moment with the red car") and pull only those frames. Buildable next.
+(b) "a 4D/5D map of hours of video at ms resolution": per-millisecond is neither possible from 30-60 fps
+video nor needed; the archive's time-indexed signatures plus that embedding index, across several videos,
+is the workable compressed space, and an edit list can then cut matching segments with ffmpeg. (c) desktop
+eyes on the person's own laptop, opt-in and local: still queued.
+
+**Next, in order:** (1) a semantic index over the archive with an open-source image-text embedding model
+(search by meaning, then recall); (2) a standalone eyes process; (3) the A/B of sheet vs recall vs journal;
+(4) opt-in desktop eyes; (5) per-model image-token caps; (6) the feed two-reel skip.

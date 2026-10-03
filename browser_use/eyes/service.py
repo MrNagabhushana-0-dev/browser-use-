@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from browser_use.eyes import asr, hearing, sight
+from browser_use.eyes.archive import FrameArchive
 from browser_use.eyes.percept import ItemPercept, Keyframe, Percept, assemble, estimate_image_tokens, render_strip
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
 from browser_use.human.input import HumanInput
@@ -95,6 +96,7 @@ class Eyes:
 		speech: bool | None = None,
 		fps: float = 10.0,
 		now_path: Path | None | Literal[False] = None,
+		archive: bool = True,
 		seed: int | None = None,
 	) -> None:
 		self.browser_session = browser_session
@@ -106,6 +108,9 @@ class Eyes:
 		# What changed, kept on disk between the model's turns (only changes, not every tick).
 		self.journal_path = self.now_path.with_name('journal.jsonl') if self.now_path is not None else None
 		self._journaled: dict[str, Any] = {}
+		# Keyframes copied to disk as they are taken, so recall reaches past the page's ring.
+		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
+		self._archiver: asyncio.Task | None = None
 		self._last_now = 0.0
 		self._items_seen = 0
 		self._pages = None
@@ -116,9 +121,18 @@ class Eyes:
 		state = await self.retina.start(target_id)
 		if self.now_path is not None and self._update_now not in self.retina._listeners:
 			self.retina.on_batch(self._update_now)
+		if self.archive is not None and (self._archiver is None or self._archiver.done()):
+			self._archiver = asyncio.create_task(self._archive_loop())
 		return state
 
 	async def close(self) -> None:
+		if self._archiver is not None:
+			self._archiver.cancel()
+			try:
+				await self._archiver
+			except (asyncio.CancelledError, Exception):
+				pass
+			self._archiver = None
 		if self._pages is not None:
 			await self._pages.stop()
 		await self.retina.stop()
@@ -319,10 +333,38 @@ class Eyes:
 		text += f'\n~{tokens + len(text) // 4} tokens (frame {size[0]}x{size[1]} ~{tokens}; estimates)'
 		return Percept([], text, jpeg, size, tokens, len(text) // 4)
 
+	async def archive_now(self, limit: int = 40) -> int:
+		"""Copy keyframes not yet on disk from the page's ring to the archive. Returns how many."""
+		if self.archive is None:
+			return 0
+		pending = [f for f in self.retina.frames if f.has_keyframe and not self.archive.has(f.vid, f.seq)][-limit:]
+		if not pending:
+			return 0
+		jpegs = await self.retina.keyframes([f.seq for f in pending])
+		stored = 0
+		for f, jpeg in zip(pending, jpegs):
+			if jpeg:
+				self.archive.add(f, jpeg)
+				stored += 1
+		return stored
+
+	async def _archive_loop(self, every_s: float = 2.0) -> None:
+		while True:
+			await asyncio.sleep(every_s)
+			try:
+				await self.archive_now()
+			except asyncio.CancelledError:
+				raise
+			except Exception as e:  # the page navigated or closed; try again next tick
+				logger.debug(f'eyes: archive tick failed: {type(e).__name__}: {e}')
+
 	def held(self, item: int | None = None) -> tuple[float, float] | None:
 		"""The media-time span (first, last) of one item's frames that still have a keyframe."""
 		vid = item if item is not None else self.retina.attended.get('vid', 0)
 		times = [f.t for f in self.retina.frames if f.vid == vid and f.has_keyframe]
+		on_disk = self.archive.span(vid) if self.archive is not None else None
+		if on_disk:
+			times += list(on_disk)
 		return (min(times), max(times)) if times else None
 
 	async def recall(self, t0: float, t1: float, frames: int = 4, item: int | None = None) -> Percept:
@@ -335,13 +377,19 @@ class Eyes:
 		assert t1 >= t0 and frames >= 1, 'recall needs t1 >= t0 and at least one frame'
 		vid = item if item is not None else self.retina.attended.get('vid', 0)
 		window = [f for f in self.retina.frames if f.vid == vid and t0 <= f.t <= t1]
+		if self.archive is not None:  # moments that have left the page's ring, or an earlier session
+			in_memory = {f.seq for f in window}
+			window += [f for f in self.archive.window(vid, t0, t1) if f.seq not in in_memory]
+			window.sort(key=lambda f: f.t)
 		span = self.held(vid)
 		held = f'held: {sight.fmt_t(span[0])}-{sight.fmt_t(span[1])}' if span else 'held: nothing for this item'
 		head = f'👁 recall {sight.fmt_t(t0)}-{sight.fmt_t(t1)} of item {vid}'
 		chosen = sight.select_keyframes(window, frames).indices if window else []
 		picked = sorted((window[i] for i in chosen), key=lambda f: f.t)
-		jpegs = await self.retina.keyframes([f.seq for f in picked]) if picked else []
-		got = [(f.t, j) for f, j in zip(picked, jpegs) if j]
+		from_disk = {f.seq: self.archive.read(vid, f.seq) for f in picked} if self.archive is not None else {}
+		live = [f for f in picked if not from_disk.get(f.seq)]
+		fetched = dict(zip([f.seq for f in live], await self.retina.keyframes([f.seq for f in live]))) if live else {}
+		got = [(f.t, j) for f in picked if (j := from_disk.get(f.seq) or fetched.get(f.seq))]
 		if not got:
 			why = 'nothing held between those times' if not picked else 'those keyframes were evicted from the ring'
 			return Percept([], f'{head}: {why} ({held})', None)

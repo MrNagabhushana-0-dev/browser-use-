@@ -698,3 +698,37 @@ async def test_recall_says_what_it_holds_when_the_window_is_empty(eyes, session,
 	empty = await eyes.recall(30.0, 35.0)
 	assert empty.image is None and not empty.frames
 	assert 'nothing held between' in empty.text and 'held:' in empty.text, empty.text
+
+
+async def test_recall_reaches_past_the_ring_from_disk_even_in_a_new_session(eyes, session, site, tmp_path):
+	# "Unlimited" recall: keyframes are archived to disk as they are taken, so a moment can be pulled
+	# after it has left the page's 240-frame ring, or from a fresh Eyes with nothing in memory.
+	await _open(eyes, session, site.url_for('/calib'))
+	await eyes.watch(seconds=4 * SECTION + 0.5, until='time')
+	vid = eyes.retina.attended['vid']
+	await asyncio.sleep(3.0)  # let the archiver catch up
+	assert eyes.archive is not None and len(eyes.archive) > 0
+
+	fresh = Eyes(session, seed=7, speech=False, now_path=tmp_path / 'now.json')
+	assert not fresh.retina.frames, 'nothing in memory: this can only come from disk'
+	blue = await fresh.recall(2 * SECTION + 0.3, 3 * SECTION - 0.3, frames=3, item=vid)
+	assert blue.frames, blue.text
+	for _t, jpeg in blue.frames:
+		r, g, b = _mean_rgb(jpeg)
+		assert b > 150 and r < 90 and g < 90, ('the blue section, from disk', (r, g, b))
+	assert 'held:' in blue.text
+
+
+def test_the_archive_stays_under_its_size_cap(tmp_path):
+	from browser_use.eyes.archive import FrameArchive
+	from browser_use.eyes.retina import FrameSample
+
+	jpeg = b'\xff\xd8' + b'x' * 10_000 + b'\xff\xd9'
+	archive = FrameArchive(tmp_path / 'frames', max_bytes=60_000)
+	for seq in range(20):
+		archive.add(FrameSample(seq, 1, seq * 0.5, 0.0, bytes(256), (1, 2, 3), True), jpeg)
+	total = sum(p.stat().st_size for p in (tmp_path / 'frames').glob('*.jpg'))
+	assert total <= 60_000, total
+	assert archive.read(1, 0) is None and archive.read(1, 19) == jpeg, 'oldest go first, newest stay'
+	reopened = FrameArchive(tmp_path / 'frames', max_bytes=60_000)
+	assert len(reopened) == len(archive) and reopened.window(1, 9.0, 9.6)
