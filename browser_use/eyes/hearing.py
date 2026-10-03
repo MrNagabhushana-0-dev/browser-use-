@@ -405,7 +405,8 @@ def apply_speech_regions(hearing: Hearing, regions: list[tuple[float, float]]) -
 				prev.t1 = b
 			else:
 				out.append(Segment(a, b, kind, seg.loud_db, detail))
-	hearing.segments = [s for s in out if s.duration >= 0.2 or s.kind != 'sound']
+	# Relabelling makes new 'sound' slivers (heuristic 'speech' the model rejected): fold them like any other.
+	hearing.segments = _smooth(out)
 	hearing.speech_by = 'vad'
 	return hearing
 

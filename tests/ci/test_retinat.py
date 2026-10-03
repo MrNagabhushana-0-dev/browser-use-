@@ -57,6 +57,7 @@ async def test_it_is_its_own_server_with_only_vision_first_tools():
 		'retinat_browse',
 		'retinat_next',
 		'retinat_explore',
+		'retinat_recall',
 	}
 	assert all(n.startswith('retinat_') for n in names), 'no DOM tools here: that is the browser-use server'
 
@@ -86,3 +87,11 @@ async def test_a_bot_wall_is_reported_as_blocked(retinat, site):
 async def test_unknown_tools_are_errors_not_crashes(retinat):
 	result = await _call(retinat, 'browser_click', {'index': 1})
 	assert result.is_error and 'Unknown tool' in _text(result)
+
+
+async def test_recall_through_mcp_answers_plainly_when_nothing_is_held(retinat, site):
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/')})
+	result = await _call(retinat, 'retinat_recall', {'t0': 0, 't1': 5})
+	assert not result.is_error and 'nothing held' in _text(result), _text(result)
+	bad = await _call(retinat, 'retinat_recall', {'t0': 5, 't1': 1})
+	assert bad.is_error and 't1 must be' in _text(bad)

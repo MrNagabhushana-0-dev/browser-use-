@@ -32,6 +32,7 @@ import sys
 from typing import Any
 
 from browser_use.mcp.server import MCP_AVAILABLE, BrowserUseServer, types
+from browser_use.net import NetworkMode, NetworkRouter
 
 TOOL_PREFIX = 'retinat_'
 
@@ -151,6 +152,26 @@ def _tools() -> list['types.Tool']:
 			input_schema={'type': 'object', 'properties': {'key': {'type': 'string'}}, 'required': ['key']},
 		),
 		types.Tool(
+			name='retinat_recall',
+			description=(
+				'Frames from a moment already seen, by media time: ask for t0-t1 seconds of the item being watched '
+				'(or `item`) and get the frames that best cover that window, labelled with their times. Answers from '
+				'what the eyes kept; it never seeks or replays. Use it after retinat_watch when a question needs a '
+				'closer look at one moment, instead of watching again.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					't0': {'type': 'number', 'minimum': 0},
+					't1': {'type': 'number', 'minimum': 0},
+					'frames': {'type': 'integer', 'default': 4, 'minimum': 1, 'maximum': 8},
+					'item': {'type': 'integer', 'description': 'item id from a watch/browse percept; default: the one attended'},
+				},
+				'required': ['t0', 't1'],
+			},
+			annotations=ro,
+		),
+		types.Tool(
 			name='retinat_now',
 			description='One line on what is on screen and audible right now. No image; nearly free.',
 			input_schema={'type': 'object', 'properties': {}},
@@ -174,8 +195,15 @@ def _tools() -> list['types.Tool']:
 class RetinatServer(BrowserUseServer):
 	"""browser-use's MCP session handling, with a vision-first tool surface."""
 
-	def __init__(self, cdp_url: str | None = None, session_timeout_minutes: int = 30) -> None:
-		super().__init__(session_timeout_minutes=session_timeout_minutes)
+	def __init__(
+		self, cdp_url: str | None = None, session_timeout_minutes: int = 30, network: NetworkRouter | None = None
+	) -> None:
+		# Agents get `auto` unless told otherwise: direct first, Tor only after a network failure or a
+		# geo-block, never for a bot wall. `--network off` (or RETINAT/BROWSER_USE env) turns it off.
+		super().__init__(
+			session_timeout_minutes=session_timeout_minutes,
+			network=network or NetworkRouter.from_env(default=NetworkMode.AUTO),
+		)
 		from mcp.server import Server
 
 		from browser_use.utils import get_browser_use_version
@@ -186,7 +214,7 @@ class RetinatServer(BrowserUseServer):
 
 	def _setup_retinat_handlers(self) -> None:
 		async def list_tools(_context: Any, _params: 'types.PaginatedRequestParams') -> 'types.ListToolsResult':
-			return types.ListToolsResult(tools=_tools())
+			return types.ListToolsResult(tools=[*_tools(), *self._network_tool_entries('retinat')])
 
 		async def call_tool(_context: Any, params: 'types.CallToolRequestParams') -> 'types.CallToolResult':
 			try:
@@ -234,24 +262,37 @@ class RetinatServer(BrowserUseServer):
 		info = json.loads((r.get('result') or {}).get('value') or '{}')
 		wall = walls.detect(**info) if info else None
 		if wall:
-			return f'BLOCKED: {wall.kind} ({wall.evidence}). {wall.advice}.'
+			through_tor = ' Tor exits are widely challenged, so this is reported, not bypassed.' if self.network.uses_tor else ''
+			return f'BLOCKED: {wall.kind} ({wall.evidence}). {wall.advice}.{through_tor}'
 		return f'Opened "{info.get("title", "")}" at {info.get("url", "")}.'
+
+	async def _secret_field_focused(self) -> bool:
+		"""Whether the focused element is a password, card or one-time-code field (top document only)."""
+		assert self.browser_session is not None
+		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		r = await cdp.cdp_client.send.Runtime.evaluate(
+			params={
+				'expression': "(() => { const e = document.activeElement; if (!e || e.tagName !== 'INPUT') return false;"
+				" return e.type === 'password' || /password|cc-number|cc-csc|one-time-code/.test(e.autocomplete || ''); })()",
+				'returnByValue': True,
+			},
+			session_id=cdp.session_id,
+		)
+		return bool((r.get('result') or {}).get('value'))
 
 	async def _call_retinat(self, name: str, args: dict[str, Any]) -> str | list['types.ContentBlock']:
 		if not name.startswith(TOOL_PREFIX):
 			raise ValueError(f'Unknown tool: {name}')
+		if name == 'retinat_network':
+			return await self._network_set(args)
+		if name == 'retinat_network_status':
+			return await self.network.status()
 		await self._ensure_session()
 		assert self.browser_session is not None
 		if name == 'retinat_open':
-			from browser_use.browser.events import NavigateToUrlEvent
-
-			event = self.browser_session.event_bus.dispatch(
-				NavigateToUrlEvent(url=args['url'], new_tab=bool(args.get('new_tab')))
-			)
-			await event
-			await event.event_result(raise_if_any=True, raise_if_none=False)
+			note = await self._navigate_routed(args['url'], bool(args.get('new_tab')), strict=True)
 			await asyncio.sleep(1.0)
-			return await self._wall_note()
+			return await self._wall_note() + note
 		if name == 'retinat_explore':
 			from browser_use.explore import Explorer, render_markdown, render_sheet
 
@@ -306,22 +347,35 @@ class RetinatServer(BrowserUseServer):
 			info = await eyes.swipe(args.get('direction', 'up'), float(args.get('fraction', 0.55)))
 			return f'Swiped {args.get("direction", "up")} {info["distance_px"]:.0f}px in {info["duration_ms"]:.0f}ms. {eyes.now_line()}'
 		if name == 'retinat_type':
+			if self.network.uses_tor and await self._secret_field_focused():
+				raise ValueError(
+					'Refusing to type into a password or payment field while routed through Tor: the exit relay is '
+					'on the path. Set the route to off (retinat_network), or ask the person to enter it themselves.'
+				)
 			await eyes.hand.type_text(str(args['text']))
 			return f'Typed {len(str(args["text"]))} characters.'
 		if name == 'retinat_key':
 			await eyes.hand.press(str(args['key']))
 			return f'Pressed {args["key"]}.'
+		if name == 'retinat_recall':
+			t0, t1 = float(args['t0']), float(args['t1'])
+			if t1 < t0:
+				raise ValueError('t1 must be at or after t0')
+			item = args.get('item')
+			return self._content(
+				await eyes.recall(t0, t1, frames=int(args.get('frames', 4)), item=int(item) if item is not None else None)
+			)
 		if name == 'retinat_now':
 			await eyes.retina.wait_for_data(1.0)
 			return eyes.now_line()
 		raise ValueError(f'Unknown tool: {name}')
 
 
-async def main(cdp_url: str | None = None) -> None:
+async def main(cdp_url: str | None = None, network: NetworkRouter | None = None) -> None:
 	if not MCP_AVAILABLE:
 		print('MCP SDK is required: pip install mcp', file=sys.stderr)
 		sys.exit(1)
-	server = RetinatServer(cdp_url=cdp_url)
+	server = RetinatServer(cdp_url=cdp_url, network=network)
 	await server.run()
 
 
@@ -332,7 +386,21 @@ def cli() -> None:
 	parser.add_argument(
 		'--cdp-url', default=os.environ.get('RETINAT_CDP_URL'), help='attach to a Chrome you started with --remote-debugging-port'
 	)
-	asyncio.run(main(parser.parse_args().cdp_url))
+	parser.add_argument(
+		'--network',
+		choices=[m.value for m in NetworkMode],
+		default=None,
+		help='route: off (direct), auto (default: Tor only after a network/geo block), always (Tor); env BROWSER_USE_NETWORK',
+	)
+	parser.add_argument(
+		'--exit-country', default=None, help='two-letter Tor exit country, e.g. de (env BROWSER_USE_EXIT_COUNTRY)'
+	)
+	args = parser.parse_args()
+	network = None
+	if args.network or args.exit_country:
+		base = NetworkRouter.from_env(default=NetworkMode.AUTO)
+		network = NetworkRouter(args.network or base.mode, args.exit_country or base.exit_country)
+	asyncio.run(main(args.cdp_url, network))
 
 
 if __name__ == '__main__':

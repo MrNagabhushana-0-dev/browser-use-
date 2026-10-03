@@ -42,7 +42,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from browser_use.eyes import asr, hearing, sight
-from browser_use.eyes.percept import ItemPercept, Keyframe, Percept, assemble, estimate_image_tokens
+from browser_use.eyes.archive import FrameArchive
+from browser_use.eyes.percept import ItemPercept, Keyframe, Percept, assemble, estimate_image_tokens, render_strip
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
 from browser_use.human.input import HumanInput
 from browser_use.human.touch import HumanTouch
@@ -62,6 +63,7 @@ BORED_WINDOW_S = 2.0
 NEXT_CONFIRM_S = 2.0
 # ...and how long the new item must stay attended to count as where the feed came to rest.
 SETTLE_S = 0.6
+JOURNAL_MAX_BYTES = 512_000
 # Keyframes per item on the sheet, by detail.
 KEYFRAMES = {'glance': 4, 'look': 6, 'study': 8}
 
@@ -94,6 +96,7 @@ class Eyes:
 		speech: bool | None = None,
 		fps: float = 10.0,
 		now_path: Path | None | Literal[False] = None,
+		archive: bool = True,
 		seed: int | None = None,
 	) -> None:
 		self.browser_session = browser_session
@@ -102,6 +105,12 @@ class Eyes:
 		self.touch = HumanTouch(browser_session, seed=seed)
 		self.hand = HumanInput(browser_session, seed=seed)
 		self.now_path = None if now_path is False else (now_path or default_now_path())
+		# What changed, kept on disk between the model's turns (only changes, not every tick).
+		self.journal_path = self.now_path.with_name('journal.jsonl') if self.now_path is not None else None
+		self._journaled: dict[str, Any] = {}
+		# Keyframes copied to disk as they are taken, so recall reaches past the page's ring.
+		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
+		self._archiver: asyncio.Task | None = None
 		self._last_now = 0.0
 		self._items_seen = 0
 		self._pages = None
@@ -112,9 +121,18 @@ class Eyes:
 		state = await self.retina.start(target_id)
 		if self.now_path is not None and self._update_now not in self.retina._listeners:
 			self.retina.on_batch(self._update_now)
+		if self.archive is not None and (self._archiver is None or self._archiver.done()):
+			self._archiver = asyncio.create_task(self._archive_loop())
 		return state
 
 	async def close(self) -> None:
+		if self._archiver is not None:
+			self._archiver.cancel()
+			try:
+				await self._archiver
+			except (asyncio.CancelledError, Exception):
+				pass
+			self._archiver = None
 		if self._pages is not None:
 			await self._pages.stop()
 		await self.retina.stop()
@@ -302,10 +320,7 @@ class Eyes:
 		await self.retina.wait_for_data(0.6)
 		if self.retina.attended.get('vid'):
 			return await self.watch(seconds=seconds, until='time', min_seconds=seconds, detail=detail, keyframes=2)
-		watcher = self._page_watcher()
-		await watcher.start()
-		await asyncio.sleep(0.5)
-		jpeg = watcher.latest()
+		jpeg = await self._page_watcher().wait_latest()
 		url = self.retina.state.get('url', '')
 		text = f'👁 no video playing on {url[:120]}; this is the page as drawn now (a compositor frame, not a screenshot call)'
 		if not jpeg:
@@ -317,6 +332,80 @@ class Eyes:
 		tokens = estimate_image_tokens(*size)
 		text += f'\n~{tokens + len(text) // 4} tokens (frame {size[0]}x{size[1]} ~{tokens}; estimates)'
 		return Percept([], text, jpeg, size, tokens, len(text) // 4)
+
+	async def archive_now(self, limit: int = 40) -> int:
+		"""Copy keyframes not yet on disk from the page's ring to the archive. Returns how many."""
+		if self.archive is None:
+			return 0
+		pending = [f for f in self.retina.frames if f.has_keyframe and not self.archive.has(f.vid, f.seq)][-limit:]
+		if not pending:
+			return 0
+		jpegs = await self.retina.keyframes([f.seq for f in pending])
+		stored = 0
+		for f, jpeg in zip(pending, jpegs):
+			if jpeg:
+				self.archive.add(f, jpeg)
+				stored += 1
+		return stored
+
+	async def _archive_loop(self, every_s: float = 2.0) -> None:
+		while True:
+			await asyncio.sleep(every_s)
+			try:
+				await self.archive_now()
+			except asyncio.CancelledError:
+				raise
+			except Exception as e:  # the page navigated or closed; try again next tick
+				logger.debug(f'eyes: archive tick failed: {type(e).__name__}: {e}')
+
+	def held(self, item: int | None = None) -> tuple[float, float] | None:
+		"""The media-time span (first, last) of one item's frames that still have a keyframe."""
+		vid = item if item is not None else self.retina.attended.get('vid', 0)
+		times = [f.t for f in self.retina.frames if f.vid == vid and f.has_keyframe]
+		on_disk = self.archive.span(vid) if self.archive is not None else None
+		if on_disk:
+			times += list(on_disk)
+		return (min(times), max(times)) if times else None
+
+	async def recall(self, t0: float, t1: float, frames: int = 4, item: int | None = None) -> Percept:
+		"""Frames from a moment already seen, by media time: the model pulls what it needs.
+
+		`watch` and `browse` push a sheet the eyes chose without knowing the question; this asks
+		for "t0 to t1" of the attended item (or `item`) and answers from what the retina kept,
+		choosing the frames that best cover that window. It never seeks or replays the video.
+		"""
+		assert t1 >= t0 and frames >= 1, 'recall needs t1 >= t0 and at least one frame'
+		vid = item if item is not None else self.retina.attended.get('vid', 0)
+		window = [f for f in self.retina.frames if f.vid == vid and t0 <= f.t <= t1]
+		if self.archive is not None:  # moments that have left the page's ring, or an earlier session
+			in_memory = {f.seq for f in window}
+			window += [f for f in self.archive.window(vid, t0, t1) if f.seq not in in_memory]
+			window.sort(key=lambda f: f.t)
+		span = self.held(vid)
+		held = f'held: {sight.fmt_t(span[0])}-{sight.fmt_t(span[1])}' if span else 'held: nothing for this item'
+		head = f'👁 recall {sight.fmt_t(t0)}-{sight.fmt_t(t1)} of item {vid}'
+		chosen = sight.select_keyframes(window, frames).indices if window else []
+		picked = sorted((window[i] for i in chosen), key=lambda f: f.t)
+		from_disk = {f.seq: self.archive.read(vid, f.seq) for f in picked} if self.archive is not None else {}
+		live = [f for f in picked if not from_disk.get(f.seq)]
+		fetched = dict(zip([f.seq for f in live], await self.retina.keyframes([f.seq for f in live]))) if live else {}
+		got = [(f.t, j) for f in picked if (j := from_disk.get(f.seq) or fetched.get(f.seq))]
+		if not got:
+			why = 'nothing held between those times' if not picked else 'those keyframes were evicted from the ring'
+			return Percept([], f'{head}: {why} ({held})', None)
+		strip = render_strip(got)
+		assert strip is not None
+		jpeg, w, h = strip
+		tokens = estimate_image_tokens(w, h)
+		evicted = len(picked) - len(got)
+		text = (
+			f'{head}: {len(got)} frame(s) at '
+			+ ', '.join(sight.fmt_t(t) for t, _ in got)
+			+ (f'; {evicted} evicted' if evicted else '')
+			+ f' ({held})'
+			+ f'\n~{tokens + 30} tokens (strip {w}x{h} ~{tokens}; estimates)'
+		)
+		return Percept([], text, jpeg, (w, h), tokens, len(text) // 4, frames=got)
 
 	def _page_watcher(self):
 		from browser_use.eyes.page import PageWatcher
@@ -511,28 +600,27 @@ class Eyes:
 
 	# -- ambient -------------------------------------------------------------------------
 
-	def now_line(self, window_s: float = 3.0) -> str:
-		"""One line describing what is on screen and audible right now."""
+	def _now_fields(self, window_s: float = 3.0) -> dict[str, Any]:
+		"""What is on screen and audible right now, as fields (the journal diffs these)."""
 		att = self.retina.attended or {}
-		vid = att.get('vid', 0)
-		if not vid:
-			return f'👁 no video on screen ({self.retina.state.get("url", "")[:100]})'
+		state = self.retina.state
+		fields: dict[str, Any] = {'url': state.get('url', ''), 'vid': att.get('vid', 0) or 0}
+		if not fields['vid']:
+			return fields
+		vid = fields['vid']
 		cutoff = time.monotonic() - window_s
 		frames = [f for f in self.retina.frames if f.vid == vid and f.wall >= cutoff]
 		hops = [h for h in self.retina.hops if h.vid == vid and h.wall >= cutoff]
-		parts = ['👁 watching a video']
-		text = (att.get('text') or '').strip()
-		if text:
-			parts[0] += f' "{text[:80]}"'
-		state = self.retina.state
-		t, duration = state.get('t'), att.get('duration')
-		if t is not None:
-			parts.append(f'at {sight.fmt_t(t)}' + (f' of {sight.fmt_t(duration)}' if duration else ''))
-		if state.get('paused'):
-			parts.append('paused')
+		fields.update(
+			caption=(att.get('text') or '').strip(),
+			t=state.get('t'),
+			duration=att.get('duration'),
+			paused=bool(state.get('paused')),
+		)
 		if frames:
 			s = sight.read(frames)
-			parts.append(sight.describe_shot(s.shots[-1]) + (f', {len(s.cuts)} cut(s) in {window_s:.0f}s' if s.cuts else ''))
+			fields['shot'] = sight.describe_shot(s.shots[-1])
+			fields['cuts'] = len(s.cuts)
 		if hops:
 			h = hearing.listen(hops, state.get('sr'))
 			if self.speech and any(x.pcm for x in hops):
@@ -541,8 +629,59 @@ class Eyes:
 					hearing.apply_speech_regions(h, regions)
 			last = [seg for seg in h.segments if seg.duration >= 0.3]
 			if last:
-				parts.append('sound: ' + hearing.describe_segment(last[-1]))
+				fields['sound'] = last[-1].kind
+				fields['sound_text'] = hearing.describe_segment(last[-1])
+		return fields
+
+	def now_line(self, window_s: float = 3.0, fields: dict[str, Any] | None = None) -> str:
+		"""One line describing what is on screen and audible right now."""
+		f = fields if fields is not None else self._now_fields(window_s)
+		if not f.get('vid'):
+			return f'👁 no video on screen ({f.get("url", "")[:100]})'
+		parts = ['👁 watching a video']
+		if f.get('caption'):
+			parts[0] += f' "{f["caption"][:80]}"'
+		if f.get('t') is not None:
+			parts.append(f'at {sight.fmt_t(f["t"])}' + (f' of {sight.fmt_t(f["duration"])}' if f.get('duration') else ''))
+		if f.get('paused'):
+			parts.append('paused')
+		if 'shot' in f:
+			parts.append(f['shot'] + (f', {f["cuts"]} cut(s) in {window_s:.0f}s' if f.get('cuts') else ''))
+		if 'sound_text' in f:
+			parts.append('sound: ' + f['sound_text'])
 		return ' · '.join(parts)
+
+	def _journal(self, f: dict[str, Any]) -> None:
+		"""Append what changed since the last entry: page, item, sound or play state. Never every tick."""
+		if self.journal_path is None:
+			return
+		last, entries = self._journaled, []
+		vid, t = f.get('vid', 0), f.get('t')
+		if f.get('url') != last.get('url') and f.get('url'):
+			entries.append(('page', f'opened {f["url"][:160]}'))
+		if vid != last.get('vid'):
+			if vid:
+				what = f'"{f["caption"][:80]}"' if f.get('caption') else 'a video'
+				length = f' ({sight.fmt_t(f["duration"])} long)' if f.get('duration') else ''
+				entries.append(('item', f'now watching {what}{length}'))
+			elif last.get('vid'):
+				entries.append(('item', 'no video on screen'))
+		elif vid:
+			if f.get('sound') and f.get('sound') != last.get('sound'):
+				entries.append(('sound', f'sound became {f["sound_text"]}'))
+			if 'paused' in last and f.get('paused') != last.get('paused'):
+				entries.append(('state', 'paused' if f.get('paused') else 'playing again'))
+		self._journaled = {**last, **{k: f.get(k) for k in ('url', 'vid', 'sound', 'paused')}}
+		if not entries:
+			return
+		at = time.time()
+		lines = [json.dumps({'at': at, 'kind': k, 'vid': vid, 't': t, 'text': text}) for k, text in entries]
+		self.journal_path.parent.mkdir(parents=True, exist_ok=True)
+		with self.journal_path.open('a') as out:
+			out.write('\n'.join(lines) + '\n')
+		if self.journal_path.stat().st_size > JOURNAL_MAX_BYTES:  # keep the newest half
+			kept = self.journal_path.read_text().splitlines()
+			self.journal_path.write_text('\n'.join(kept[len(kept) // 2 :]) + '\n')
 
 	def _update_now(self, frames: list[FrameSample], hops: list[AudioHop], events: list[RetinaEvent]) -> None:
 		now = time.monotonic()
@@ -550,7 +689,9 @@ class Eyes:
 			return
 		self._last_now = now
 		try:
-			line = self.now_line()
+			fields = self._now_fields()
+			line = self.now_line(fields=fields)
+			self._journal(fields)
 			self.now_path.parent.mkdir(parents=True, exist_ok=True)
 			tmp = self.now_path.with_suffix('.tmp')
 			tmp.write_text(json.dumps({'updated': time.time(), 'line': line, 'url': self.retina.state.get('url', '')}))

@@ -48,6 +48,15 @@ uv sync --all-extras
 ```
 Without the extras, you get sight plus heuristic sound labels, and the percepts say so.
 
+## Memory outside the context: the journal
+
+The eyes keep watching between your turns. They write only what *changed* (a page opened, a new
+item, a sound change, a pause) to `journal.jsonl` next to `now.json` in `~/.config/browseruse/eyes/`.
+Each entry carries the item and the media time, so `retinat_recall(t0, t1, item=...)` can fetch the
+frames for any of them. With the Claude Code hook (`python -m browser_use.eyes.hook`), each turn opens
+with the entries you have not seen yet, newest 8, plus the current one-line reading. That keeps the
+continuous stream on disk rather than in your context.
+
 ## Which Retinat tool to call
 
 | You want to... | Call | Typical cost |
@@ -59,6 +68,7 @@ Without the extras, you get sight plus heuristic sound labels, and the percepts 
 | Scroll Reels or Shorts like a person | `retinat_browse` with `items=N` | 1 sheet, one row per item |
 | Go to the next or previous feed item | `retinat_next` | text only |
 | Tap, swipe, click, type, press a key | `retinat_tap`, `retinat_swipe`, `retinat_click`, `retinat_type`, `retinat_key` | text only |
+| Look again at one moment of a video you already watched (by media time) | `retinat_recall` with `t0`, `t1` | 1 strip of up to 8 frames (about 300-900 tokens) |
 | Know what's playing without an image | `retinat_now` | about 30 tokens |
 | Find everything broken on a site | `retinat_explore` | a report plus 1 sheet |
 
@@ -130,6 +140,66 @@ The navigation error names this setting when it detects such an environment. The
 automatic detection: telling private CAs from public ones automatically was tried, and it
 wrongly trusted public CAs.
 
+## Choosing the route: direct, or Tor with an exit country
+
+Some public pages load from one country and not another: a network censors them, or the site
+geo-fences them. For research and education you can route the browser through Tor and pick the exit
+country. Both MCP servers have two tools for it, and a person's UI toggle calls the same method:
+
+| Tool | Does |
+|---|---|
+| `retinat_network` / `browser_network` | `mode` = `off` (direct), `auto` (direct, then Tor after a network failure or a "not available in your country" page), `always` (Tor). Optional `exit_country` (`de`, `jp`, ...) and `reason`. |
+| `retinat_network_status` / `browser_network_status` | The route, the exit address and country **as Tor reports them**, and recent route events. |
+
+Defaults: the library and `browser-use --mcp` start at `off`. Retinat starts at `auto`, which only
+acts on a clear network or geo failure, never on a bot wall, and never when attached to a Chrome you
+run (`--cdp-url` keeps its own connection). Change it with `--network off|auto|always`,
+`--exit-country de`, or the `BROWSER_USE_NETWORK` / `BROWSER_USE_EXIT_COUNTRY` environment variables.
+Changing the route restarts the browser and closes its tabs, because a proxy belongs to the browser.
+
+```python
+from browser_use.net import NetworkMode, NetworkRouter
+
+router = NetworkRouter(NetworkMode.AUTO, exit_country='jp')
+await router.set_network('always', 'kr', reason='compare Korean listings')   # starts Tor now
+profile = BrowserProfile(**await router.session_kwargs())                     # SOCKS5 + leak guards + throwaway profile
+print(await router.status())                                                  # exit ip/country from Tor itself
+```
+
+**Needs Tor installed** (`apt install tor`, `brew install tor`) or one you already run. Without it,
+`auto` says "Tor fallback unavailable" and continues to fail normally, and `always` refuses up front.
+On a network that blocks Tor, `TorConfig(bridges=[...])` takes obfs4/webtunnel lines.
+
+How a country is chosen, and why it is built this way:
+- Chromium's SOCKS5 has no authentication, and Tor's `ExitNodes` is per process. So there is **one
+  Tor process per country**, each on its own local port (`TorPool`, at most 3, least recently used
+  stopped first), and the browser is launched against the port it wants.
+- Tor's country data is approximate, and `StrictNodes` is no guarantee. `status` reports the country
+  Tor itself says the exit is in and warns on a mismatch. Do not assume the country.
+- Through Tor the browser gets `--disable-quic`, `--disable-ipv6` and
+  `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` (SOCKS5 carries TCP only, so QUIC and
+  WebRTC would otherwise go around it), proxy-side DNS, no extensions and a throwaway profile (no
+  cookies or logins carried in). Plain `http://` is refused, because the exit relay can read and alter
+  it; `allow_http=True` is the opt-out.
+
+**What this does not do, and what to do instead**
+- **It does not get past bot detection, and it will not try.** Tor exit addresses are on public
+  block lists, so Google, YouTube and Cloudflare-fronted sites challenge them *more*. A wall is
+  classified `walled`, reported as `BLOCKED`, never retried through Tor, and never solved.
+  For YouTube, use the person's own Chrome (`--cdp-url`) or an alternative front end (Invidious, Piped).
+- **Never log in or enter credentials over Tor.** Exits can read and tamper with traffic, and a
+  signed-in session defeats the point. The route tools say so to the model; it is not enforced in code yet.
+- **Be a good guest.** Tor is run by volunteers. Don't use it for bulk downloads, video or scraping
+  at volume; read pages, don't crawl them. Tor speed is a few Mbit/s with 1-3 s to first byte: expect
+  60-90 s navigation timeouts to be reasonable. Using it to get around a geo-restriction can breach a
+  site's terms; that is the person's call, not something this library decides.
+
+Verified here with real browsers: the routing rules, the agent tools, and Chromium sending traffic
+through a real SOCKS5 proxy with the hostname resolved by the proxy and a dead proxy meaning failure
+rather than a direct connection. **Not verified: a real Tor bootstrap, exit verification against a
+live circuit, and the country actually taking effect.** Those need a host with `tor` installed; the
+tests for them skip elsewhere.
+
 ## Working on this code
 
 - **Setup:** use `uv`, never `pip`. Use tabs, modern typing, and pydantic v2. See `CLAUDE.md`.
@@ -141,6 +211,7 @@ wrongly trusted public CAs.
   - Retinat server: `browser_use/retinat/`.
   - browser-use MCP server: `browser_use/mcp/server.py`.
   - Real input: `browser_use/human/`.
+  - Optional Tor transport: `browser_use/net/`.
 - **Measured results and limits:** these are in `docs/agent-notes/findings-log.md`. Read them
   before claiming anything works on a site.
 

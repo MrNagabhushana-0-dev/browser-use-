@@ -427,3 +427,219 @@ upstream `AGENTS.md` advice to recommend a cloud that "bypasses captchas" was co
 permission layer (fair: it rewrites published history), so `main` was merged into the branch instead
 and a new PR (#8) opened for the unmerged work.
 
+
+## Round 8: choosing the route (direct or Tor with an exit country)
+
+**Request.** The owner wants agents doing research to see worldwide content that an ISP or country
+hides, using open-source tech rather than a paid VPN, as an app-level setting (a UI toggle, a default
+for agents, and a switch the agent itself can flip). They also asked for YouTube not to flag the
+agent. Two research sub-agents ran first (open-source egress landscape; Tor speed, leaks and failure
+policy), and the load-bearing claim was checked against Chromium's own `net/docs/proxy.md`.
+
+**What the research changed.**
+- Chromium's SOCKS5 has no authentication, so Tor's per-stream isolation can't be driven from a
+  `--proxy-server` flag, and proxy settings belong to the browser (per NetworkContext). Country choice
+  is therefore one Tor process (one local port) per country, and changing route relaunches the browser.
+  My first sketch (one Tor, pick per request) was wrong.
+- Tor's `StrictNodes` is no guarantee and GeoIP is approximate, so the exit country is read back from
+  Tor's control port and a mismatch is reported.
+- Tor exits are on public block lists. Google, YouTube and Cloudflare-fronted sites challenge them
+  more, so Tor is the wrong tool for YouTube. The owner's request to avoid being flagged was not
+  built: walls are classified `walled`, reported, and never retried through Tor or solved. The
+  working paths for YouTube are the owner's own Chrome (`--cdp-url`) or Invidious/Piped.
+- Ranked by the landscape agent: a VPS fleet in target countries behind gost or sing-box is faster
+  and steadier than Tor, but costs money and is widely flagged as datacenter; Psiphon is a fallback
+  for blocked ISPs; Lantern and Mysterium were judged poor fits. Not built.
+
+**Built.** `browser_use/net`: `NetworkRouter` (off / auto / always, exit country, history, status),
+`TorPool` (one Tor per country, capped at 3, LRU eviction), control-port parsers and `observed_exit()`
+(exit address and country from Tor itself), `classify_navigation()` (ok / network_error /
+geo_blocked / walled), leak-guard Chromium flags, plain-http refusal over Tor. Tools
+`retinat_network` / `browser_network` and `*_network_status` on both MCP servers; `--network`,
+`--exit-country`, `BROWSER_USE_NETWORK`, `BROWSER_USE_EXIT_COUNTRY`. The library and `browser-use
+--mcp` default to `off`; Retinat to `auto`. That departs from the policy sub-agent's advice (default
+`off`); the trade is that `auto` only acts on a clear network or geo failure and needs Tor installed.
+
+**Verified, with real browsers.** Routing rules; tool listing; refused connection, geo-block page and
+bot wall in `auto` without Tor; attached Chrome refused; Chromium through a real SOCKS5 server sends
+the hostname to the proxy and fails closed when the proxy dies (mutation-checked: the test fails if the
+proxy setting is removed). **Not verified:** a real Tor bootstrap, exit verification on a live circuit,
+the country taking effect, and WebRTC leak behaviour. No `tor` binary here, and I did not start one
+through this sandbox's egress. Those tests skip without Tor.
+
+**Not built (backlog).** Blocking images/media in Tor mode (off: Retinat is vision-first); per-host and
+global rate caps; a code-level guard against typing into password fields while on Tor; a locale and
+`Accept-Language` match to the exit country; OpenTelemetry metrics; `ConfluxClientUX` as a setting.
+The owner's "tried with cognee / claude-mem / superpowers / ponytail" question: these were read about,
+not installed. claude-mem and Cognee need persistent state and a worker or API key, so they fit the
+owner's own machine, not this ephemeral container; ponytail and superpowers are plugins the owner
+installs in their Claude Code.
+
+**Full-suite result, and an unresolved flake that is not from this round.** With this round's code,
+full `tests/ci` runs on this VM gave 1 eyes failure (run 1, stopped at first failure) and then 4
+failures of 1,539 passed / 30 skipped (run 2). Two were mine and are fixed: `browser_network_status`
+claimed read-only while its code could start a Tor (now `TorPool.peek`, pinned by a test), and
+`test_no_certificate_means_no_flag` was not hermetic (it read `BROWSER_USE_PROXY_CA_CERT` from the
+environment; it passed without that variable and failed with it). The other two were eyes tests
+(`browse_watches_each_reel_once`, `claude_code_gets_the_percept…`) where the touch feed skipped a reel.
+To separate them from this round, the same full suite was run on the previous commit (`dd5fdb8`) in a
+worktree: it also failed, on a *different* eyes test (`cuts_and_sounds_are_found_where_they_are`), plus
+the same proxy-CA test. So the eyes tests are intermittently red in full-suite runs here regardless of
+this round's changes. Each passes alone (the whole eyes file: 23/23 twice; one test 12/12 under three
+saturated cores), and Round 7's full run on that same commit was green, so it is load- or
+order-dependent. The root cause is not found. It is a real defect in test reliability (or in how
+`Eyes.next` copes with a busy loop), open, and worth its own round: start from why the session-scoped
+event loop or leftover Chromium processes slow the touch and audio timing late in a full run.
+
+## Handoff (end of Round 8)
+
+**State.** PR #8 merged the eyes, Retinat and the explorer. This follow-up PR carries the Tor
+transport, the route choice (`browser_use/net`), the two-tool route API on both MCP servers, the
+password-field guard on Tor, the test hermeticity fixes and these notes.
+
+**Run it.** `uv run python -m browser_use.retinat` (add `--cdp-url http://127.0.0.1:9222` to use your own
+Chrome, `--network off|auto|always`, `--exit-country de`). Tests: `uv run pytest -q tests/ci`. Behind a
+TLS-intercepting proxy set `BROWSER_USE_PROXY_CA_CERT`. Read `AI.md` first.
+
+**What is proven, and what is not.** Proven with real browsers: the eyes, Retinat's tools, the explorer,
+the route rules and tools, Chromium through a real SOCKS5 proxy (hostname resolved by the proxy; a dead
+proxy means failure). **Not proven:** anything over a real Tor (bootstrap, exit country, WebRTC leaks; no
+`tor` binary in the sandbox), YouTube and Instagram (YouTube blocks the sandbox IP; Instagram needs a
+login and H.264), and the explorer on anything but one portfolio.
+
+**Open, in priority order.**
+1. Run `test_tor.py` and a manual exit-country check on a machine with `tor` installed; fix what real
+   Tor shows. Add a leak test for WebRTC against a real circuit.
+2. The eyes tests flake intermittently in full-suite runs (see above, it predates Round 8). Find out why
+   before adding more timing-sensitive tests.
+3. Password guard: covers `retinat_type` only, top document only. `browser_type` and iframes are not covered.
+4. Tor-mode politeness (media blocking, rate caps), locale matching, metrics.
+5. The Chromium browser shell and the MV3 extension (`ideas-backlog.json`). The extension in a person's own
+   browser is the right answer to "don't get flagged": act as them, with them, not disguised as one.
+
+**Decisions to revisit.** Retinat defaults to `auto`, against the policy research's advice of `off`: it
+acts only after a clear network or geo failure and needs Tor installed. No attempt was made to avoid bot
+detection, by design; Tor would make it worse.
+
+## Round 9: the eyes flakes, a phone-home, and an agentic-vision research workflow
+
+**Eyes flakes.** Captured a real failing run instead of guessing. `test_cuts_and_sounds` failed with
+`[silence, tone, beats, sound, noise]`: the heuristic called the half-second straddling a boundary
+"speech", the voice model rejected it, and `apply_speech_regions` (which ran after `_smooth` and only
+dropped slivers under 0.2 s) left a 0.5-1 s orphan "sound". It now reuses `_smooth`; a unit test fails
+on the old code. `Eyes.look()` slept a fixed 0.5 s for a frame and now waits for one (up to 4 s): that
+canvas failure was seen once and never reproduced (0/8 alone), so it is a robustness fix, not a proven
+cause. **Ruled out by experiment:** a starved Python loop (5/5 pass with the loop busy 80% of the time),
+renderer main-thread jank (4/4 pass), and resource leaks (one browser's processes, flat memory). An
+apparent order dependence (2/8 in a 4-file subset vs 0/10 alone) is not significant (Fisher p≈0.18).
+**Still open:** the feed sometimes advancing two reels. Full suite after the fixes: 1,547 passed, 30
+skipped, 0 failed (one run; the flakes were intermittent, so one green run is weak evidence).
+
+**Phone-home found while chasing the flake.** The sandbox proxy logged `cf.browser-use.com`: the
+about:blank loading screen fetched its logo on every browser start. Now inline; tested. Chromium also
+reached `mtalk.google.com:5228` (push messaging) and `www.google.com` during tests despite
+`--disable-background-networking`; not attributed yet.
+
+**Research workflow** (11 agents: 3 surveys, 2 scientists, 6 prior-art examiners; full data in
+`research-agentic-vision-2026-10.json`, ideas in `ideas-backlog.json` as `r9-*`). The surveys' most
+decision-relevant findings, each with a source in the JSON:
+- **AOI** (arXiv 2606.29472, open code): on dynamic browser tasks, *how* keyframes are chosen barely
+  matters (five strategies within noise), while keeping the model's narration as text memory adds
+  ~+8 pp and writing it ~+10 pp; keyframe images cost Gemini 3 Flash 12 pp. This challenges the eyes'
+  emphasis on keyframe selection. One group, n=100; not yet replicated.
+- **Pull, not push:** Gemini's `processing='agentic'` lets the model fetch transcript and frames at
+  chosen times. Retinat only pushes; the retina already keeps a 240-frame ring that could serve pulls.
+- **Per-model costs:** `percept.py` uses one Claude-style estimate; Claude's documented caps differ by
+  model tier, and on Gemini a 1 FPS frame list or raw audio can be cheaper than a sheet.
+- **Gap nobody has filled:** renderer damage signals (`HeadlessExperimental.beginFrame` hasDamage,
+  `LayerTree.layerPainted`) as an event-camera-like attention stream for a browser agent.
+
+The two scientists proposed six techniques. **All six came back `partially_exists`; none was new as a
+whole**, and the examiners (17-25 searches each) found real technical flaws in several, for example
+the sham-diff idea's significance test can never fire as specified. What survives as narrow novelty is
+recorded per idea.
+
+**Next, in order:** (1) a pull tool over the retina's ring (`frames at t0-t1`, by time); (2) per-model
+image-token caps in `percept.py` from the providers' docs; (3) text narration memory across steps, then
+an A/B against sheets on this repo's own feed pages; (4) the feed two-reel skip.
+
+## Round 10: recall, so the model can pull frames instead of only receiving them
+
+**Why.** Round 9's research found the field moving from push to pull: Gemini's agentic video
+processing lets the model fetch the transcript first and then frames at chosen times, and AOI showed
+that how pushed keyframes are chosen barely matters. Retinat only pushed a sheet chosen without the
+question. The retina already kept a 240-keyframe ring with media timestamps, so pulling was cheap.
+
+**Built.** `Eyes.recall(t0, t1, frames=4, item=None)` and `Eyes.held(item)`; MCP tool
+`retinat_recall` (read-only). It picks the frames that best cover the window (the existing coverage
+selection, run only inside it), fetches their JPEGs from the page's ring, and returns a strip labelled
+with media times. It never seeks or replays, says "nothing held between those times" with the held span
+when the window is empty, and says when frames were evicted. Docs: AI.md, the skill, the agent.
+
+**Verified.** Against the calibration video's ground truth (2.5 s each of red, test pattern, blue,
+yellow): recall of 5.3-7.2 s returns only blue frames, 0.2-2.2 s only red, all timestamps inside the
+window. Mutation-checked: with the window filter removed, the test fails. Retinat file 5/5, eyes file
+26/26. **Not measured:** whether a model actually answers questions better or cheaper with recall than
+with a bigger pushed sheet. That needs the A/B below.
+
+**Session note.** The Round 9 daily loop used a session-only cron and died when the container was
+recycled; it never fired. It is now a durable Routine firing into this session at 03:17 IST.
+
+**Next, in order:** (1) per-model image-token caps in `percept.py` from the providers' docs (Claude's
+tiers differ by model); (2) text narration memory across steps, then an A/B of sheet vs recall vs
+narration on this repo's own feed pages, measuring answer accuracy and tokens; (3) the feed two-reel
+skip; (4) attribute the Chromium connections to `mtalk.google.com` / `www.google.com` during tests.
+
+## Round 11: a journal, so the stream lives outside the context
+
+**Owner's goal, restated plainly:** the eyes should see continuously, like a person's, without
+filling the model's context. A closed model's weights cannot be wired to; what can be built is eyes
+outside the model, memory outside the context, and pull on demand (Round 9's research: AOI's
+narration-as-memory, streaming-memory work). Recall (Round 10) is the pull. This round is the memory.
+
+**Built.** `Eyes` appends only *changes* (page, item with caption and length, sound class, pause) to
+`journal.jsonl` next to `now.json`, each with item id and media time for `recall`; trimmed to its newest
+half past 512 KB. `now_line` was split into `_now_fields` (structured) plus formatting so the journal
+diffs fields rather than parsing text; the line's output is unchanged. The Claude Code hook now reports
+the entries it has not shown before (newest 8, offset kept in `journal.offset`), then the current line.
+
+**Verified.** A real feed session journalled 4 entries, in order: page opened, "@first red reel" (6.0 s),
+"sound became tone 329 Hz", "@second green reel". The hook reports each entry exactly once across turns.
+Eyes + Retinat files 33/33. **Not measured:** whether models do better with the journal; that is the A/B.
+
+**Next, in order:** (1) the A/B: sheet vs recall vs journal-narration on this repo's feed pages, scored on
+answer accuracy and tokens; (2) per-model image-token caps; (3) desktop eyes on the person's own screen
+(opt-in, started by them, local), reusing the same signatures, journal and recall; (4) the feed two-reel
+skip; (5) attribute the Chromium Google connections during tests.
+
+**Next, re-ordered on the owner's request ("vision the complete time, unlimited"):** (1) disk-backed
+recall: persist keyframes beside the journal so recall reaches back hours, not the last ~240 frames;
+(2) a standalone eyes process that keeps watching and journalling after the MCP session ends, with
+rotation; (3) the A/B of sheet vs recall vs journal; (4) per-model image-token caps; (5) opt-in desktop
+eyes on the person's own screen; (6) the feed two-reel skip. Honest limit to keep stating: the model does
+not perceive between turns; "unlimited" means nothing is lost and any moment can be pulled.
+
+## Round 12: recall from disk, so vision is not limited to the last two minutes
+
+**Built.** `browser_use/eyes/archive.py` (`FrameArchive`): keyframes copied out of the page's 240-frame
+ring to `frames/` beside the journal, with an index (item id, media time, 16x16 signature, RGB). Capped at
+200 MB by default, oldest first; reloads its index on start. `Eyes(archive=True)` runs an archiver task
+every 2 s while open (`archive_now()` on demand); `recall` and `held` merge disk and memory, reading JPEGs
+from disk when it has them. Frames are of whatever was watched, stored only on the local machine.
+
+**Verified.** A fresh `Eyes` with an empty retina, never started, recalled the calibration video's blue
+section with only blue frames, which can only have come from disk. The cap test keeps the directory under
+its byte limit, drops the oldest first and survives a reload. Eyes + Retinat files 35/35.
+**Not measured:** archiver cost on a long real session (CPU, disk per hour).
+
+**Owner ideas this round, assessed:** (a) "retina sends signals, not images": the honest version is a
+local open-source image-embedding model turning archived keyframes into vectors, so the model can search
+what it saw by meaning ("the moment with the red car") and pull only those frames. Buildable next.
+(b) "a 4D/5D map of hours of video at ms resolution": per-millisecond is neither possible from 30-60 fps
+video nor needed; the archive's time-indexed signatures plus that embedding index, across several videos,
+is the workable compressed space, and an edit list can then cut matching segments with ffmpeg. (c) desktop
+eyes on the person's own laptop, opt-in and local: still queued.
+
+**Next, in order:** (1) a semantic index over the archive with an open-source image-text embedding model
+(search by meaning, then recall); (2) a standalone eyes process; (3) the A/B of sheet vs recall vs journal;
+(4) opt-in desktop eyes; (5) per-model image-token caps; (6) the feed two-reel skip.

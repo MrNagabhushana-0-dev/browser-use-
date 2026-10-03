@@ -28,6 +28,8 @@ EXPECTED_READ_ONLY_TOOLS = frozenset(
 		'browser_list_sessions',
 		# Discovery only: reads what the page declares, invokes nothing.
 		'browser_list_page_tools',
+		# Reports the route and the exit Tor says it uses; `peek`s at Tor, never starts one.
+		'browser_network_status',
 	}
 )
 

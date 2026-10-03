@@ -209,6 +209,30 @@ def _near(value: float, target: float, tol: float) -> bool:
 # -- sight and hearing against ground truth -------------------------------------------------
 
 
+def test_a_heuristic_speech_sliver_the_voice_model_rejects_does_not_become_its_own_segment():
+	# The heuristic sometimes calls the half-second straddling a boundary "speech"; the voice model
+	# then (rightly) finds none and it becomes "sound". It is a mix of both sides, not a sound of
+	# its own, and must fold into a neighbour like any other sliver: this was a flaky CI failure.
+	from browser_use.eyes.hearing import Hearing, Segment, apply_speech_regions
+
+	h = Hearing(
+		segments=[
+			Segment(0.0, 2.5, 'silence', -90.0),
+			Segment(2.5, 5.0, 'tone', -20.0, '441 Hz'),
+			Segment(5.0, 7.4, 'beats', -25.0, '~120 bpm'),
+			Segment(7.4, 8.1, 'speech', -22.0),
+			Segment(8.1, 10.0, 'noise', -24.0),
+		]
+	)
+	out = apply_speech_regions(h, regions=[])
+	assert [s.kind for s in out.segments] == ['silence', 'tone', 'beats', 'noise'], out.segments
+	assert out.segments[-1].t0 == 7.4 and out.speech_by == 'vad'
+
+	# Real speech the model confirms stays speech, however short the heuristic made it.
+	h2 = Hearing(segments=[Segment(0.0, 1.0, 'silence', -90.0), Segment(1.0, 1.6, 'speech', -20.0)])
+	assert [s.kind for s in apply_speech_regions(h2, regions=[(1.0, 1.6)]).segments] == ['silence', 'speech']
+
+
 async def test_cuts_and_sounds_are_found_where_they_are(eyes, session, site):
 	await _open(eyes, session, site.url_for('/calib'))
 	p = await eyes.watch(seconds=4 * SECTION + 1.0, until='time')
@@ -501,6 +525,60 @@ async def test_claude_code_gets_the_percept_as_an_image_and_moves_the_feed(mcp_s
 	assert '@second green reel' in now, now
 
 
+async def test_the_journal_keeps_what_changed_between_turns(eyes, session, site):
+	# The eyes keep watching between the model's turns; what changed goes to a journal on disk,
+	# not into the context. Each entry carries the item and media time, so `recall` can fetch it.
+	import json
+
+	await _open(eyes, session, site.url_for('/feed'))
+	await eyes.watch(seconds=2.5, until='time')
+	moved = await eyes.next()
+	assert moved.moved, moved
+	await eyes.retina.wait_for_data(1.0)
+	await asyncio.sleep(2.5)
+	assert eyes.journal_path is not None and eyes.journal_path.exists()
+	entries = [json.loads(line) for line in eyes.journal_path.read_text().splitlines()]
+	items = [e for e in entries if e['kind'] == 'item']
+	assert any('@first' in e['text'] for e in items) and any('@second' in e['text'] for e in items), entries
+	assert all(isinstance(e['vid'], int) and 'at' in e for e in entries)
+	assert len(entries) < 20, f'only changes are journalled, not every tick: {len(entries)}'
+
+
+def test_the_hook_reports_each_journal_entry_once(tmp_path):
+	import json
+	import os
+	import sys
+	import time
+
+	now, journal = tmp_path / 'now.json', tmp_path / 'journal.jsonl'
+	env = {**os.environ, 'BROWSER_USE_EYES_NOW': str(now)}
+
+	def run() -> str:
+		out = subprocess.run(
+			[sys.executable, '-m', 'browser_use.eyes.hook'],
+			input=json.dumps({'hook_event_name': 'UserPromptSubmit'}),
+			capture_output=True,
+			text=True,
+			env=env,
+			check=True,
+		).stdout
+		return json.loads(out)['hookSpecificOutput']['additionalContext'] if out.strip() else ''
+
+	def add(text: str) -> None:
+		with journal.open('a') as f:
+			f.write(json.dumps({'at': time.time(), 'kind': 'item', 'vid': 1, 't': 0.0, 'text': text}) + '\n')
+
+	now.write_text(json.dumps({'updated': time.time(), 'line': '👁 watching a video "@x"'}))
+	add('now watching "@first"')
+	add('now watching "@second"')
+	first = run()
+	assert '@first' in first and '@second' in first and 'Since your last turn' in first, first
+	second = run()
+	assert '@first' not in second and 'watching a video' in second, 'each entry is reported once'
+	add('now watching "@third"')
+	assert '@third' in run()
+
+
 def test_the_hook_injects_a_fresh_reading_and_nothing_when_stale(tmp_path):
 	import json
 	import os
@@ -587,3 +665,70 @@ async def test_scan_covers_the_whole_page_and_notices_what_moves_on_its_own(eyes
 	assert any(c[2] > 150 and c[0] < 90 for c in colours) and any(c[1] > 120 and c[0] < 90 for c in colours), (
 		f'the blue and green sections further down are on the sheet: {colours}'
 	)
+
+
+# -- recall: the model pulls frames by time instead of only receiving a pushed sheet -------------
+
+
+def _mean_rgb(jpeg: bytes) -> tuple[int, int, int]:
+	img = Image.open(io.BytesIO(jpeg)).convert('RGB')
+	return img.resize((1, 1)).getpixel((0, 0))  # type: ignore[return-value]
+
+
+async def test_recall_returns_the_frames_from_the_asked_for_moment(eyes, session, site):
+	await _open(eyes, session, site.url_for('/calib'))
+	await eyes.watch(seconds=4 * SECTION + 0.5, until='time')
+
+	blue = await eyes.recall(2 * SECTION + 0.3, 3 * SECTION - 0.3, frames=3)
+	assert blue.image and blue.frames, blue.text
+	assert 1 <= len(blue.frames) <= 3 and all(2 * SECTION <= t <= 3 * SECTION for t, _ in blue.frames), [
+		t for t, _ in blue.frames
+	]
+	for _t, jpeg in blue.frames:
+		r, g, b = _mean_rgb(jpeg)
+		assert b > 150 and r < 90 and g < 90, ('the blue section', (r, g, b))
+
+	red = await eyes.recall(0.2, SECTION - 0.3, frames=2)
+	assert red.frames and all(_mean_rgb(j)[0] > 150 and _mean_rgb(j)[2] < 90 for _t, j in red.frames), red.text
+
+
+async def test_recall_says_what_it_holds_when_the_window_is_empty(eyes, session, site):
+	await _open(eyes, session, site.url_for('/calib'))
+	await eyes.watch(seconds=SECTION, until='time')
+	empty = await eyes.recall(30.0, 35.0)
+	assert empty.image is None and not empty.frames
+	assert 'nothing held between' in empty.text and 'held:' in empty.text, empty.text
+
+
+async def test_recall_reaches_past_the_ring_from_disk_even_in_a_new_session(eyes, session, site, tmp_path):
+	# "Unlimited" recall: keyframes are archived to disk as they are taken, so a moment can be pulled
+	# after it has left the page's 240-frame ring, or from a fresh Eyes with nothing in memory.
+	await _open(eyes, session, site.url_for('/calib'))
+	await eyes.watch(seconds=4 * SECTION + 0.5, until='time')
+	vid = eyes.retina.attended['vid']
+	await asyncio.sleep(3.0)  # let the archiver catch up
+	assert eyes.archive is not None and len(eyes.archive) > 0
+
+	fresh = Eyes(session, seed=7, speech=False, now_path=tmp_path / 'now.json')
+	assert not fresh.retina.frames, 'nothing in memory: this can only come from disk'
+	blue = await fresh.recall(2 * SECTION + 0.3, 3 * SECTION - 0.3, frames=3, item=vid)
+	assert blue.frames, blue.text
+	for _t, jpeg in blue.frames:
+		r, g, b = _mean_rgb(jpeg)
+		assert b > 150 and r < 90 and g < 90, ('the blue section, from disk', (r, g, b))
+	assert 'held:' in blue.text
+
+
+def test_the_archive_stays_under_its_size_cap(tmp_path):
+	from browser_use.eyes.archive import FrameArchive
+	from browser_use.eyes.retina import FrameSample
+
+	jpeg = b'\xff\xd8' + b'x' * 10_000 + b'\xff\xd9'
+	archive = FrameArchive(tmp_path / 'frames', max_bytes=60_000)
+	for seq in range(20):
+		archive.add(FrameSample(seq, 1, seq * 0.5, 0.0, bytes(256), (1, 2, 3), True), jpeg)
+	total = sum(p.stat().st_size for p in (tmp_path / 'frames').glob('*.jpg'))
+	assert total <= 60_000, total
+	assert archive.read(1, 0) is None and archive.read(1, 19) == jpeg, 'oldest go first, newest stay'
+	reopened = FrameArchive(tmp_path / 'frames', max_bytes=60_000)
+	assert len(reopened) == len(archive) and reopened.window(1, 9.0, 9.6)

@@ -83,6 +83,7 @@ class Percept:
 	started_at: float = 0.0
 	ended_at: float = 0.0
 	stop_reason: str = ''
+	frames: list[tuple[float, bytes]] = field(default_factory=list, repr=False)  # (media t, JPEG), from recall
 
 	@property
 	def tokens(self) -> int:
@@ -218,6 +219,28 @@ def _label(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, size: int)
 	box = draw.textbbox(xy, text, font=font)
 	draw.rectangle((box[0] - 3, box[1] - 2, box[2] + 3, box[3] + 2), fill=LABEL_BG)
 	draw.text(xy, text, fill=LABEL_FG, font=font)
+
+
+def render_strip(frames: list[tuple[float, bytes]], height: int = 320, gap: int = 6) -> tuple[bytes, int, int] | None:
+	"""Frames side by side, each labelled with its media time: what `recall` hands back."""
+	images = []
+	for t, jpeg in frames:
+		with Image.open(io.BytesIO(jpeg)) as img:
+			w = max(1, round(img.width * height / max(1, img.height)))
+			images.append((t, img.convert('RGB').resize((w, height))))
+	if not images:
+		return None
+	width = sum(img.width for _, img in images) + gap * (len(images) - 1)
+	sheet = Image.new('RGB', (width, height), (0, 0, 0))
+	draw = ImageDraw.Draw(sheet)
+	x = 0
+	for t, img in images:
+		sheet.paste(img, (x, 0))
+		_label(draw, (x + 6, 6), _fmt(t), 14)
+		x += img.width + gap
+	out = io.BytesIO()
+	sheet.save(out, format='JPEG', quality=80)
+	return out.getvalue(), width, height
 
 
 def render_sheet(items: list[ItemPercept], detail: str = 'glance', max_width: int = 1400) -> tuple[bytes, int, int] | None:
