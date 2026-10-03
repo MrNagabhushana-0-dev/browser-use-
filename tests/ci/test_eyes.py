@@ -525,6 +525,60 @@ async def test_claude_code_gets_the_percept_as_an_image_and_moves_the_feed(mcp_s
 	assert '@second green reel' in now, now
 
 
+async def test_the_journal_keeps_what_changed_between_turns(eyes, session, site):
+	# The eyes keep watching between the model's turns; what changed goes to a journal on disk,
+	# not into the context. Each entry carries the item and media time, so `recall` can fetch it.
+	import json
+
+	await _open(eyes, session, site.url_for('/feed'))
+	await eyes.watch(seconds=2.5, until='time')
+	moved = await eyes.next()
+	assert moved.moved, moved
+	await eyes.retina.wait_for_data(1.0)
+	await asyncio.sleep(2.5)
+	assert eyes.journal_path is not None and eyes.journal_path.exists()
+	entries = [json.loads(line) for line in eyes.journal_path.read_text().splitlines()]
+	items = [e for e in entries if e['kind'] == 'item']
+	assert any('@first' in e['text'] for e in items) and any('@second' in e['text'] for e in items), entries
+	assert all(isinstance(e['vid'], int) and 'at' in e for e in entries)
+	assert len(entries) < 20, f'only changes are journalled, not every tick: {len(entries)}'
+
+
+def test_the_hook_reports_each_journal_entry_once(tmp_path):
+	import json
+	import os
+	import sys
+	import time
+
+	now, journal = tmp_path / 'now.json', tmp_path / 'journal.jsonl'
+	env = {**os.environ, 'BROWSER_USE_EYES_NOW': str(now)}
+
+	def run() -> str:
+		out = subprocess.run(
+			[sys.executable, '-m', 'browser_use.eyes.hook'],
+			input=json.dumps({'hook_event_name': 'UserPromptSubmit'}),
+			capture_output=True,
+			text=True,
+			env=env,
+			check=True,
+		).stdout
+		return json.loads(out)['hookSpecificOutput']['additionalContext'] if out.strip() else ''
+
+	def add(text: str) -> None:
+		with journal.open('a') as f:
+			f.write(json.dumps({'at': time.time(), 'kind': 'item', 'vid': 1, 't': 0.0, 'text': text}) + '\n')
+
+	now.write_text(json.dumps({'updated': time.time(), 'line': '👁 watching a video "@x"'}))
+	add('now watching "@first"')
+	add('now watching "@second"')
+	first = run()
+	assert '@first' in first and '@second' in first and 'Since your last turn' in first, first
+	second = run()
+	assert '@first' not in second and 'watching a video' in second, 'each entry is reported once'
+	add('now watching "@third"')
+	assert '@third' in run()
+
+
 def test_the_hook_injects_a_fresh_reading_and_nothing_when_stale(tmp_path):
 	import json
 	import os

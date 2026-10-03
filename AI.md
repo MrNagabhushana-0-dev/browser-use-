@@ -48,6 +48,15 @@ uv sync --all-extras
 ```
 Without the extras, you get sight plus heuristic sound labels, and the percepts say so.
 
+## Memory outside the context: the journal
+
+The eyes keep watching between your turns. They write only what *changed* (a page opened, a new
+item, a sound change, a pause) to `journal.jsonl` next to `now.json` in `~/.config/browseruse/eyes/`.
+Each entry carries the item and the media time, so `retinat_recall(t0, t1, item=...)` can fetch the
+frames for any of them. With the Claude Code hook (`python -m browser_use.eyes.hook`), each turn opens
+with the entries you have not seen yet, newest 8, plus the current one-line reading. That keeps the
+continuous stream on disk rather than in your context.
+
 ## Which Retinat tool to call
 
 | You want to... | Call | Typical cost |

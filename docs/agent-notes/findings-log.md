@@ -589,3 +589,25 @@ recycled; it never fired. It is now a durable Routine firing into this session a
 tiers differ by model); (2) text narration memory across steps, then an A/B of sheet vs recall vs
 narration on this repo's own feed pages, measuring answer accuracy and tokens; (3) the feed two-reel
 skip; (4) attribute the Chromium connections to `mtalk.google.com` / `www.google.com` during tests.
+
+## Round 11: a journal, so the stream lives outside the context
+
+**Owner's goal, restated plainly:** the eyes should see continuously, like a person's, without
+filling the model's context. A closed model's weights cannot be wired to; what can be built is eyes
+outside the model, memory outside the context, and pull on demand (Round 9's research: AOI's
+narration-as-memory, streaming-memory work). Recall (Round 10) is the pull. This round is the memory.
+
+**Built.** `Eyes` appends only *changes* (page, item with caption and length, sound class, pause) to
+`journal.jsonl` next to `now.json`, each with item id and media time for `recall`; trimmed to its newest
+half past 512 KB. `now_line` was split into `_now_fields` (structured) plus formatting so the journal
+diffs fields rather than parsing text; the line's output is unchanged. The Claude Code hook now reports
+the entries it has not shown before (newest 8, offset kept in `journal.offset`), then the current line.
+
+**Verified.** A real feed session journalled 4 entries, in order: page opened, "@first red reel" (6.0 s),
+"sound became tone 329 Hz", "@second green reel". The hook reports each entry exactly once across turns.
+Eyes + Retinat files 33/33. **Not measured:** whether models do better with the journal; that is the A/B.
+
+**Next, in order:** (1) the A/B: sheet vs recall vs journal-narration on this repo's feed pages, scored on
+answer accuracy and tokens; (2) per-model image-token caps; (3) desktop eyes on the person's own screen
+(opt-in, started by them, local), reusing the same signatures, journal and recall; (4) the feed two-reel
+skip; (5) attribute the Chromium Google connections during tests.

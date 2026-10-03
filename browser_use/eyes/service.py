@@ -62,6 +62,7 @@ BORED_WINDOW_S = 2.0
 NEXT_CONFIRM_S = 2.0
 # ...and how long the new item must stay attended to count as where the feed came to rest.
 SETTLE_S = 0.6
+JOURNAL_MAX_BYTES = 512_000
 # Keyframes per item on the sheet, by detail.
 KEYFRAMES = {'glance': 4, 'look': 6, 'study': 8}
 
@@ -102,6 +103,9 @@ class Eyes:
 		self.touch = HumanTouch(browser_session, seed=seed)
 		self.hand = HumanInput(browser_session, seed=seed)
 		self.now_path = None if now_path is False else (now_path or default_now_path())
+		# What changed, kept on disk between the model's turns (only changes, not every tick).
+		self.journal_path = self.now_path.with_name('journal.jsonl') if self.now_path is not None else None
+		self._journaled: dict[str, Any] = {}
 		self._last_now = 0.0
 		self._items_seen = 0
 		self._pages = None
@@ -548,28 +552,27 @@ class Eyes:
 
 	# -- ambient -------------------------------------------------------------------------
 
-	def now_line(self, window_s: float = 3.0) -> str:
-		"""One line describing what is on screen and audible right now."""
+	def _now_fields(self, window_s: float = 3.0) -> dict[str, Any]:
+		"""What is on screen and audible right now, as fields (the journal diffs these)."""
 		att = self.retina.attended or {}
-		vid = att.get('vid', 0)
-		if not vid:
-			return f'👁 no video on screen ({self.retina.state.get("url", "")[:100]})'
+		state = self.retina.state
+		fields: dict[str, Any] = {'url': state.get('url', ''), 'vid': att.get('vid', 0) or 0}
+		if not fields['vid']:
+			return fields
+		vid = fields['vid']
 		cutoff = time.monotonic() - window_s
 		frames = [f for f in self.retina.frames if f.vid == vid and f.wall >= cutoff]
 		hops = [h for h in self.retina.hops if h.vid == vid and h.wall >= cutoff]
-		parts = ['👁 watching a video']
-		text = (att.get('text') or '').strip()
-		if text:
-			parts[0] += f' "{text[:80]}"'
-		state = self.retina.state
-		t, duration = state.get('t'), att.get('duration')
-		if t is not None:
-			parts.append(f'at {sight.fmt_t(t)}' + (f' of {sight.fmt_t(duration)}' if duration else ''))
-		if state.get('paused'):
-			parts.append('paused')
+		fields.update(
+			caption=(att.get('text') or '').strip(),
+			t=state.get('t'),
+			duration=att.get('duration'),
+			paused=bool(state.get('paused')),
+		)
 		if frames:
 			s = sight.read(frames)
-			parts.append(sight.describe_shot(s.shots[-1]) + (f', {len(s.cuts)} cut(s) in {window_s:.0f}s' if s.cuts else ''))
+			fields['shot'] = sight.describe_shot(s.shots[-1])
+			fields['cuts'] = len(s.cuts)
 		if hops:
 			h = hearing.listen(hops, state.get('sr'))
 			if self.speech and any(x.pcm for x in hops):
@@ -578,8 +581,59 @@ class Eyes:
 					hearing.apply_speech_regions(h, regions)
 			last = [seg for seg in h.segments if seg.duration >= 0.3]
 			if last:
-				parts.append('sound: ' + hearing.describe_segment(last[-1]))
+				fields['sound'] = last[-1].kind
+				fields['sound_text'] = hearing.describe_segment(last[-1])
+		return fields
+
+	def now_line(self, window_s: float = 3.0, fields: dict[str, Any] | None = None) -> str:
+		"""One line describing what is on screen and audible right now."""
+		f = fields if fields is not None else self._now_fields(window_s)
+		if not f.get('vid'):
+			return f'👁 no video on screen ({f.get("url", "")[:100]})'
+		parts = ['👁 watching a video']
+		if f.get('caption'):
+			parts[0] += f' "{f["caption"][:80]}"'
+		if f.get('t') is not None:
+			parts.append(f'at {sight.fmt_t(f["t"])}' + (f' of {sight.fmt_t(f["duration"])}' if f.get('duration') else ''))
+		if f.get('paused'):
+			parts.append('paused')
+		if 'shot' in f:
+			parts.append(f['shot'] + (f', {f["cuts"]} cut(s) in {window_s:.0f}s' if f.get('cuts') else ''))
+		if 'sound_text' in f:
+			parts.append('sound: ' + f['sound_text'])
 		return ' · '.join(parts)
+
+	def _journal(self, f: dict[str, Any]) -> None:
+		"""Append what changed since the last entry: page, item, sound or play state. Never every tick."""
+		if self.journal_path is None:
+			return
+		last, entries = self._journaled, []
+		vid, t = f.get('vid', 0), f.get('t')
+		if f.get('url') != last.get('url') and f.get('url'):
+			entries.append(('page', f'opened {f["url"][:160]}'))
+		if vid != last.get('vid'):
+			if vid:
+				what = f'"{f["caption"][:80]}"' if f.get('caption') else 'a video'
+				length = f' ({sight.fmt_t(f["duration"])} long)' if f.get('duration') else ''
+				entries.append(('item', f'now watching {what}{length}'))
+			elif last.get('vid'):
+				entries.append(('item', 'no video on screen'))
+		elif vid:
+			if f.get('sound') and f.get('sound') != last.get('sound'):
+				entries.append(('sound', f'sound became {f["sound_text"]}'))
+			if 'paused' in last and f.get('paused') != last.get('paused'):
+				entries.append(('state', 'paused' if f.get('paused') else 'playing again'))
+		self._journaled = {**last, **{k: f.get(k) for k in ('url', 'vid', 'sound', 'paused')}}
+		if not entries:
+			return
+		at = time.time()
+		lines = [json.dumps({'at': at, 'kind': k, 'vid': vid, 't': t, 'text': text}) for k, text in entries]
+		self.journal_path.parent.mkdir(parents=True, exist_ok=True)
+		with self.journal_path.open('a') as out:
+			out.write('\n'.join(lines) + '\n')
+		if self.journal_path.stat().st_size > JOURNAL_MAX_BYTES:  # keep the newest half
+			kept = self.journal_path.read_text().splitlines()
+			self.journal_path.write_text('\n'.join(kept[len(kept) // 2 :]) + '\n')
 
 	def _update_now(self, frames: list[FrameSample], hops: list[AudioHop], events: list[RetinaEvent]) -> None:
 		now = time.monotonic()
@@ -587,7 +641,9 @@ class Eyes:
 			return
 		self._last_now = now
 		try:
-			line = self.now_line()
+			fields = self._now_fields()
+			line = self.now_line(fields=fields)
+			self._journal(fields)
 			self.now_path.parent.mkdir(parents=True, exist_ok=True)
 			tmp = self.now_path.with_suffix('.tmp')
 			tmp.write_text(json.dumps({'updated': time.time(), 'line': line, 'url': self.retina.state.get('url', '')}))
