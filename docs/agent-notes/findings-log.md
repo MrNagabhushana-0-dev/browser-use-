@@ -611,3 +611,10 @@ Eyes + Retinat files 33/33. **Not measured:** whether models do better with the 
 answer accuracy and tokens; (2) per-model image-token caps; (3) desktop eyes on the person's own screen
 (opt-in, started by them, local), reusing the same signatures, journal and recall; (4) the feed two-reel
 skip; (5) attribute the Chromium Google connections during tests.
+
+**Next, re-ordered on the owner's request ("vision the complete time, unlimited"):** (1) disk-backed
+recall: persist keyframes beside the journal so recall reaches back hours, not the last ~240 frames;
+(2) a standalone eyes process that keeps watching and journalling after the MCP session ends, with
+rotation; (3) the A/B of sheet vs recall vs journal; (4) per-model image-token caps; (5) opt-in desktop
+eyes on the person's own screen; (6) the feed two-reel skip. Honest limit to keep stating: the model does
+not perceive between turns; "unlimited" means nothing is lost and any moment can be pulled.
