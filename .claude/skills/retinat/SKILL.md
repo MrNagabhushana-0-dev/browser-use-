@@ -21,6 +21,8 @@ user's own Chrome.
    - For a video, call `retinat_watch(until='bored')`. It returns keyframes and sound labels, and
      a transcript when the speech extra is installed. It pauses the video afterwards, so nothing
      plays unseen while you think.
+   - To look again at one moment of a video you already watched, call `retinat_recall(t0, t1)`:
+     frames from that window, from what the eyes kept. It never replays the video.
 3. **Act like a person:** `retinat_tap` / `retinat_click` at coordinates read off the image,
    `retinat_type` into the focused field, `retinat_key` for Enter, Tab or Escape, and
    `retinat_swipe`. For feeds, use `retinat_next` or `retinat_browse(items=N)`.

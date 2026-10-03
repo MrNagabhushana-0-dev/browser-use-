@@ -562,3 +562,30 @@ recorded per idea.
 **Next, in order:** (1) a pull tool over the retina's ring (`frames at t0-t1`, by time); (2) per-model
 image-token caps in `percept.py` from the providers' docs; (3) text narration memory across steps, then
 an A/B against sheets on this repo's own feed pages; (4) the feed two-reel skip.
+
+## Round 10: recall, so the model can pull frames instead of only receiving them
+
+**Why.** Round 9's research found the field moving from push to pull: Gemini's agentic video
+processing lets the model fetch the transcript first and then frames at chosen times, and AOI showed
+that how pushed keyframes are chosen barely matters. Retinat only pushed a sheet chosen without the
+question. The retina already kept a 240-keyframe ring with media timestamps, so pulling was cheap.
+
+**Built.** `Eyes.recall(t0, t1, frames=4, item=None)` and `Eyes.held(item)`; MCP tool
+`retinat_recall` (read-only). It picks the frames that best cover the window (the existing coverage
+selection, run only inside it), fetches their JPEGs from the page's ring, and returns a strip labelled
+with media times. It never seeks or replays, says "nothing held between those times" with the held span
+when the window is empty, and says when frames were evicted. Docs: AI.md, the skill, the agent.
+
+**Verified.** Against the calibration video's ground truth (2.5 s each of red, test pattern, blue,
+yellow): recall of 5.3-7.2 s returns only blue frames, 0.2-2.2 s only red, all timestamps inside the
+window. Mutation-checked: with the window filter removed, the test fails. Retinat file 5/5, eyes file
+26/26. **Not measured:** whether a model actually answers questions better or cheaper with recall than
+with a bigger pushed sheet. That needs the A/B below.
+
+**Session note.** The Round 9 daily loop used a session-only cron and died when the container was
+recycled; it never fired. It is now a durable Routine firing into this session at 03:17 IST.
+
+**Next, in order:** (1) per-model image-token caps in `percept.py` from the providers' docs (Claude's
+tiers differ by model); (2) text narration memory across steps, then an A/B of sheet vs recall vs
+narration on this repo's own feed pages, measuring answer accuracy and tokens; (3) the feed two-reel
+skip; (4) attribute the Chromium connections to `mtalk.google.com` / `www.google.com` during tests.

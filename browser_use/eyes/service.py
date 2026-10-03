@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from browser_use.eyes import asr, hearing, sight
-from browser_use.eyes.percept import ItemPercept, Keyframe, Percept, assemble, estimate_image_tokens
+from browser_use.eyes.percept import ItemPercept, Keyframe, Percept, assemble, estimate_image_tokens, render_strip
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
 from browser_use.human.input import HumanInput
 from browser_use.human.touch import HumanTouch
@@ -314,6 +314,46 @@ class Eyes:
 		tokens = estimate_image_tokens(*size)
 		text += f'\n~{tokens + len(text) // 4} tokens (frame {size[0]}x{size[1]} ~{tokens}; estimates)'
 		return Percept([], text, jpeg, size, tokens, len(text) // 4)
+
+	def held(self, item: int | None = None) -> tuple[float, float] | None:
+		"""The media-time span (first, last) of one item's frames that still have a keyframe."""
+		vid = item if item is not None else self.retina.attended.get('vid', 0)
+		times = [f.t for f in self.retina.frames if f.vid == vid and f.has_keyframe]
+		return (min(times), max(times)) if times else None
+
+	async def recall(self, t0: float, t1: float, frames: int = 4, item: int | None = None) -> Percept:
+		"""Frames from a moment already seen, by media time: the model pulls what it needs.
+
+		`watch` and `browse` push a sheet the eyes chose without knowing the question; this asks
+		for "t0 to t1" of the attended item (or `item`) and answers from what the retina kept,
+		choosing the frames that best cover that window. It never seeks or replays the video.
+		"""
+		assert t1 >= t0 and frames >= 1, 'recall needs t1 >= t0 and at least one frame'
+		vid = item if item is not None else self.retina.attended.get('vid', 0)
+		window = [f for f in self.retina.frames if f.vid == vid and t0 <= f.t <= t1]
+		span = self.held(vid)
+		held = f'held: {sight.fmt_t(span[0])}-{sight.fmt_t(span[1])}' if span else 'held: nothing for this item'
+		head = f'👁 recall {sight.fmt_t(t0)}-{sight.fmt_t(t1)} of item {vid}'
+		chosen = sight.select_keyframes(window, frames).indices if window else []
+		picked = sorted((window[i] for i in chosen), key=lambda f: f.t)
+		jpegs = await self.retina.keyframes([f.seq for f in picked]) if picked else []
+		got = [(f.t, j) for f, j in zip(picked, jpegs) if j]
+		if not got:
+			why = 'nothing held between those times' if not picked else 'those keyframes were evicted from the ring'
+			return Percept([], f'{head}: {why} ({held})', None)
+		strip = render_strip(got)
+		assert strip is not None
+		jpeg, w, h = strip
+		tokens = estimate_image_tokens(w, h)
+		evicted = len(picked) - len(got)
+		text = (
+			f'{head}: {len(got)} frame(s) at '
+			+ ', '.join(sight.fmt_t(t) for t, _ in got)
+			+ (f'; {evicted} evicted' if evicted else '')
+			+ f' ({held})'
+			+ f'\n~{tokens + 30} tokens (strip {w}x{h} ~{tokens}; estimates)'
+		)
+		return Percept([], text, jpeg, (w, h), tokens, len(text) // 4, frames=got)
 
 	def _page_watcher(self):
 		from browser_use.eyes.page import PageWatcher

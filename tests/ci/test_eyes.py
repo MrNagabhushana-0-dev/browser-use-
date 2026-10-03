@@ -611,3 +611,36 @@ async def test_scan_covers_the_whole_page_and_notices_what_moves_on_its_own(eyes
 	assert any(c[2] > 150 and c[0] < 90 for c in colours) and any(c[1] > 120 and c[0] < 90 for c in colours), (
 		f'the blue and green sections further down are on the sheet: {colours}'
 	)
+
+
+# -- recall: the model pulls frames by time instead of only receiving a pushed sheet -------------
+
+
+def _mean_rgb(jpeg: bytes) -> tuple[int, int, int]:
+	img = Image.open(io.BytesIO(jpeg)).convert('RGB')
+	return img.resize((1, 1)).getpixel((0, 0))  # type: ignore[return-value]
+
+
+async def test_recall_returns_the_frames_from_the_asked_for_moment(eyes, session, site):
+	await _open(eyes, session, site.url_for('/calib'))
+	await eyes.watch(seconds=4 * SECTION + 0.5, until='time')
+
+	blue = await eyes.recall(2 * SECTION + 0.3, 3 * SECTION - 0.3, frames=3)
+	assert blue.image and blue.frames, blue.text
+	assert 1 <= len(blue.frames) <= 3 and all(2 * SECTION <= t <= 3 * SECTION for t, _ in blue.frames), [
+		t for t, _ in blue.frames
+	]
+	for _t, jpeg in blue.frames:
+		r, g, b = _mean_rgb(jpeg)
+		assert b > 150 and r < 90 and g < 90, ('the blue section', (r, g, b))
+
+	red = await eyes.recall(0.2, SECTION - 0.3, frames=2)
+	assert red.frames and all(_mean_rgb(j)[0] > 150 and _mean_rgb(j)[2] < 90 for _t, j in red.frames), red.text
+
+
+async def test_recall_says_what_it_holds_when_the_window_is_empty(eyes, session, site):
+	await _open(eyes, session, site.url_for('/calib'))
+	await eyes.watch(seconds=SECTION, until='time')
+	empty = await eyes.recall(30.0, 35.0)
+	assert empty.image is None and not empty.frames
+	assert 'nothing held between' in empty.text and 'held:' in empty.text, empty.text

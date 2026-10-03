@@ -152,6 +152,26 @@ def _tools() -> list['types.Tool']:
 			input_schema={'type': 'object', 'properties': {'key': {'type': 'string'}}, 'required': ['key']},
 		),
 		types.Tool(
+			name='retinat_recall',
+			description=(
+				'Frames from a moment already seen, by media time: ask for t0-t1 seconds of the item being watched '
+				'(or `item`) and get the frames that best cover that window, labelled with their times. Answers from '
+				'what the eyes kept; it never seeks or replays. Use it after retinat_watch when a question needs a '
+				'closer look at one moment, instead of watching again.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					't0': {'type': 'number', 'minimum': 0},
+					't1': {'type': 'number', 'minimum': 0},
+					'frames': {'type': 'integer', 'default': 4, 'minimum': 1, 'maximum': 8},
+					'item': {'type': 'integer', 'description': 'item id from a watch/browse percept; default: the one attended'},
+				},
+				'required': ['t0', 't1'],
+			},
+			annotations=ro,
+		),
+		types.Tool(
 			name='retinat_now',
 			description='One line on what is on screen and audible right now. No image; nearly free.',
 			input_schema={'type': 'object', 'properties': {}},
@@ -337,6 +357,14 @@ class RetinatServer(BrowserUseServer):
 		if name == 'retinat_key':
 			await eyes.hand.press(str(args['key']))
 			return f'Pressed {args["key"]}.'
+		if name == 'retinat_recall':
+			t0, t1 = float(args['t0']), float(args['t1'])
+			if t1 < t0:
+				raise ValueError('t1 must be at or after t0')
+			item = args.get('item')
+			return self._content(
+				await eyes.recall(t0, t1, frames=int(args.get('frames', 4)), item=int(item) if item is not None else None)
+			)
 		if name == 'retinat_now':
 			await eyes.retina.wait_for_data(1.0)
 			return eyes.now_line()
