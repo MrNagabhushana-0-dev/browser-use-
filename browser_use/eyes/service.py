@@ -64,6 +64,7 @@ NEXT_CONFIRM_S = 2.0
 # ...and how long the new item must stay attended to count as where the feed came to rest.
 SETTLE_S = 0.6
 JOURNAL_MAX_BYTES = 512_000
+ARCHIVE_BACKLOG_LIMIT = 150  # unarchived keyframes; the page's ring holds 240
 # Keyframes per item on the sheet, by detail.
 KEYFRAMES = {'glance': 4, 'look': 6, 'study': 8}
 
@@ -111,6 +112,7 @@ class Eyes:
 		# Keyframes copied to disk as they are taken, so recall reaches past the page's ring.
 		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
 		self._archiver: asyncio.Task | None = None
+		self._watching = 0  # watches in progress: the archiver keeps out of their way
 		self._meaning = None  # MeaningIndex over the archive, made on first search
 		self._last_now = 0.0
 		self._items_seen = 0
@@ -203,7 +205,23 @@ class Eyes:
 				return None  # the picture is steady but the sound is doing something new
 		return f'nothing new for {BORED_WINDOW_S:.0f}s (novelty {gain:.3f})'
 
-	async def watch(
+	async def watch(self, *args: Any, **kwargs: Any) -> Percept:
+		"""Watch what plays: see `_watch` for the parameters."""
+		self._watching += 1
+		try:
+			return await self._watch(*args, **kwargs)
+		finally:
+			self._watching -= 1
+
+	async def browse(self, *args: Any, **kwargs: Any) -> Percept:
+		"""Browse a feed item by item: see `_browse` for the parameters."""
+		self._watching += 1
+		try:
+			return await self._browse(*args, **kwargs)
+		finally:
+			self._watching -= 1
+
+	async def _watch(
 		self,
 		seconds: float = 8.0,
 		until: Until = 'time',
@@ -350,9 +368,20 @@ class Eyes:
 		return stored
 
 	async def _archive_loop(self, every_s: float = 2.0) -> None:
+		"""Copy keyframes to disk between watches. Pulling JPEGs out of the page uses the same page
+		thread the retina times frames and sound on, and archiving can wait while measuring cannot:
+		during a watch it only steps in, a few frames at a time, when the ring is close to overflowing."""
 		while True:
 			await asyncio.sleep(every_s)
 			try:
+				if self._watching:
+					backlog = sum(
+						1 for f in self.retina.frames if f.has_keyframe and self.archive and not self.archive.has(f.vid, f.seq)
+					)
+					if backlog < ARCHIVE_BACKLOG_LIMIT:
+						continue
+					await self.archive_now(limit=8)
+					continue
 				await self.archive_now()
 			except asyncio.CancelledError:
 				raise
@@ -590,7 +619,7 @@ class Eyes:
 			note = f'page state unavailable: {type(e).__name__}: {e}'
 		return NextResult(False, 'none', time.monotonic() - started, tried, before, self.retina.attended.get('vid', 0), note)
 
-	async def browse(
+	async def _browse(
 		self,
 		items: int = 5,
 		max_seconds: float = 15.0,

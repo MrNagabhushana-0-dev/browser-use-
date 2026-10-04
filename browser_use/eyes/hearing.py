@@ -292,7 +292,9 @@ def _smooth(segments: list[Segment]) -> list[Segment]:
 			if out:
 				out[-1].t1 = seg.t1
 				continue
-		if out and out[-1].kind == seg.kind and out[-1].detail == seg.detail:
+		# Adjacent beats (or music) are one run even if their pieces guessed slightly different tempi:
+		# the caller re-estimates one tempo from all of the run's onsets, as listen() itself merges them.
+		if out and out[-1].kind == seg.kind and (out[-1].detail == seg.detail or seg.kind in ('beats', 'music')):
 			out[-1].t1 = seg.t1
 			continue
 		out.append(seg)

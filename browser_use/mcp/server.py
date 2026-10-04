@@ -1685,6 +1685,15 @@ class BrowserUseServer:
 		session_data = self.active_sessions[session_id]
 		session = session_data['session']
 
+		# The eyes on this browser (and their archiver) go with it, or they outlive it.
+		eyes = getattr(self, '_eyes_instance', None)
+		if eyes is not None and eyes.browser_session is session:
+			self._eyes_instance = None
+			try:
+				await eyes.close()
+			except Exception:
+				pass
+
 		try:
 			# Close the session
 			if hasattr(session, 'kill'):
