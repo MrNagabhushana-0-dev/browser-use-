@@ -720,3 +720,36 @@ each with a static twin, scored from page state with no LLM judge; first as a pe
 (2) media-borne prompt-injection tests (text in video frames, spoken instructions) plus a defence; (3) `find` and
 `zoom` in Retinat; (4) the audio-under-load misclassification; (5) opt-in desktop eyes; (6) replay recording with
 cursor and step callouts.
+
+## Round 16: eyesbench, the first measured comparison (and a hearing bug it found)
+
+**Built.** `browser_use/eyes/bench.py` (`python -m browser_use.eyes.bench`): seeded tasks, answers known, no
+LLM judge, each run in two perception modes on the same page: the screenshot loop the big-lab agents use (one
+shot per 1.5 s, downscaled to 1280 px as they do; 1,196 tokens a shot) and the retina. Scored on: the needed
+information captured, present in what the model is sent, and estimated tokens.
+
+**Measured, 10 seeds, headless Chromium on this VM:**
+
+| Task | Screenshot loop | Retina |
+|---|---|---|
+| A 0.4 s full-frame colour flash at a seeded moment: which colour? | 2/10, ~11,960 tokens | 10/10, ~235 tokens |
+| N beeps in a muted video: how many? | 0/10, ~9,568 tokens | 10/10, ~210 tokens |
+
+The loop's 2/10 matches the expected chance (~0.4 s / 1.5 s ≈ 27%), which is evidence the scorer works; a
+guard test also checks the detector on a paused flash frame. **What this is not:** an end-to-end agent score.
+It measures whether the information reaches the model at all (a necessary condition) and what that costs; a
+model still has to answer. A 1.5 s step is generous to the screenshot agents (measured real tasks run 5-15 s a
+step), and polling faster would raise their cost proportionally.
+
+**Bugs found on the way, all fixed before any number was trusted:** (1) `hearing.onsets` counted every short
+sound twice: a sound cut off mid-hop smears into a broadband click while the hop is still mostly the sound.
+Onsets now skip a flux peak when the sound was already going and the next hop collapses by >25 dB. Beep
+counts went from wrong in every seed to exact; eyes file 32/32 twice. This is plausibly also behind the
+"beats heard as sound" flake (onset-based rhythm). (2) The benchmark served media without HTTP ranges, so
+Chrome could not seek; (3) an early detector check was invalid for that reason. Neither produced a claim.
+
+**Next, in order:** (1) widen eyesbench toward the agreed ten tasks (canvas bounce count, transient toast,
+auto-advancing carousel, live chart peak, timed click, progress-bar stop, spoken instruction, WebGL face
+letter), each with a static twin, plus an accessibility-snapshot mode; (2) an end-to-end run with a model driving
+the MCP tools vs a screenshot loop, counting real tokens; (3) media-borne prompt-injection tests; (4) `find` and
+`zoom` in Retinat; (5) opt-in desktop eyes; (6) replay recording with cursor.
