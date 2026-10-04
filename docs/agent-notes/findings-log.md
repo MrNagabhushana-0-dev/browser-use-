@@ -684,3 +684,22 @@ measurement; anything new that touches the page during a watch needs a timing te
 the flick (release velocity, item order before/after, overshoot correction path) on the failing runs
 rather than guessing; (2) a standalone eyes process; (3) the A/B of sheet vs recall vs journal vs search;
 (4) opt-in desktop eyes; (5) per-model image-token caps; (6) attribute the Chromium Google connections.
+
+## Round 14 (unattended loop): the feed two-reel skip, traced and fixed
+
+**Measured, not guessed.** Twelve fresh-page feed steps in isolation landed correctly 12/12, so `next()`
+was instrumented (temporarily) and the eyes file run 5 times. The failing run's trace: a normal swipe flung
+past one reel (`before 0 -> confirm 2`); overshoot correction ran, and its one 45%-of-screen flick back
+"did not move the feed". A scroll-snap feed snaps a weak fling back where it was, and the correction never
+retried. **Fix:** correction now flicks back toward the target item and, if a flick does not take, tries
+again harder (45% then 72%), re-reading the item order each time, at most 3 tries. **Test:** a stiff feed
+(first flick flies two reels; a flick back registers only past 55% of the screen) reproduced the exact
+traced note on the old code every time and passes now. Eyes file 3/3 runs clean (32/32).
+
+**Also found in the same traces (open):** under load the click-train section is sometimes heard as "sound"
+instead of "beats", and once a reel's tone was too (1 in 5 file runs each). Likely missed onsets breaking
+the regularity check; not yet investigated.
+
+**Next, in order:** (1) audio robustness under load: trace onsets on failing runs as above; (2) a
+standalone eyes process; (3) the A/B of sheet vs recall vs journal vs search; (4) opt-in desktop eyes;
+(5) per-model image-token caps; (6) attribute the Chromium Google connections.

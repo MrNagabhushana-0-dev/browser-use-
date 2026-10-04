@@ -544,24 +544,40 @@ class Eyes:
 		return current not in (before, 0)
 
 	async def _correct_overshoot(self, before_order: int | None, direction: str) -> str:
-		"""If the flick carried the feed past the next item, flick back once, as a person would.
+		"""If the flick carried the feed past the next item, flick back as a person would, until it lands.
 
 		Judged from the videos' document order, which is how a feed lays out its items. When the
 		order is unknown (no previous position, or a feed that recycles elements) nothing is
-		assumed and nothing is done.
+		assumed and nothing is done. A flick back that does not take (a scroll-snap feed snaps a
+		weak fling back where it was) is tried again harder, as a thumb would; at most a few tries.
 		"""
 		after_order = self.retina.attended.get('order')
 		if not isinstance(before_order, int) or not isinstance(after_order, int) or before_order < 0 or after_order < 0:
 			return ''
-		step = after_order - before_order if direction == 'down' else before_order - after_order
+		forward = 1 if direction == 'down' else -1
+		target = before_order + forward
+		step = (after_order - before_order) * forward
 		if step <= 1:
 			return ''
-		current = self.retina.attended.get('vid', 0)
 		w, h = await self.touch.viewport()
-		await self.touch.flick('down' if direction == 'down' else 'up', fraction=0.45, around=(w / 2, h * 0.5))
-		if await self._wait_for_item_change(current, NEXT_CONFIRM_S):
-			return f'overshot by {step - 1} item(s); flicked back'
-		return f'overshot by {step - 1} item(s); the flick back did not move the feed'
+		back = 'down' if direction == 'down' else 'up'  # finger direction that scrolls back toward the target
+		fractions = iter((0.45, 0.72, 0.72))
+		fraction = next(fractions)
+		tries = 0
+		for _ in range(3):
+			order = self.retina.attended.get('order')
+			if order == target:
+				break
+			current = self.retina.attended.get('vid', 0)
+			tries += 1
+			await self.touch.flick(back, fraction=fraction, around=(w / 2, h * 0.5))
+			if not await self._wait_for_item_change(current, NEXT_CONFIRM_S):
+				fraction = next(fractions, 0.72)  # it snapped back: flick harder next time
+		landed = self.retina.attended.get('order') == target
+		harder = ' (harder after a flick that did not take)' if tries > 1 and landed else ''
+		if landed:
+			return f'overshot by {step - 1} item(s); flicked back{harder}'
+		return f'overshot by {step - 1} item(s); {tries} flick(s) back did not reach the next item'
 
 	async def next(
 		self, direction: Literal['down', 'up'] = 'down', methods: tuple[str, ...] = ('swipe', 'long-swipe', 'wheel', 'key')

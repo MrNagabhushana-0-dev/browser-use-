@@ -152,6 +152,20 @@ feed.addEventListener('touchend', e => { if (y0 === null) return;
 """
 
 
+# Like OVERSHOOT, but a flick back only takes if it is long: a short corrective flick snaps back where it
+# was, as a real scroll-snap feed does with a weak fling. Seen in a traced failure: "the flick back did not
+# move the feed", leaving the agent two reels on.
+STIFF_OVERSHOOT = """
+const feed = document.getElementById('feed'); feed.style.overflowY = 'hidden'; feed.style.touchAction = 'none';
+let y0 = null, flicks = 0;
+feed.addEventListener('touchstart', e => { y0 = e.touches[0].clientY }, {passive: true});
+feed.addEventListener('touchend', e => { if (y0 === null) return;
+  const dy = (e.changedTouches[0] || {}).clientY - y0; y0 = null;
+  if (dy < 0 && -dy >= 80) feed.scrollBy({top: (flicks++ === 0 ? 2 : 1) * innerHeight});
+  else if (dy > 0 && dy >= 0.55 * innerHeight) feed.scrollBy({top: -innerHeight}) }, {passive: true});
+"""
+
+
 @pytest.fixture(scope='module')
 def site(media):
 	server = HTTPServer()
@@ -173,6 +187,9 @@ def site(media):
 	server.expect_request('/feed').respond_with_data(FEED.replace('/*EXTRA*/', ''), content_type='text/html')
 	server.expect_request('/wheel-feed').respond_with_data(FEED.replace('/*EXTRA*/', WHEEL_ONLY), content_type='text/html')
 	server.expect_request('/overshoot-feed').respond_with_data(FEED.replace('/*EXTRA*/', OVERSHOOT), content_type='text/html')
+	server.expect_request('/stiff-overshoot-feed').respond_with_data(
+		FEED.replace('/*EXTRA*/', STIFF_OVERSHOOT), content_type='text/html'
+	)
 	server.expect_request('/none').respond_with_data('<!doctype html><p>no video here</p>', content_type='text/html')
 	yield server
 	server.stop()
@@ -377,6 +394,14 @@ async def test_next_notices_it_flew_past_an_item_and_comes_back(eyes, session, s
 	moved = await eyes.next()
 	assert moved.moved and 'overshot by 1' in moved.note and 'flicked back' in moved.note, moved
 	assert eyes.retina.attended['text'].startswith('@second'), eyes.retina.attended.get('text')
+
+
+async def test_a_flick_back_that_does_not_take_is_tried_again_harder(eyes, session, site):
+	await _open(eyes, session, site.url_for('/stiff-overshoot-feed'))
+	await eyes.watch(seconds=1.0)
+	moved = await eyes.next()
+	assert moved.moved and 'overshot by 1' in moved.note and 'flicked back' in moved.note, moved
+	assert eyes.retina.attended['text'].startswith('@second'), (eyes.retina.attended.get('text'), moved.note)
 
 
 async def test_next_falls_back_to_the_wheel_when_the_feed_ignores_touch(eyes, session, site):
