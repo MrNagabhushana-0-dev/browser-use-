@@ -669,3 +669,18 @@ The search test skips where the model cannot be downloaded. **Not measured:** qu
 **Next, in order:** (1) a standalone eyes process (keeps watching and archiving after the MCP session);
 (2) the A/B of sheet vs recall vs journal vs search on this repo's feed pages; (3) opt-in desktop eyes;
 (4) per-model image-token caps; (5) the feed two-reel skip; (6) attribute the Chromium Google connections.
+
+**Round 13, part 2: the archiver caused new flakes; fixed.** After the archive landed, audio-timing
+tests failed far more often in multi-file runs (`test_cuts_and_sounds` 2/3 in eyes+arena runs;
+`test_play_arena` in 2/2 full runs, 0/5 alone). Cause: the archiver pulled up to 40 JPEG data URLs out
+of the page every 2 s through the page thread the retina times on, and MCP-owned `Eyes` were never
+closed, so archivers outlived their sessions. Now the archiver backs off during watches (stepping in only
+near ring overflow), the MCP server closes the eyes with the session, and `_smooth` merges adjacent beats
+runs regardless of tempo label. eyes+arena x4 after: audio failures 0/4, arena 4/4; one run hit the
+pre-existing feed two-reel skip. Lesson recorded: background work inside the page competes with
+measurement; anything new that touches the page during a watch needs a timing test under load.
+
+**Next, in order (re-ranked):** (1) the feed two-reel skip, now the main source of red runs: instrument
+the flick (release velocity, item order before/after, overshoot correction path) on the failing runs
+rather than guessing; (2) a standalone eyes process; (3) the A/B of sheet vs recall vs journal vs search;
+(4) opt-in desktop eyes; (5) per-model image-token caps; (6) attribute the Chromium Google connections.
