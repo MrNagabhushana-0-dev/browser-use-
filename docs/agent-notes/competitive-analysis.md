@@ -90,3 +90,51 @@ No code, comments, strings, or structure were copied from webcmd into this
 repo. The two shallow clones used for this read (`techy-ops/webcmd`,
 `agentrhq/webcmd`) live outside this repository's working tree and are not
 part of any commit here.
+
+---
+
+# Competitive analysis: the big-lab browser agents (Round 15, 2026-10-04)
+
+Five research agents covered Google Antigravity's browser agent (Gemini computer use), Anthropic's Claude in
+Chrome and computer-use tools, OpenAI's computer-use agents (CUA/Operator, Atlas agent mode, Codex computer use and
+browser), GitHub Copilot's browser tools with Microsoft Playwright MCP and Edge Copilot Actions, and how browser
+agents are benchmarked. Sources are linked in the agents' reports; vendor claims vs measured results are kept apart.
+
+## How each one perceives the page
+
+| | Per-step input | Video/audio | Context cost |
+|---|---|---|---|
+| Antigravity (Gemini CU) | screenshot + URL; 0-999 coords | none documented in the agent; model can read video via API but not wired in | ~1,120 tokens/screenshot (Gemini 3 default) |
+| Claude in Chrome | screenshot + accessibility tree (refs, `find`, `zoom`) | none; "still frames per step" | screenshots pile up: one measured case ~279k tokens/call after 18 shots (issue #27869, closed "not planned") |
+| OpenAI CUA / Atlas / Codex | screenshot only (computer tool); code-execution mode | model card lists audio and video as unsupported; YouTube answered from captions | ~1.5k tokens/screenshot at 1440x900 (estimate) |
+| Copilot / Playwright MCP | accessibility snapshot; screenshots for viewing only | none; canvas invisible | documented single responses of 37k-284k tokens; ~114k/task over MCP (directional) |
+| **This repo (Retinat/eyes)** | journal of changes + pulled frames + optional DOM | **decoded video frames and audio, even muted; local ASR** | changes only; recall/search pull just what is asked |
+
+## Where this repo is ahead (evidence-backed)
+1. **It watches and listens.** No competitor documents video or audio perception in its browser agent. OpenAI
+   answers YouTube questions from captions; Claude in Chrome and Antigravity see still screenshots.
+2. **Memory outside the context.** The journal, recall by media time, disk archive and CLIP search address exactly the
+   failure every competitor documents: screenshots/snapshots piling into context (Claude in Chrome 13x growth,
+   Antigravity's screenshot loop on static pages, Playwright MCP's snapshot bloat).
+3. **Search over everything seen**, across sessions. Competitors' recordings are for humans; their memories are text.
+
+## Where this repo is behind (and what closing it means)
+1. **No benchmark numbers at all.** Every competitor publishes OSWorld/Online-Mind2Web/WebVoyager scores (mostly
+   vendor-run). Until this repo measures itself, "superior" is a claim. -> build a local dynamic benchmark (below).
+2. **No measured prompt-injection rate.** Anthropic publishes attack-success rates (now ~0% with classifiers);
+   Antigravity had a real `.env` exfiltration. The retina adds a new channel (text burned into video frames,
+   spoken instructions in audio) that nobody has tested. -> an injection suite including media-borne injections.
+3. **Typed action protocol.** Claude's `find` (natural-language element lookup), `zoom` (full-resolution crop),
+   batched actions that stop at the first failure; Playwright's deterministic refs. -> add `find` and `zoom` to Retinat.
+4. **The user's own signed-in browser** (Claude in Chrome, Codex extension across 5 browsers). Here only `--cdp-url`.
+   -> the MV3 extension in the backlog.
+5. **Whole-computer control** (OpenAI Codex computer use, Gemini 3.5 Flash). -> opt-in desktop eyes (queued).
+6. **Human-facing replay** with cursor and step callouts (Antigravity, Playwright MCP video). Here: Xvfb recorder only.
+
+## Benchmarks: what can actually be run here
+WebVoyager is discredited (live sites drift; an agent that googles and clicks one link scores 51%). Online-Mind2Web
+and BrowseComp need the live web. Runnable offline: **DynaCU-Bench** (100 dynamic tasks: podcast, meeting, carousel,
+live dashboard, transient UI, games; 93 scored by deterministic page-state checks; open code but its harness uses
+Playwright, so it needs porting), WebArena-Verified subsets (Docker, heavy), and AgentDojo/WASP for injections. No
+LLM API key exists in this sandbox, so unattended end-to-end agent runs are not possible here; perception can be
+measured without an LLM, and an end-to-end run can use the model in this session driving the MCP tools.

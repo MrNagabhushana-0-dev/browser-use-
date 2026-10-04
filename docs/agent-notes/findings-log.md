@@ -703,3 +703,20 @@ the regularity check; not yet investigated.
 **Next, in order:** (1) audio robustness under load: trace onsets on failing runs as above; (2) a
 standalone eyes process; (3) the A/B of sheet vs recall vs journal vs search; (4) opt-in desktop eyes;
 (5) per-model image-token caps; (6) attribute the Chromium Google connections.
+
+
+## Round 15: what "beat the big labs" requires (research; see competitive-analysis.md)
+
+Five research agents compared Antigravity, Claude in Chrome, OpenAI's agents and Copilot/Playwright MCP. The repo
+leads on media perception and on keeping memory out of the context (the failure every competitor documents), and
+trails on: measured benchmarks, measured injection resistance, a typed find/zoom protocol, the user's own browser,
+whole-computer control, and human-facing replay.
+
+**Next, in order (re-ranked for measurable superiority):** (1) **eyesbench**: a local, seeded, deterministic
+dynamic-content benchmark (flashing code in a video, DTMF digits in audio, canvas bounce count, transient toast,
+auto-advancing carousel, live chart peak, timed click, progress-bar stop, spoken instruction, WebGL face letter),
+each with a static twin, scored from page state with no LLM judge; first as a perception benchmark per mode
+(screenshot loop vs accessibility snapshot vs retina), then end-to-end with a model driving the MCP tools;
+(2) media-borne prompt-injection tests (text in video frames, spoken instructions) plus a defence; (3) `find` and
+`zoom` in Retinat; (4) the audio-under-load misclassification; (5) opt-in desktop eyes; (6) replay recording with
+cursor and step callouts.
