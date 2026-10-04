@@ -355,7 +355,8 @@ async def test_hold_pauses_the_video_and_the_next_watch_resumes_it(eyes, session
 async def test_no_video_is_said_plainly(eyes, session, site):
 	await _open(eyes, session, site.url_for('/none'))
 	p = await eyes.watch(seconds=1.0)
-	assert p.items == [] and p.image is None and 'no video' in p.text
+	assert p.items == [] and 'no video' in p.text
+	assert p.image is not None and p.image_tokens > 0, 'with no video, a watch still shows the page as drawn'
 
 
 async def test_the_ambient_line_is_written_for_hooks(eyes, session, site):
