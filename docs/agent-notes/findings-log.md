@@ -965,7 +965,8 @@ Fixed:
 
 A loose test feed (the first flick back carries two items) failed on the old code exactly as the flake did,
 ending on `@first`. It passes now. Eyes file: 1 of 3 runs red before the settle fix, 4/4 green after. That is a
-small sample for an intermittent fault, so it is evidence, not proof.
+small sample for an intermittent fault, so it is evidence, not proof. Full `tests/ci` on `79f5ce4`: **1,567
+passed, 30 skipped, 0 failed** (21m35s).
 
 **Next, in order:**
 1. The e2e re-run with `retinat_changes`, 5+ seeds and a "watch late" variant, once the servers connect.
