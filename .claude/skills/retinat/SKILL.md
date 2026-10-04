@@ -23,6 +23,8 @@ user's own Chrome.
      plays unseen while you think.
    - To look again at one moment of a video you already watched, call `retinat_recall(t0, t1)`:
      frames from that window, from what the eyes kept. It never replays the video.
+   - To find a moment by what it looked like, across everything archived (hours, earlier sessions),
+     call `retinat_search(query)`, then `retinat_recall` around the time it returns.
 3. **Act like a person:** `retinat_tap` / `retinat_click` at coordinates read off the image,
    `retinat_type` into the focused field, `retinat_key` for Enter, Tab or Escape, and
    `retinat_swipe`. For feeds, use `retinat_next` or `retinat_browse(items=N)`.

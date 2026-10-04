@@ -172,6 +172,25 @@ def _tools() -> list['types.Tool']:
 			annotations=ro,
 		),
 		types.Tool(
+			name='retinat_search',
+			description=(
+				'Find frames by what they look like, across everything the eyes have archived (hours, earlier '
+				'sessions): e.g. "a slide full of code", "a red car", "the scoreboard". Runs an open image-text model '
+				'locally; only the best-matching frames come back, labelled with item and media time. Follow up with '
+				'retinat_recall around a time for more of that moment.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'query': {'type': 'string', 'description': 'what to look for, in English'},
+					'frames': {'type': 'integer', 'default': 4, 'minimum': 1, 'maximum': 8},
+					'item': {'type': 'integer', 'description': 'limit to one item id from a percept'},
+				},
+				'required': ['query'],
+			},
+			annotations=ro,
+		),
+		types.Tool(
 			name='retinat_now',
 			description='One line on what is on screen and audible right now. No image; nearly free.',
 			input_schema={'type': 'object', 'properties': {}},
@@ -364,6 +383,13 @@ class RetinatServer(BrowserUseServer):
 			item = args.get('item')
 			return self._content(
 				await eyes.recall(t0, t1, frames=int(args.get('frames', 4)), item=int(item) if item is not None else None)
+			)
+		if name == 'retinat_search':
+			item = args.get('item')
+			return self._content(
+				await eyes.search(
+					str(args['query']), frames=int(args.get('frames', 4)), item=int(item) if item is not None else None
+				)
 			)
 		if name == 'retinat_now':
 			await eyes.retina.wait_for_data(1.0)

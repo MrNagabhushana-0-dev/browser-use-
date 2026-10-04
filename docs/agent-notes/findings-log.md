@@ -643,3 +643,29 @@ eyes on the person's own laptop, opt-in and local: still queued.
 **Next, in order:** (1) a semantic index over the archive with an open-source image-text embedding model
 (search by meaning, then recall); (2) a standalone eyes process; (3) the A/B of sheet vs recall vs journal;
 (4) opt-in desktop eyes; (5) per-model image-token caps; (6) the feed two-reel skip.
+
+## Round 13 (unattended loop): search by meaning over everything archived
+
+**Research and the decision it forced.** Candidates with ready ONNX vision/text encoders on Hugging Face:
+MobileCLIP-S0 (smallest, but Apple's research licence: wrong default for an open library), SigLIP-base
+(Apache, ~2x larger), OpenAI CLIP ViT-B/32 (MIT, by far the most used). Chose CLIP B/32 via onnxruntime,
+which the `eyes` extra already installs through faster-whisper, so no PyTorch. **Measured on synthetic
+frames (red, blue, yellow, a test pattern, a page with the word STOP):** int8 weights ranked red wrong
+(margins down to 0.003); fp32 got 5/5 (margins ~0.04-0.05); fp16 gave identical rankings and margins at
+half the download (~300 MB), 81 ms/image on this CPU. So fp16 is the default and int8 is not used.
+
+**Built.** `browser_use/eyes/meaning.py`: `Embedder` (CLIP image/text encoders, standard CLIP
+preprocessing, end-token-preserving truncation) and `MeaningIndex` (fp16 vectors beside the archive,
+updated incrementally, evicted frames dropped). `Eyes.search(query, frames, item)` and the read-only MCP
+tool `retinat_search`; embedding runs in a worker thread. The `eyes` extra now declares onnxruntime,
+tokenizers and huggingface-hub directly (already locked; uv.lock +6 lines). Docs: AI.md, skill, agent.
+
+**Verified.** On the calibration video, "a solid blue image", "a yellow screen" and "a colorful test
+pattern" each return a top frame inside the right 2.5 s section. Mutation-checked: with the ranking
+reversed the test fails (it returned frames from the pattern section for "blue"). Eyes + Retinat 37/37.
+The search test skips where the model cannot be downloaded. **Not measured:** quality on real video
+(faces, scenes, slides), where CLIP B/32 is known to be decent but not strong at reading text.
+
+**Next, in order:** (1) a standalone eyes process (keeps watching and archiving after the MCP session);
+(2) the A/B of sheet vs recall vs journal vs search on this repo's feed pages; (3) opt-in desktop eyes;
+(4) per-model image-token caps; (5) the feed two-reel skip; (6) attribute the Chromium Google connections.

@@ -68,6 +68,7 @@ continuous stream on disk rather than in your context.
 | Scroll Reels or Shorts like a person | `retinat_browse` with `items=N` | 1 sheet, one row per item |
 | Go to the next or previous feed item | `retinat_next` | text only |
 | Tap, swipe, click, type, press a key | `retinat_tap`, `retinat_swipe`, `retinat_click`, `retinat_type`, `retinat_key` | text only |
+| Find a moment by what it looked like, across everything archived ("a slide full of code") | `retinat_search` with `query` | 1 strip of up to 8 frames; first use downloads a ~300 MB open model |
 | Look again at one moment of a video you already watched (by media time) | `retinat_recall` with `t0`, `t1` | 1 strip of up to 8 frames (about 300-900 tokens) |
 | Know what's playing without an image | `retinat_now` | about 30 tokens |
 | Find everything broken on a site | `retinat_explore` | a report plus 1 sheet |

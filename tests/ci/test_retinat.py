@@ -58,6 +58,7 @@ async def test_it_is_its_own_server_with_only_vision_first_tools():
 		'retinat_next',
 		'retinat_explore',
 		'retinat_recall',
+		'retinat_search',
 	}
 	assert all(n.startswith('retinat_') for n in names), 'no DOM tools here: that is the browser-use server'
 
@@ -95,3 +96,10 @@ async def test_recall_through_mcp_answers_plainly_when_nothing_is_held(retinat, 
 	assert not result.is_error and 'nothing held' in _text(result), _text(result)
 	bad = await _call(retinat, 'retinat_recall', {'t0': 5, 't1': 1})
 	assert bad.is_error and 't1 must be' in _text(bad)
+
+
+async def test_search_through_mcp_answers_plainly_with_an_empty_archive(retinat, site):
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/')})
+	result = await _call(retinat, 'retinat_search', {'query': 'a green page'})
+	assert not result.is_error, _text(result)
+	assert 'nothing archived' in _text(result), _text(result)

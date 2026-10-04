@@ -88,6 +88,10 @@ class FrameArchive:
 		tmp.write_text(''.join(json.dumps(e) + '\n' for e in self._entries))
 		tmp.replace(self.index_path)
 
+	def entries(self) -> list[dict]:
+		"""The index entries, oldest first (a copy: callers cannot change the archive through it)."""
+		return list(self._entries)
+
 	def window(self, vid: int, t0: float, t1: float) -> list[FrameSample]:
 		"""Archived keyframes of item `vid` with media time in [t0, t1], as samples recall can rank."""
 		return [

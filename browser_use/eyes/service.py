@@ -111,6 +111,7 @@ class Eyes:
 		# Keyframes copied to disk as they are taken, so recall reaches past the page's ring.
 		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
 		self._archiver: asyncio.Task | None = None
+		self._meaning = None  # MeaningIndex over the archive, made on first search
 		self._last_now = 0.0
 		self._items_seen = 0
 		self._pages = None
@@ -406,6 +407,42 @@ class Eyes:
 			+ f'\n~{tokens + 30} tokens (strip {w}x{h} ~{tokens}; estimates)'
 		)
 		return Percept([], text, jpeg, (w, h), tokens, len(text) // 4, frames=got)
+
+	async def search(self, query: str, frames: int = 4, item: int | None = None) -> Percept:
+		"""Frames from anything archived that best match a description in words.
+
+		Uses an open image-text model locally (see `meaning.py`); the vectors live beside the
+		archive, so only the matching frames reach the model. Needs the `eyes` extra and a one-off
+		model download (~300 MB). Scores are cosine similarities: compare them, do not read them
+		as probabilities.
+		"""
+		assert query.strip() and frames >= 1, 'search needs words and at least one frame'
+		head = f'👁 search "{query[:80]}"'
+		if self.archive is None:
+			return Percept([], f'{head}: no archive (Eyes was created with archive=False or no now_path)', None)
+		await self.archive_now(limit=500)
+		if self._meaning is None:
+			from browser_use.eyes.meaning import MeaningIndex
+
+			self._meaning = MeaningIndex(self.archive)
+		index = self._meaning
+		added = await asyncio.to_thread(index.update)
+		hits = await asyncio.to_thread(index.search, query, frames, item)
+		got = [(t, jpeg, score, vid) for score, vid, seq, t in hits if (jpeg := self.archive.read(vid, seq))]
+		if not got:
+			return Percept([], f'{head}: nothing archived yet to search ({len(index)} frames indexed)', None)
+		strip = render_strip([(t, jpeg) for t, jpeg, _, _ in got])
+		assert strip is not None
+		jpeg, w, h = strip
+		tokens = estimate_image_tokens(w, h)
+		listing = ', '.join(f'item {vid} at {sight.fmt_t(t)} ({score:.3f})' for t, _, score, vid in got)
+		text = (
+			f'{head}: best {len(got)} of {len(index)} archived frames'
+			+ (f' ({added} newly indexed)' if added else '')
+			+ f': {listing}\n~{tokens + 30} tokens (strip {w}x{h} ~{tokens}; estimates). '
+			+ 'Use retinat_recall around a time for more frames of that moment.'
+		)
+		return Percept([], text, jpeg, (w, h), tokens, len(text) // 4, frames=[(t, j) for t, j, _, _ in got])
 
 	def _page_watcher(self):
 		from browser_use.eyes.page import PageWatcher

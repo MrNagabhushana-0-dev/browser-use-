@@ -732,3 +732,32 @@ def test_the_archive_stays_under_its_size_cap(tmp_path):
 	assert archive.read(1, 0) is None and archive.read(1, 19) == jpeg, 'oldest go first, newest stay'
 	reopened = FrameArchive(tmp_path / 'frames', max_bytes=60_000)
 	assert len(reopened) == len(archive) and reopened.window(1, 9.0, 9.6)
+
+
+# -- search by meaning: the archive as vectors, queried in words -----------------------------------
+
+
+def _meaning_model_available() -> bool:
+	try:
+		from browser_use.eyes.meaning import Embedder
+
+		Embedder().text('probe')
+		return True
+	except Exception:
+		return False
+
+
+@pytest.mark.skipif(not _meaning_model_available(), reason='the open CLIP model could not be loaded or downloaded here')
+async def test_search_finds_the_moment_by_what_it_looks_like(eyes, session, site):
+	await _open(eyes, session, site.url_for('/calib'))
+	await eyes.watch(seconds=4 * SECTION + 0.5, until='time')
+	await eyes.archive_now(limit=500)
+	for query, (lo, hi) in (
+		('a solid blue image', (2 * SECTION, 3 * SECTION)),
+		('a yellow screen', (3 * SECTION, 4 * SECTION)),
+		('a colorful test pattern', (SECTION, 2 * SECTION)),
+	):
+		found = await eyes.search(query, frames=2)
+		assert found.frames, found.text
+		top_t = found.frames[0][0]
+		assert lo - 0.3 <= top_t <= hi + 0.3, (query, top_t, found.text)
