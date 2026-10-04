@@ -45,6 +45,8 @@ HZCRR_SPEECH = 0.15
 BEAT_CONTEXT_S = 1.0
 # Unlabelled pieces shorter than this are folded into a neighbour.
 SLIVER_S = 1.0
+OFFSET_DROP_DB = 6.0
+OFFSET_COLLAPSE_DB = 25.0  # the hop after an ending is this much quieter: the sound has stopped  # a flux peak this far below the last few hops' loudness is a sound ending, not starting
 ONSET_FLOOR = 0.3
 ONSET_MADS = 4.0
 ONSET_MIN_GAP_S = 0.08
@@ -185,7 +187,19 @@ def onsets(hops: list[AudioHop], hop_s: float) -> list[float]:
 		med = float(np.median(local))
 		mad = float(np.median(np.abs(local - med)))
 		is_peak = flux[i] >= flux[max(0, i - 2) : i + 3].max()
-		flux_onset = is_peak and flux[i] > max(ONSET_FLOOR, med + ONSET_MADS * mad) and rms[i] > -60
+		# Flux is normalised by the frame's magnitude, so a sound *ending* (magnitude collapsing) spikes it too;
+		# only a peak where loudness is not falling well below its recent level is the start of something.
+		before = rms[max(0, i - 3) : i].max()
+		falling = rms[i] < before - OFFSET_DROP_DB
+		# A sound cut off mid-hop smears into a broadband click (high flux) while the hop is still mostly the
+		# sound: it is an ending when the sound was already going at this level and the next hop collapses.
+		ending = (
+			i + 1 < len(hops)
+			and before > SILENCE_DB
+			and rms[i] >= before - OFFSET_DROP_DB
+			and rms[i + 1] < rms[i] - OFFSET_COLLAPSE_DB
+		)
+		flux_onset = is_peak and flux[i] > max(ONSET_FLOOR, med + ONSET_MADS * mad) and rms[i] > -60 and not (falling or ending)
 		energy_onset = rms[i] > SILENCE_DB and rms[i] - rms[max(0, i - 3) : i].min() >= ENERGY_JUMP_DB
 		if (flux_onset or energy_onset) and hops[i].t - last >= ONSET_MIN_GAP_S:
 			found.append(hops[i].t)
