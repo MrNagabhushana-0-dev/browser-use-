@@ -144,3 +144,23 @@ async def test_the_server_hears_a_muted_video_with_no_gesture_even_when_asked_la
 	text = _text(await _call(retinat, 'retinat_watch', {'seconds': 11}))
 	assert 'none captured' not in text, text
 	assert f'{beeps.truth["count"]} onsets' in text, (beeps.truth, text)
+
+
+async def test_after_a_video_page_a_text_page_is_seen_as_a_page_with_its_toast(retinat, site, beeps):
+	# The second page has no video: the first page's item must not linger (it did, so look watched a ghost
+	# and returned no image), and a toast that came and went before the call must still be reported.
+	import asyncio
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/beeps')})
+	await asyncio.sleep(1.5)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/toast')})
+	await asyncio.sleep(2.5)  # the toast shows at 0.6 s for 1.2 s: gone before the first call
+	watched = await _call(retinat, 'retinat_watch', {'seconds': 2, 'until': 'time'})
+	text = _text(watched)
+	assert 'Saved #4242' in text, text
+	assert 'video 360x640' not in text, text
+	assert any(isinstance(b, types.ImageContent) for b in watched.content), 'a page with no video is shown as drawn'
+	looked = await _call(retinat, 'retinat_look', {})
+	assert 'no video playing' in _text(looked), _text(looked)
+	assert any(isinstance(b, types.ImageContent) for b in looked.content)
+	assert 'watching a video' not in _text(await _call(retinat, 'retinat_now', {}))

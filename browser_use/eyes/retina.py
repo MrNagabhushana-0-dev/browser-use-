@@ -103,6 +103,7 @@ class Retina:
 		self.events: deque[RetinaEvent] = deque(maxlen=MAX_EVENTS)
 		self.state: dict[str, Any] = {}
 		self.attended: dict[str, Any] = {}
+		self.page_since = 0.0  # monotonic time the current page's first report arrived
 		self.target_id: str | None = None
 		self._session_id: str | None = None
 		self._cdp: Any = None
@@ -286,7 +287,11 @@ class Retina:
 			kind = e.pop('type', 'unknown')
 			events.append(RetinaEvent(kind, now, e))
 			if kind == 'state':
+				if e.get('url') != self.state.get('url'):
+					self.page_since = now
 				self.state = e
+				if not e.get('vid') and self.attended.get('vid'):
+					self.attended = {'vid': 0}  # the page attends to nothing (a new page, or the video left it)
 			elif kind == 'attend':
 				self.attended = e
 		self.frames.extend(frames)

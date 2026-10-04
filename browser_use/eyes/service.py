@@ -122,6 +122,7 @@ class Eyes:
 		self._last_now = 0.0
 		self._items_seen = 0
 		self._reported: dict[int, float] = {}  # item id -> when a percept last covered it
+		self._last_percept_end = 0.0
 		self._pages = None
 
 	# -- lifecycle -----------------------------------------------------------------------
@@ -157,7 +158,11 @@ class Eyes:
 		walls = [f.wall for f in self.retina.frames if f.vid == vid] + [h.wall for h in self.retina.hops if h.vid == vid]
 		if not walls:
 			return start
-		return min(start, max(min(walls), self._reported.get(vid, 0.0), start - BACKFILL_MAX_S))
+		return min(start, max(min(walls), self._reported.get(vid, 0.0), self.retina.page_since, start - BACKFILL_MAX_S))
+
+	def _text_since(self, start: float) -> float:
+		"""Text that appeared after the last percept, on this page, up to BACKFILL_MAX_S back, is still news."""
+		return min(start, max(self._last_percept_end, self.retina.page_since, start - BACKFILL_MAX_S))
 
 	def _since(self, wall: float) -> tuple[list[FrameSample], list[AudioHop], list[RetinaEvent]]:
 		return (
@@ -260,6 +265,7 @@ class Eyes:
 		start = time.monotonic()
 		start_vid = self.retina.attended.get('vid', 0)
 		since = self._unreported_since(start, start_vid)
+		text_since = self._text_since(start)
 		reason = f'watched {seconds:.0f}s'
 		while True:
 			elapsed = time.monotonic() - start
@@ -281,9 +287,14 @@ class Eyes:
 				break
 		if hold:
 			await self._hold()
-		percept = await self.perceive(since=since, detail=detail, keyframes=keyframes, transcribe=transcribe)
+		percept = await self.perceive(
+			since=since, detail=detail, keyframes=keyframes, transcribe=transcribe, text_since=text_since
+		)
+		if not percept.items and not self.retina.attended.get('vid'):
+			await self._show_page(percept)
 		percept.stop_reason = reason
 		percept.started_at, percept.ended_at = start, time.monotonic()
+		self._last_percept_end = percept.ended_at
 		for item in percept.items:
 			self._reported[item.vid] = percept.ended_at
 		percept.text = percept.text.replace('{REASON}', reason)
@@ -296,8 +307,10 @@ class Eyes:
 		keyframes: int | None = None,
 		transcribe: bool | None = None,
 		header: str | None = None,
+		text_since: float | None = None,
 	) -> Percept:
-		"""Build a percept from everything the retina gathered since `since` (monotonic time)."""
+		"""Build a percept from everything the retina gathered since `since` (monotonic time), and the page text
+		that appeared since `text_since` (default: `since`)."""
 		frames, hops, events = self._since(since)
 		order: list[int] = []
 		for vid in [f.vid for f in frames] + [h.vid for h in hops]:
@@ -352,7 +365,20 @@ class Eyes:
 			)
 		page = self.retina.state.get('url', '')
 		head = header or f'👁 {len(items)} item(s) watched on {page[:120]} · stopped: {{REASON}}'
+		head += _text_lines(self.retina.events, since if text_since is None else text_since, self.retina.page_since)
 		return assemble(items, head, detail)
+
+	async def _show_page(self, percept: Percept) -> None:
+		"""No video in the percept: attach the page as the compositor draws it, so a watch still shows the screen."""
+		jpeg = await self._page_watcher().wait_latest()
+		if not jpeg:
+			return
+		from PIL import Image
+
+		with Image.open(io.BytesIO(jpeg)) as img:
+			size = img.size
+		percept.image, percept.image_size, percept.image_tokens = jpeg, size, estimate_image_tokens(*size)
+		percept.text += f'\n    (no video: the page as drawn now, {size[0]}x{size[1]} ~{percept.image_tokens} tokens)'
 
 	async def look(self, detail: Detail = 'look', seconds: float = 2.0) -> Percept:
 		"""What is on screen now. A playing video is watched briefly; otherwise the page itself is
@@ -365,6 +391,9 @@ class Eyes:
 		jpeg = await self._page_watcher().wait_latest()
 		url = self.retina.state.get('url', '')
 		text = f'👁 no video playing on {url[:120]}; this is the page as drawn now (a compositor frame, not a screenshot call)'
+		now = time.monotonic()
+		text += _text_lines(self.retina.events, self._text_since(now), self.retina.page_since)
+		self._last_percept_end = now
 		if not jpeg:
 			return Percept([], text + '\n    (no frame arrived)', None)
 		from PIL import Image
@@ -807,6 +836,19 @@ class Eyes:
 			tmp.replace(self.now_path)
 		except Exception as e:
 			logger.debug(f'eyes: could not write {self.now_path}: {type(e).__name__}: {e}')
+
+
+def _text_lines(events, since: float, page_since: float, limit: int = 12) -> str:
+	"""Text that appeared on the page (toasts, status lines, captions in the DOM), oldest first."""
+	seen: dict[str, float] = {}
+	for e in events:
+		if e.type == 'text' and e.wall >= since and e.data.get('text'):
+			seen.setdefault(' '.join(str(e.data['text']).split())[:240], e.wall)
+	if not seen:
+		return ''
+	lines = [f'    "{t}" ({w - page_since:.1f}s after the page loaded)' for t, w in list(seen.items())[:limit]]
+	more = f'\n    ... {len(seen) - limit} more' if len(seen) > limit else ''
+	return '\n    text that appeared:\n' + '\n'.join(lines) + more
 
 
 def _moved_on(frames: list[FrameSample]) -> bool:
