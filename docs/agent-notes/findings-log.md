@@ -870,3 +870,63 @@ UNKNOWN). The six bugs that explained it are worth more than the score, because 
 4. `find` and `zoom` in Retinat.
 5. Opt-in desktop eyes.
 6. Replay recording with cursor.
+
+## Round 19 (unattended loop): a canvas is watched like a video, and motion is reported as turning points
+
+**Why this item.** The top "Next" item (the e2e re-run with `retinat_changes`) needs the MCP servers in the
+session, and after the container recycle both timed out at connect (30 s). What was measured:
+- Retinat answers `initialize` in 2.9 s warm, and in 3.9 s with the page cache dropped.
+- No dependency sync ran at boot.
+
+So the likely cause is the VM's restored disk paging in slowly in its first minute, not our startup. That is
+inferred, not measured. The run stays at the top of the list, and this run took item 2 (more eyesbench tasks).
+
+**Research.** Moment-Video (arXiv 2606.02522, 2026) shows video models skipping momentary, "sampling-sensitive"
+events, and its four task types include temporal counting. EC-Bench reports the best of 22 models at 23.7%
+counting accuracy on long videos. VideoWebArena (ICLR 2025) covers video in web agents, but only tutorials.
+None of them tests a page whose information lives in a `<canvas>` animation. That gap is ours.
+
+**Built.**
+1. **The retina falls back to the largest visible canvas** when no video qualifies. It samples the canvas
+   once per animation frame, on a clock that starts at attention, area-averaged to 16x16. The default
+   downscale point-samples, which made a 60 px ball alias and turned 6 bounces into 9. `look` still shows a
+   canvas page as drawn; `watch` follows the canvas over time.
+2. **`motion.py` tracks the moving object.** It follows the centroid of what changed between samples. A
+   median background was tried first and rejected: an object resting most of the time becomes background
+   and leaves a ghost. Gates:
+   - frames that changed more than 15% of the grid (cuts, pans) are skipped;
+   - samples with too little change to place the object are skipped;
+   - the change must be compact (RMS spread at most 3 cells).
+
+   Turns need 0.8 cells of hysteresis. A final stop counts as reaching that extreme. Percepts say e.g.
+   `motion: one moving object; reached the bottom 6 times (at 1.4s, ...); came to rest at the bottom`.
+3. **eyesbench gained a `bounce` task**: N in 3-7 floor hits at seeded moments, on a canvas, with nothing in
+   the DOM. Its retina mode now opens the eyes before the page loads. Opening after the load lost the first
+   descent on the first task of a session, which was the cause of one miscount.
+
+**Measured (10 seeds, headless):** retina 10/10 at ~417 tokens. Snapshots 0/10 (a canvas is not in the tree).
+The screenshot loop's 0/10 is a scoring rule, not a model run: no single frame holds a count. Round 18's e2e
+is the model-driven evidence for the screenshot loop.
+
+The two bugs found on the way were each traced before fixing:
+- a 1-in-3 miscount: the eyes opened after the page loaded;
+- a spurious "top" during rest: near-still samples whose centroid is noise.
+
+The new negative test caught a false positive: the calibration video's cuts read as motion until cut frames
+were excluded. The eyes file A/B (baseline vs these changes, 3 runs each) was green 6/6. The known
+"click-train heard as sound" flake hit once in 4 runs of the new code, in line with its known rate.
+
+**Not measured.**
+- WebGL canvases without `preserveDrawingBuffer` may read blank between frames. Untested.
+- Times are relative to when the retina attended, about 0.2 s after the page's first frame.
+- Two moving objects get no motion line (by design) rather than two tracks.
+- Static twins (the same information shown statically, as a control) are still not built.
+
+**Next, in order:**
+1. The e2e re-run with `retinat_changes`, 5+ seeds, and a "watch late" variant, in a session where the MCP
+   servers connect.
+2. More eyesbench tasks: carousel, live chart peak, spoken instruction, WebGL letter, plus static twins.
+3. Media-borne prompt-injection tests.
+4. `find` and `zoom` in Retinat.
+5. Opt-in desktop eyes.
+6. Replay recording with cursor.
