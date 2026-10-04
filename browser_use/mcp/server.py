@@ -895,7 +895,16 @@ class BrowserUseServer:
 
 		# Create browser session
 		self.browser_session = BrowserSession(browser_profile=profile)
-		await self.browser_session.start()
+		try:
+			await self.browser_session.start()
+		except BaseException:
+			# keep no half-started session: every later call would fail on it instead of retrying the launch
+			session, self.browser_session = self.browser_session, None
+			try:
+				await session.kill()
+			except Exception:
+				pass
+			raise
 
 		# Track the session for management
 		self._track_session(self.browser_session)

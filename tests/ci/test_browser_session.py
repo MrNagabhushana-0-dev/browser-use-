@@ -41,3 +41,19 @@ async def test_ws_drop_during_reconnect_triggers_follow_up_attempt(monkeypatch) 
 	await session._reconnect_task
 	assert reconnect_attempts == 2
 	await session.event_bus.stop(clear=True, timeout=5)
+
+
+async def test_a_profile_held_by_a_live_chrome_launches_on_a_temporary_profile_instead_of_dying(tmp_path) -> None:
+	# Two MCP servers on one machine default to the same profile. Chrome's singleton lock makes the second
+	# launch hand its URL to the first and exit, which surfaced as "exited before CDP became available".
+	first = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=tmp_path / 'shared', keep_alive=True))
+	second = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=tmp_path / 'shared', keep_alive=True))
+	try:
+		await first.start()
+		await second.start()
+		assert second.cdp_url and second.cdp_url != first.cdp_url
+		await second.navigate_to('about:blank')
+		await first.navigate_to('about:blank')
+	finally:
+		await second.kill()
+		await first.kill()

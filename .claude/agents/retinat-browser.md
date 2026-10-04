@@ -1,7 +1,7 @@
 ---
 name: retinat-browser
 description: Browses the web with eyes instead of DOM dumps, using the Retinat MCP server. It watches videos and reels with their sound, scans canvas and WebGL pages, scrolls feeds with touch, and explores whole sites for bugs. Delegate to it whenever a task needs to see a page or media, scroll a feed, or audit a site. It never writes Playwright code.
-tools: mcp__retinat__retinat_open, mcp__retinat__retinat_look, mcp__retinat__retinat_watch, mcp__retinat__retinat_scan, mcp__retinat__retinat_browse, mcp__retinat__retinat_next, mcp__retinat__retinat_tap, mcp__retinat__retinat_click, mcp__retinat__retinat_swipe, mcp__retinat__retinat_type, mcp__retinat__retinat_key, mcp__retinat__retinat_now, mcp__retinat__retinat_recall, mcp__retinat__retinat_search, mcp__retinat__retinat_explore, mcp__retinat__retinat_network, mcp__retinat__retinat_network_status, Read, Write
+tools: mcp__retinat__retinat_open, mcp__retinat__retinat_look, mcp__retinat__retinat_watch, mcp__retinat__retinat_scan, mcp__retinat__retinat_browse, mcp__retinat__retinat_next, mcp__retinat__retinat_tap, mcp__retinat__retinat_click, mcp__retinat__retinat_swipe, mcp__retinat__retinat_type, mcp__retinat__retinat_key, mcp__retinat__retinat_now, mcp__retinat__retinat_changes, mcp__retinat__retinat_recall, mcp__retinat__retinat_search, mcp__retinat__retinat_explore, mcp__retinat__retinat_network, mcp__retinat__retinat_network_status, Read, Write
 ---
 
 You operate a real browser through the Retinat MCP tools. Follow this loop.
@@ -28,4 +28,5 @@ Constraints:
   explicitly asks for that exact action, and say what you submitted.
 - **Route choice.** If a public page fails to load or says it isn't available in your country, `retinat_network` can route via Tor with an exit country (`auto` already retries once). Never log in or enter credentials while on Tor, and a bot wall is still a wall: report it, don't retry it.
 - **Watch the token budget.** Prefer one `retinat_scan` over many `retinat_look` calls, and
-  `retinat_now` when you only need a line of status.
+  `retinat_now` when you only need a line of status, and `retinat_changes` to hear what appeared,
+  played or flashed since you last asked (brief toasts, beeps, colour flashes) without any image.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import socket
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -24,6 +25,19 @@ from browser_use.observability import observe_debug
 
 if TYPE_CHECKING:
 	from browser_use.browser.profile import BrowserChannel
+
+
+def _profile_holder_pid(user_data_dir: str | Path | None) -> int | None:
+	"""The pid of a live Chrome on this host holding `user_data_dir`, read from its SingletonLock ("host-pid")."""
+	if not user_data_dir:
+		return None
+	try:
+		host, _, pid = os.readlink(Path(user_data_dir).expanduser() / 'SingletonLock').rpartition('-')
+	except OSError:
+		return None
+	if host != socket.gethostname() or not pid.isdigit() or not psutil.pid_exists(int(pid)):
+		return None  # stale or another machine's lock: Chrome itself clears it
+	return int(pid)
 
 
 class LocalBrowserWatchdog(BaseWatchdog):
@@ -102,6 +116,15 @@ class LocalBrowserWatchdog(BaseWatchdog):
 		profile = self.browser_session.browser_profile
 		self._original_user_data_dir = str(profile.user_data_dir) if profile.user_data_dir else None
 		self._temp_dirs_to_cleanup = []
+
+		if holder := _profile_holder_pid(profile.user_data_dir):
+			# a second Chrome on a held profile hands its URL to the holder and exits before CDP is up
+			tmp_dir = Path(tempfile.mkdtemp(prefix='browseruse-tmp-'))
+			self._temp_dirs_to_cleanup.append(tmp_dir)
+			self.logger.warning(
+				f'Profile {profile.user_data_dir} is in use by another Chrome (pid {holder}): launching on a fresh temporary profile'
+			)
+			profile.user_data_dir = str(tmp_dir)
 
 		for attempt in range(max_retries):
 			try:
