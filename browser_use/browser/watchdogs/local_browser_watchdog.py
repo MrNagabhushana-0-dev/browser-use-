@@ -20,6 +20,7 @@ from browser_use.browser.events import (
 	BrowserLaunchResult,
 	BrowserStopEvent,
 )
+from browser_use.browser.profile import _no_display_server
 from browser_use.browser.watchdog_base import BaseWatchdog
 from browser_use.observability import observe_debug
 
@@ -116,6 +117,12 @@ class LocalBrowserWatchdog(BaseWatchdog):
 		profile = self.browser_session.browser_profile
 		self._original_user_data_dir = str(profile.user_data_dir) if profile.user_data_dir else None
 		self._temp_dirs_to_cleanup = []
+
+		if not profile.headless and _no_display_server():
+			# headful Chrome with no X/Wayland server exits before CDP is up, with an error that never says why
+			self.logger.warning('headless=False but no display server ($DISPLAY / $WAYLAND_DISPLAY) is set: launching headless')
+			profile.headless = True
+			profile.detect_display_configuration()  # re-derive the viewport for headless
 
 		if holder := _profile_holder_pid(profile.user_data_dir):
 			# a second Chrome on a held profile hands its URL to the holder and exits before CDP is up

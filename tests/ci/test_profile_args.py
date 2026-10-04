@@ -44,9 +44,7 @@ async def test_a_headful_request_with_no_display_falls_back_to_headless_and_laun
 	monkeypatch.delenv('DISPLAY', raising=False)
 	monkeypatch.delenv('WAYLAND_DISPLAY', raising=False)
 	profile = BrowserProfile(headless=False, user_data_dir=tmp_path, enable_default_extensions=False)
-	profile.detect_display_configuration()
-	assert profile.headless is True
-	assert '--headless=new' in profile.get_args()
+	assert profile.headless is False, 'an explicit choice stays on the profile; only the launch falls back'
 
 	session = BrowserSession(
 		browser_profile=BrowserProfile(headless=False, user_data_dir=tmp_path / 'p', enable_default_extensions=False)

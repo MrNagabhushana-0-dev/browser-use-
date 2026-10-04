@@ -1405,10 +1405,6 @@ async function initialize(checkInitialized, magic) {{
 		# if no headless preference specified, prefer headful if there is a display available
 		if self.headless is None:
 			self.headless = not has_screen_available
-		elif not self.headless and not self.cdp_url and _no_display_server():
-			# headful Chrome with no X/Wayland server exits before CDP is up, with an error that never says why
-			logger.warning('headless=False but no display server ($DISPLAY / $WAYLAND_DISPLAY) is set: running headless')
-			self.headless = True
 
 		# Determine viewport behavior based on mode and user preferences
 		user_provided_viewport = self.viewport is not None
