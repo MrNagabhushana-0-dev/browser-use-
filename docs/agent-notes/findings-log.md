@@ -846,6 +846,15 @@ UNKNOWN). The six bugs that explained it are worth more than the score, because 
    Fixed: headless fallback, a temporary profile when the lock is held by a live Chrome, and the half-started
    session is dropped.
 
+**CI.** Full `tests/ci` on `90e2419`: 1,565 passed, 30 skipped, 0 failed (19m28s). The run before it, on
+`8cc0a2f`, had 4 failures:
+- Two were mine: the headless fallback sat in profile construction and overrode an explicit `headless=False`.
+  Moved to launch time.
+- One was the profile-lock fallback doing its job: a test launches on the default profile while the Retinat
+  server's Chrome held it. It passes with the profile free, and before this round that launch died outright.
+- One (`test_action_calling_action_with_kwargs`) passed 3 of 3 file reruns and then in the full run. Its error was
+  lost because I kept only the log tail, so it is unexplained, not "a flake".
+
 **Not measured.**
 - Three seeds per cell is small: one more caught toast would move screenshots to 2/3.
 - Seeds 21 and 22 drew the same colour and count (different times and IDs).
