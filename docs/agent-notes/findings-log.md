@@ -782,3 +782,82 @@ spoken instruction, WebGL face letter, each with a static twin; (2) an end-to-en
 MCP tools; (3) media-borne prompt-injection tests (the new text observer is also a channel: page text it reports
 is untrusted and must be labelled so); (4) `find` and `zoom` in Retinat; (5) opt-in desktop eyes; (6) replay
 recording with cursor.
+
+## Round 18: the end-to-end blind run, with a model in the loop (and six bugs it found)
+
+**Method.** Every run gave a fresh Claude Code sub-agent a URL and a question, never the answer. All three
+conditions used the same agent type, so the fixed prompt overhead is identical. Each agent was restricted by
+instruction to one way of seeing:
+- **retina**: Retinat open/look/watch/now/recall.
+- **screenshots**: browser-use navigate + screenshot.
+- **dom**: navigate + `browser_get_state` with no screenshot.
+
+The setup:
+- Tasks are eyesbench flash, beeps and toast; seeds 21-23 were never used in development.
+- Each run had its own random URL, and the truth was held only by the scorer.
+- The toast ID is decoded at show time, so it is not in the page source.
+- The scoring rules were fixed before the runs (colour names by RGB primary, exact count, exact ID).
+- Audit: the host logged every request's User-Agent, and every request came from Chrome. No agent read the source
+  another way.
+
+Harness and raw data are in `docs/agent-notes/e2e/`. `retinat_changes` was not reachable from this session (the
+client cached the tool list of the server process it first connected to), so the retina agents went without
+it. That is a client cache, not a server fault.
+
+**Results (final code, 27 runs):**
+
+| Task (3 seeds each) | Retina | Screenshots | DOM state |
+|---|---|---|---|
+| Colour flash, 0.4 s | **3/3** | 0/3 | 0/3 |
+| Beeps, muted video | **3/3** | 0/3 | 0/3 |
+| Toast, 1.5 s | **3/3** | 1/3 | 0/3 |
+| Mean subagent tokens per run | **~56k** | ~78k | ~60k |
+| Mean wall time per run | 31 s | 29 s | 26 s |
+
+The retina agents mostly needed two calls (open, watch). Screenshot agents took 2-11 shots, DOM agents 10-17
+state reads. The screenshot agent that caught a toast took 2 shots: timing, not method. Most of every run is the sub-agent's fixed overhead: a two-call retina run costs ~55k in all, which bounds it.
+On average, screenshot runs cost ~22k more than retina runs, and DOM runs ~4k more. The DOM loop is cheap only
+because it carries nothing about video or sound.
+
+**Before the fixes, the same harness scored the retina 1/3 on seed 21** (flash right, beeps and toast
+UNKNOWN). The six bugs that explained it are worth more than the score, because CI hid every one:
+1. Retina was deaf over MCP. Every eyes test passed `--autoplay-policy=no-user-gesture-required` and the MCP
+   servers did not. Without a gesture, which an agent never makes, the AudioContext stays suspended, so every
+   video was silent and the percept blamed "no audio track". Fixed: the servers launch with the switch, and a
+   test goes through the server's own profile.
+2. The caller's latency was a blind gap. `watch` covered only time after the call, so a beep at 1.6 s, before
+   the model's first call, was lost. Fixed: a watch picks up where the last percept of the item ended, or where
+   the item began, up to 30 s back.
+3. `until=bored` stopped on a still picture while beeps were still due. Fixed: discrete sounds in the last 4 s
+   keep the watch going. Sparse sounds are now listed with their times (`distinct sounds: 4, at 1.6s, 5.5s,
+   6.4s, 8.6s`, exact to truth).
+4. A new page kept the last page's video. On the toast page, `watch` reported the previous video, `look`
+   watched that ghost and returned no image, and `now` said "watching a video". Fixed: the page's own state
+   heartbeat is authoritative, and page boundaries bound all backfill.
+5. Page text was in no percept. The observer caught the toast, but only the journal and `retinat_changes`
+   read it. Fixed: `watch` and `look` list "text that appeared" since the last percept on this page, and a
+   watch with no video shows the page as drawn.
+6. Launch fragility, all three ways the MCP servers broke in this container:
+   - headful with no display died before CDP;
+   - two servers on one machine shared the default profile, so the second Chrome handed off to the first and
+     exited;
+   - after a failed launch, the server kept the dead session and failed forever.
+
+   Fixed: headless fallback, a temporary profile when the lock is held by a live Chrome, and the half-started
+   session is dropped.
+
+**Not measured.**
+- Three seeds per cell is small: one more caught toast would move screenshots to 2/3.
+- Seeds 21 and 22 drew the same colour and count (different times and IDs).
+- One model family in the loop; no Codex, Copilot or Antigravity agents were reachable from here.
+- Real sites were not tested.
+
+**Next, in order:**
+1. Re-run with `retinat_changes` available, with five or more seeds, and with a "watch late" variant: open,
+   do something else for 20 s, then ask.
+2. More eyesbench tasks (canvas bounce, carousel, live chart, spoken instruction, WebGL letter), each with a
+   static twin.
+3. Media-borne prompt-injection tests: reported page text is untrusted and must be labelled so.
+4. `find` and `zoom` in Retinat.
+5. Opt-in desktop eyes.
+6. Replay recording with cursor.
