@@ -48,13 +48,17 @@ def reading(path: Path | None = None, now: float | None = None) -> str | None:
 	return f'{data["line"]} ({age:.0f}s ago, browser-use eyes)'
 
 
-def new_entries(path: Path | None = None, limit: int = MAX_ENTRIES) -> list[str]:
-	"""Journal entries not reported before (marks them reported), newest `limit`, as lines."""
+def new_entries(path: Path | None = None, limit: int = MAX_ENTRIES, reader: str = 'hook') -> list[str]:
+	"""Journal entries `reader` has not been shown (marks them shown), newest `limit`, as lines.
+
+	Each reader keeps its own place, so the hook and an MCP tool do not take entries from each other.
+	"""
 	if path is None:
 		from browser_use.eyes.service import default_now_path
 
 		path = default_now_path()
-	journal, offset = path.with_name('journal.jsonl'), path.with_name('journal.offset')
+	journal = path.with_name('journal.jsonl')
+	offset = path.with_name('journal.offset' if reader == 'hook' else f'journal.{reader}.offset')
 	try:
 		lines = journal.read_text().splitlines()
 	except Exception:

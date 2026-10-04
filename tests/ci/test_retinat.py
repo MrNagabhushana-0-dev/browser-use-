@@ -7,6 +7,11 @@ from pytest_httpserver import HTTPServer
 from browser_use.retinat import RetinatServer
 
 PAGE = '<!doctype html><title>Hello</title><body style="background:#0b7a3b"><h1>Hello from a page</h1><input id="q"></body>'
+TOAST = (
+	'<!doctype html><title>Toast</title><body><h1>Settings</h1><script>setTimeout(() => {'
+	"const t = document.createElement('div'); t.textContent = 'Saved #4242'; document.body.appendChild(t);"
+	'setTimeout(() => t.remove(), 1200) }, 600)</script></body>'
+)
 WALL = '<!doctype html><title>Just a moment...</title><body>Checking your browser before accessing the site.</body>'
 
 
@@ -16,6 +21,7 @@ def site():
 	server.start()
 	server.expect_request('/').respond_with_data(PAGE, content_type='text/html')
 	server.expect_request('/wall').respond_with_data(WALL, content_type='text/html')
+	server.expect_request('/toast').respond_with_data(TOAST, content_type='text/html')
 	yield server
 	server.stop()
 
@@ -59,6 +65,7 @@ async def test_it_is_its_own_server_with_only_vision_first_tools():
 		'retinat_explore',
 		'retinat_recall',
 		'retinat_search',
+		'retinat_changes',
 	}
 	assert all(n.startswith('retinat_') for n in names), 'no DOM tools here: that is the browser-use server'
 
@@ -103,3 +110,14 @@ async def test_search_through_mcp_answers_plainly_with_an_empty_archive(retinat,
 	result = await _call(retinat, 'retinat_search', {'query': 'a green page'})
 	assert not result.is_error, _text(result)
 	assert 'nothing archived' in _text(result), _text(result)
+
+
+async def test_changes_reports_text_that_appeared_once_then_nothing(retinat, site):
+	import asyncio
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/toast')})
+	await asyncio.sleep(3.0)  # the toast comes and goes before we ask
+	first = _text(await _call(retinat, 'retinat_changes', {}))
+	assert 'Saved #4242' in first, first
+	second = _text(await _call(retinat, 'retinat_changes', {}))
+	assert 'Saved #4242' not in second, second

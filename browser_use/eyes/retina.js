@@ -451,24 +451,30 @@ registerProcessor('retina-ear', RetinaEar);
 		lastText.set(text, now);
 		R.events.push({ type: 'text', wt: now, text, vid: R.attendedId });
 	};
+	let textReady = false; // false while the page is still being parsed: its own content has not "appeared"
 	const watchText = () => {
-		if (textObserver || !document.body) return;
+		if (textObserver) return;
+		// Observe the document node itself: it exists from the first instant, before <html> and <body> (the retina
+		// autostarts at document start), so text added right after load is not missed. Ignore everything until
+		// the initial parse is done: the page's own content has not "appeared".
+		textReady = document.readyState !== 'loading';
+		if (!textReady) document.addEventListener('DOMContentLoaded', () => (textReady = true), { once: true });
 		textObserver = new MutationObserver((mutations) => {
+			if (!textReady) return;
 			const touched = new Set();
 			for (const m of mutations) {
 				if (m.type === 'characterData') touched.add(m.target.parentElement);
 				for (const n of m.addedNodes) touched.add(n.nodeType === 1 ? n : n.parentElement);
 			}
-			// Styles and layout settle after the mutation; read them on the next frame.
-			requestAnimationFrame(() => touched.forEach(reportText));
+			// Read styles just after the mutation settles. Not requestAnimationFrame: it never fires in a hidden or
+			// background tab, which is exactly where an agent's page often is.
+			setTimeout(() => touched.forEach(reportText), 0);
 		});
-		textObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+		textObserver.observe(document, { childList: true, subtree: true, characterData: true });
 	};
 
-	// -- plumbing ------------------------------------------------------------------------
-
 	const heartbeat = () => {
-		watchText(); // the body may not have existed when the retina started
+		watchText(); // in case the document element did not exist when the retina started
 		const v = R.attended;
 		if (R.ctx && R.ctx.state === 'suspended') R.ctx.resume().catch(() => {});
 		if (v && opts.audio && (R.audioMode === 'no-track' || R.audioMode.startsWith('error'))) startHearing(v);
