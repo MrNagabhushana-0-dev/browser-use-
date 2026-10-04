@@ -753,3 +753,32 @@ auto-advancing carousel, live chart peak, timed click, progress-bar stop, spoken
 letter), each with a static twin, plus an accessibility-snapshot mode; (2) an end-to-end run with a model driving
 the MCP tools vs a screenshot loop, counting real tokens; (3) media-borne prompt-injection tests; (4) `find` and
 `zoom` in Retinat; (5) opt-in desktop eyes; (6) replay recording with cursor.
+
+## Round 17 (unattended loop): transient text, an accessibility-snapshot mode, and a toast task
+
+**Built.** (1) The retina now watches for text that *appears* on the page (toasts, banners, alerts, a value
+changing) with a MutationObserver in its isolated world (pages cannot see it), with flood control (at most 8
+reports a second, repeats within a second dropped). Python journals them from every batch as
+`text appeared: "..."`, so the hook delivers them on the next turn. (2) eyesbench gained an
+accessibility-snapshot mode (Playwright-MCP style, serialised compactly as `role "name"` lines so its cost is
+not inflated), a `period` for the loop modes, and a toast task (an order ID shown for 1.5 s at a seeded moment).
+
+**Measured (headless Chromium, this VM):**
+
+| Task | Screenshots 1.5 s | Snapshots 1.5 s | Retina |
+|---|---|---|---|
+| Colour flash 0.4 s (10 seeds, Round 16) | 2/10, ~11,960 tok | n/a (not in the tree) | 10/10, ~235 tok |
+| Beeps, muted (10 seeds, Round 16) | 0/10, ~9,568 tok | 0 (no sound) | 10/10, ~210 tok |
+| Toast 1.5 s (3 seeds) | 3/3, ~8,372 tok | 3/3, ~362 tok | 3/3, ~20 tok |
+| Toast 1.5 s at a 5 s step (8 seeds) | 3/8, ~2,392 tok | 2/8, ~103 tok | (independent of step time) |
+
+Honest reading: on a toast, fast loops catch it and the difference is cost (screenshots ~400x the retina's
+journal line, snapshots ~18x); at the 5-15 s steps real agents take, they mostly miss it. Snapshots are cheap on
+the video tasks only because they contain nothing about the video. Still a necessary-condition benchmark, not
+an end-to-end agent score. CI: test_eyesbench (3 tasks x 3 modes, 1 seed) passes; eyes + Retinat 38/38.
+
+**Next, in order:** (1) more eyesbench tasks: canvas bounce count, auto-advancing carousel, live chart peak,
+spoken instruction, WebGL face letter, each with a static twin; (2) an end-to-end run with a model driving the
+MCP tools; (3) media-borne prompt-injection tests (the new text observer is also a channel: page text it reports
+is untrusted and must be labelled so); (4) `find` and `zoom` in Retinat; (5) opt-in desktop eyes; (6) replay
+recording with cursor.

@@ -109,6 +109,7 @@ class Eyes:
 		# What changed, kept on disk between the model's turns (only changes, not every tick).
 		self.journal_path = self.now_path.with_name('journal.jsonl') if self.now_path is not None else None
 		self._journaled: dict[str, Any] = {}
+		self._pending_text: list[str] = []  # text that appeared since the last journal write
 		# Keyframes copied to disk as they are taken, so recall reaches past the page's ring.
 		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
 		self._archiver: asyncio.Task | None = None
@@ -754,6 +755,8 @@ class Eyes:
 			if 'paused' in last and f.get('paused') != last.get('paused'):
 				entries.append(('state', 'paused' if f.get('paused') else 'playing again'))
 		self._journaled = {**last, **{k: f.get(k) for k in ('url', 'vid', 'sound', 'paused')}}
+		texts, self._pending_text = self._pending_text, []
+		entries += [('text', f'text appeared: "{t[:160]}"') for t in texts]
 		if not entries:
 			return
 		at = time.time()
@@ -766,6 +769,8 @@ class Eyes:
 			self.journal_path.write_text('\n'.join(kept[len(kept) // 2 :]) + '\n')
 
 	def _update_now(self, frames: list[FrameSample], hops: list[AudioHop], events: list[RetinaEvent]) -> None:
+		# Text events are kept from every batch: the journal writes about once a second and must not drop them.
+		self._pending_text += [str(e.data.get('text', '')) for e in events if e.type == 'text' and e.data.get('text')]
 		now = time.monotonic()
 		if self.now_path is None or now - self._last_now < 1.0:
 			return

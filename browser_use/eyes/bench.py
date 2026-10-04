@@ -43,9 +43,14 @@ class Task:
 	seconds: float  # how long a perceiver gets
 	media: bytes = field(repr=False)
 	truth: dict[str, Any] = field(default_factory=dict)
+	html: str | None = field(default=None, repr=False)  # a page of its own (no media), else a video player
 
 	def page(self, src: str) -> str:
-		return PAGE.format(title=self.name, src=src)
+		return self.html if self.html is not None else PAGE.format(title=self.name, src=src)
+
+	@property
+	def answer(self) -> Any:
+		return self.truth[{'flash': 'colour', 'beeps': 'count', 'toast': 'id'}[self.name]]
 
 
 def _ffmpeg() -> str:
@@ -118,6 +123,25 @@ def media_response(request, data: bytes, content_type: str = 'video/webm'):
 	return Response(data[start : end + 1], status=206, headers=headers)
 
 
+TOAST_RGB = (255, 122, 0)
+TOAST_PAGE = """<!doctype html><title>orders</title><body style="margin:0;font:16px sans-serif;background:#f4f4f4">
+<main style="padding:40px"><h1>Your orders</h1><p>Recent activity appears here.</p></main>
+<script>setTimeout(() => {{ const t = document.createElement('div');
+t.setAttribute('role', 'status'); t.textContent = 'Order #{id} confirmed';
+t.style.cssText = 'position:fixed;left:50%;bottom:60px;transform:translateX(-50%);background:#ff7a00;color:#000;'
+  + 'padding:28px 48px;font:bold 28px sans-serif;border-radius:12px';
+document.body.appendChild(t); setTimeout(() => t.remove(), {dur_ms}); }}, {at_ms});</script></body>"""
+
+
+def toast_task(seed: int, work: Path) -> Task:
+	"""A page that shows an order-ID toast for 1.5 s at a seeded moment, then removes it."""
+	rng = random.Random(seed)
+	order_id = rng.randint(10000, 99999)
+	at = round(rng.uniform(2.0, 8.0), 2)
+	html = TOAST_PAGE.format(id=order_id, at_ms=int(at * 1000), dur_ms=1500)
+	return Task('toast', seed, 'What order ID was confirmed?', 10.0, b'', {'id': order_id, 'at': at}, html=html)
+
+
 def _mean_rgb(jpeg: bytes) -> tuple[int, int, int]:
 	from PIL import Image
 
@@ -154,7 +178,8 @@ async def screenshot_loop(session, seconds: float, period: float = 1.5) -> tuple
 	clip = {'x': 0, 'y': 0, 'width': vw, 'height': vh, 'scale': scale}
 	while loop.time() < end:
 		r = await cdp.cdp_client.send.Page.captureScreenshot(
-			params={'format': 'jpeg', 'quality': 70, 'clip': clip}, session_id=cdp.session_id  # type: ignore[typeddict-item]
+			params={'format': 'jpeg', 'quality': 70, 'clip': clip},
+			session_id=cdp.session_id,  # type: ignore[typeddict-item]
 		)
 		jpeg = base64.b64decode(r['data'])
 		shots.append(jpeg)
@@ -166,10 +191,55 @@ async def screenshot_loop(session, seconds: float, period: float = 1.5) -> tuple
 	return shots, tokens
 
 
+async def snapshot_loop(session, seconds: float, period: float = 1.5) -> tuple[list[str], int]:
+	"""Accessibility snapshots every `period` s, as Playwright-MCP-style agents read a page, and their tokens.
+
+	Serialised compactly (one `role "name"` line per named node, like Playwright's snapshot), so the cost is
+	not inflated by raw JSON.
+	"""
+	cdp = await session.get_or_create_cdp_session(focus=False)
+	snaps: list[str] = []
+	loop = asyncio.get_event_loop()
+	end = loop.time() + seconds
+	while loop.time() < end:
+		tree = await cdp.cdp_client.send.Accessibility.getFullAXTree(session_id=cdp.session_id)
+		lines = []
+		for node in tree.get('nodes', []):
+			if node.get('ignored'):
+				continue
+			name = str((node.get('name') or {}).get('value') or '').strip()
+			role = str((node.get('role') or {}).get('value') or '')
+			if name:
+				lines.append(f'- {role} "{name}"')
+		snaps.append('\n'.join(lines))
+		await asyncio.sleep(period)
+	return snaps, sum(len(x) for x in snaps) // 4
+
+
+def _shows_toast(jpeg: bytes) -> bool:
+	from PIL import Image
+
+	with Image.open(io.BytesIO(jpeg)) as img:
+		small = img.convert('RGB').resize((160, 90))
+		hits = sum(1 for r, g, b in small.getdata() if abs(r - 255) < 40 and abs(g - 122) < 40 and b < 60)  # type: ignore[misc]
+	return hits >= 40  # the toast is ~3% of the screen; a stray orange pixel is not it
+
+
+def score_snapshots(task: Task, snaps: list[str]) -> dict[str, Any]:
+	if task.name == 'toast':
+		seen = any(str(task.truth['id']) in s for s in snaps)
+		return {'captured': seen, 'sent': seen, 'answer': task.truth['id'] if seen else None}
+	# A video's pixels and sound are not in the accessibility tree.
+	return {'captured': False, 'sent': False, 'answer': None}
+
+
 def score_screenshots(task: Task, shots: list[bytes]) -> dict[str, Any]:
 	if task.name == 'flash':
 		seen = any(_shows_colour(s, task.truth['colour'], centre_only=True) for s in shots)
 		return {'captured': seen, 'sent': seen, 'answer': task.truth['colour'] if seen else None}
+	if task.name == 'toast':  # if a shot caught the toast, assume the model can read its large text
+		seen = any(_shows_toast(s) for s in shots)
+		return {'captured': seen, 'sent': seen, 'answer': task.truth['id'] if seen else None}
 	# Screenshots carry no sound.
 	return {'captured': False, 'sent': False, 'answer': None}
 
@@ -192,35 +262,84 @@ def score_retina(task: Task, percept) -> dict[str, Any]:
 	return {'captured': count == task.truth['count'], 'sent': f'{count} onsets' in percept.text, 'answer': count}
 
 
-async def run(session, eyes, base_url: str, serve, seeds: tuple[int, ...] = (1, 2, 3), work: Path | None = None) -> list[dict]:
-	"""Run every task for each seed in both modes. `serve(path, page_html, media_path, media_bytes)` hosts a task."""
+MODES = ('screenshots', 'snapshots', 'retina')
+
+
+async def _retina_toast(session, task: Task, work: Path) -> tuple[dict[str, Any], int]:
+	"""Retina on a page with no media: what the journal (delivered by the hook each turn) says appeared."""
+	import json
+
+	from browser_use.eyes import Eyes
+
+	now_path = work / f'toast-{task.seed}' / 'now.json'
+	eyes = Eyes(session, speech=False, now_path=now_path, archive=False)
+	await eyes.open()
+	try:
+		await asyncio.sleep(task.seconds)
+		await eyes.retina.wait_for_data(1.5)
+		captured = any(str(task.truth['id']) in str(e.data.get('text', '')) for e in eyes.retina.events if e.type == 'text')
+	finally:
+		await eyes.close()
+	journal = eyes.journal_path.read_text() if eyes.journal_path and eyes.journal_path.exists() else ''
+	texts = [json.loads(line).get('text', '') for line in journal.splitlines()]
+	sent = any(str(task.truth['id']) in t for t in texts)
+	return {'captured': captured, 'sent': sent, 'answer': task.truth['id'] if sent else None}, sum(len(t) for t in texts) // 4
+
+
+async def run(
+	session,
+	eyes,
+	base_url: str,
+	serve,
+	seeds: tuple[int, ...] = (1, 2, 3),
+	work: Path | None = None,
+	tasks: tuple = (),
+	modes: tuple[str, ...] = MODES,
+	period: float = 1.5,
+) -> list[dict]:
+	"""Run every task for each seed in each mode. `serve(path, page_html, media_path, media_bytes)` hosts a task.
+
+	`period` is the loop modes' step: 1.5 s is a fast agent; measured real agents take 5-15 s a step.
+	"""
 	import tempfile
 
 	work = work or Path(tempfile.mkdtemp(prefix='eyesbench_'))
 	rows: list[dict] = []
 	for seed in seeds:
-		for make in (flash_task, beeps_task):
+		for make in tasks or (flash_task, beeps_task, toast_task):
 			task = make(seed, work)
 			media_path = f'/{task.name}-{seed}.webm'
-			for mode in ('screenshots', 'retina'):
+			for mode in modes:
 				page_path = f'/{task.name}-{seed}-{mode}'
 				serve(page_path, task.page(media_path), media_path, task.media)
 				await session.navigate_to(base_url + page_path)
 				if mode == 'screenshots':
 					await asyncio.sleep(0.5)
-					shots, tokens = await screenshot_loop(session, task.seconds)
-					score = score_screenshots(task, shots)
-					observations = len(shots)
+					shots, tokens = await screenshot_loop(session, task.seconds, period)
+					score, observations = score_screenshots(task, shots), len(shots)
+				elif mode == 'snapshots':
+					await asyncio.sleep(0.5)
+					snaps, tokens = await snapshot_loop(session, task.seconds, period)
+					score, observations = score_snapshots(task, snaps), len(snaps)
+				elif task.name == 'toast':
+					score, tokens = await _retina_toast(session, task, work)
+					observations = 1
 				else:
 					await eyes.open()
 					percept = await eyes.watch(seconds=task.seconds, until='time')
 					score = score_retina(task, percept)
 					tokens, observations = percept.tokens, 1
-				correct = score['answer'] == (task.truth.get('colour') if task.name == 'flash' else task.truth['count'])
 				rows.append(
-					{'task': task.name, 'seed': seed, 'mode': mode, 'observations': observations, 'tokens': tokens}
+					{
+						'task': task.name,
+						'seed': seed,
+						'mode': mode,
+						'period': period,
+						'observations': observations,
+						'tokens': tokens,
+					}
 					| score
-					| {'correct': bool(correct)}
+					| {'correct': score['answer'] == task.answer}
 				)
 	return rows
 

@@ -429,9 +429,46 @@ registerProcessor('retina-ear', RetinaEar);
 		}
 	};
 
+	// -- transient text ------------------------------------------------------------------
+	// Words that appear on the page: toasts, banners, alerts, a live value changing. A screenshot or
+	// a DOM snapshot only sees them if it happens to be taken while they are up; this sees them arrive.
+	let textObserver = null;
+	let textBudget = { second: 0, n: 0 };
+	const lastText = new Map(); // text -> last time reported, to skip repeats within a second
+	const reportText = (el) => {
+		if (!el || el.nodeType !== 1 || !el.isConnected || el.closest('video, script, style, noscript')) return;
+		const style = getComputedStyle(el);
+		if (style.display === 'none' || style.visibility === 'hidden' || +style.opacity === 0) return;
+		const rect = el.getBoundingClientRect();
+		if (rect.width < 2 || rect.height < 2) return;
+		const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
+		if (!text || text.length > 240) return;
+		const now = performance.now();
+		const sec = Math.floor(now / 1000);
+		if (textBudget.second !== sec) textBudget = { second: sec, n: 0 };
+		if (++textBudget.n > 8) return; // a ticker repainting every frame is not news
+		if (now - (lastText.get(text) || -1e9) < 1000) return;
+		lastText.set(text, now);
+		R.events.push({ type: 'text', wt: now, text, vid: R.attendedId });
+	};
+	const watchText = () => {
+		if (textObserver || !document.body) return;
+		textObserver = new MutationObserver((mutations) => {
+			const touched = new Set();
+			for (const m of mutations) {
+				if (m.type === 'characterData') touched.add(m.target.parentElement);
+				for (const n of m.addedNodes) touched.add(n.nodeType === 1 ? n : n.parentElement);
+			}
+			// Styles and layout settle after the mutation; read them on the next frame.
+			requestAnimationFrame(() => touched.forEach(reportText));
+		});
+		textObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+	};
+
 	// -- plumbing ------------------------------------------------------------------------
 
 	const heartbeat = () => {
+		watchText(); // the body may not have existed when the retina started
 		const v = R.attended;
 		if (R.ctx && R.ctx.state === 'suspended') R.ctx.resume().catch(() => {});
 		if (v && opts.audio && (R.audioMode === 'no-track' || R.audioMode.startsWith('error'))) startHearing(v);
@@ -468,6 +505,7 @@ registerProcessor('retina-ear', RetinaEar);
 	R.start = (overrides) => {
 		Object.assign(opts, overrides || {});
 		if (R.running) return R.state();
+		watchText();
 		R.running = true;
 		R.timers.push(setInterval(attend, opts.attendMs));
 		R.timers.push(setInterval(flush, opts.flushMs));

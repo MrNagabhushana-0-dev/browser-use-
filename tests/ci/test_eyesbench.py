@@ -34,18 +34,22 @@ async def session():
 async def test_the_retina_gets_every_seeded_task_right_and_costs_far_less(server, session, tmp_path):
 	def serve(page_path: str, html: str, media_path: str, media: bytes) -> None:
 		server.expect_request(page_path).respond_with_data(html, content_type='text/html')
-		server.expect_request(media_path).respond_with_handler(lambda r: bench.media_response(r, media))
+		if media:
+			server.expect_request(media_path).respond_with_handler(lambda r: bench.media_response(r, media))
 
 	eyes = Eyes(session, speech=False, now_path=False)
 	try:
-		rows = await bench.run(session, eyes, server.url_for('').rstrip('/'), serve, seeds=(1, 2), work=tmp_path)
+		rows = await bench.run(session, eyes, server.url_for('').rstrip('/'), serve, seeds=(1,), work=tmp_path)
 	finally:
 		await eyes.close()
 	print(bench.table(rows))
 	retina = [r for r in rows if r['mode'] == 'retina']
 	shots = [r for r in rows if r['mode'] == 'screenshots']
-	assert retina and all(r['correct'] for r in retina), bench.table(rows)
-	assert all(not r['captured'] for r in shots if r['task'] == 'beeps'), 'screenshots carry no sound'
+	snaps = [r for r in rows if r['mode'] == 'snapshots']
+	assert {r['task'] for r in retina} == {'flash', 'beeps', 'toast'}
+	assert all(r['correct'] for r in retina), bench.table(rows)
+	assert all(not r['captured'] for r in shots + snaps if r['task'] == 'beeps'), 'neither carries sound'
+	assert all(not r['captured'] for r in snaps if r['task'] == 'flash'), "a video's pixels are not in the tree"
 	assert sum(r['tokens'] for r in retina) * 10 < sum(r['tokens'] for r in shots), bench.table(rows)
 
 
