@@ -59,6 +59,10 @@ Detail = Literal['glance', 'look', 'study']
 # Below this marginal coverage for BORED_WINDOW_S, an item is showing nothing new.
 BORED_NOVELTY = 0.04
 BORED_WINDOW_S = 2.0
+# Discrete sounds this recent (beeps, knocks, notifications) keep a still picture worth watching.
+BORED_SOUND_S = 4.0
+# How far back a watch reaches for what the item did before the call (the caller's own latency).
+BACKFILL_MAX_S = 30.0
 # How long `next()` waits for the feed to show a different item after one gesture.
 NEXT_CONFIRM_S = 2.0
 # ...and how long the new item must stay attended to count as where the feed came to rest.
@@ -117,6 +121,7 @@ class Eyes:
 		self._meaning = None  # MeaningIndex over the archive, made on first search
 		self._last_now = 0.0
 		self._items_seen = 0
+		self._reported: dict[int, float] = {}  # item id -> when a percept last covered it
 		self._pages = None
 
 	# -- lifecycle -----------------------------------------------------------------------
@@ -142,6 +147,17 @@ class Eyes:
 		await self.retina.stop()
 
 	# -- watching ------------------------------------------------------------------------
+
+	def _unreported_since(self, start: float, vid: int) -> float:
+		"""Where a watch of item `vid` starting at `start` picks up: the end of the last percept of it, or where it
+		began, up to BACKFILL_MAX_S back. Starting at the call would leave the caller's latency as a blind gap: a beep
+		or a toast between opening a page and the first watch would never be reported."""
+		if not vid:
+			return start
+		walls = [f.wall for f in self.retina.frames if f.vid == vid] + [h.wall for h in self.retina.hops if h.vid == vid]
+		if not walls:
+			return start
+		return min(start, max(min(walls), self._reported.get(vid, 0.0), start - BACKFILL_MAX_S))
 
 	def _since(self, wall: float) -> tuple[list[FrameSample], list[AudioHop], list[RetinaEvent]]:
 		return (
@@ -204,6 +220,9 @@ class Eyes:
 			)
 			if after - before:
 				return None  # the picture is steady but the sound is doing something new
+		lately = [h for h in sound if h.wall >= now - BORED_SOUND_S]
+		if lately and hearing.listen(lately, self.retina.state.get('sr')).onsets:
+			return None  # discrete sounds still coming: the next beep is as unpredictable as the last
 		return f'nothing new for {BORED_WINDOW_S:.0f}s (novelty {gain:.3f})'
 
 	async def watch(self, *args: Any, **kwargs: Any) -> Percept:
@@ -240,6 +259,7 @@ class Eyes:
 		await self._resume_held()
 		start = time.monotonic()
 		start_vid = self.retina.attended.get('vid', 0)
+		since = self._unreported_since(start, start_vid)
 		reason = f'watched {seconds:.0f}s'
 		while True:
 			elapsed = time.monotonic() - start
@@ -261,9 +281,11 @@ class Eyes:
 				break
 		if hold:
 			await self._hold()
-		percept = await self.perceive(since=start, detail=detail, keyframes=keyframes, transcribe=transcribe)
+		percept = await self.perceive(since=since, detail=detail, keyframes=keyframes, transcribe=transcribe)
 		percept.stop_reason = reason
 		percept.started_at, percept.ended_at = start, time.monotonic()
+		for item in percept.items:
+			self._reported[item.vid] = percept.ended_at
 		percept.text = percept.text.replace('{REASON}', reason)
 		return percept
 

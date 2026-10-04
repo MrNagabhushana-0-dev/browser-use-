@@ -105,6 +105,7 @@ logger = logging.getLogger(__name__)
 # Namespace for tools that belong to the page rather than to browser-use, so a site's
 # `search` can never shadow `browser_navigate`.
 SITE_TOOL_PREFIX = 'site_'
+AUTOPLAY_WITHOUT_GESTURE = '--autoplay-policy=no-user-gesture-required'
 
 
 def _ensure_all_loggers_use_stderr():
@@ -876,6 +877,10 @@ class BrowserUseServer:
 			'headless': False,
 			**profile_config,  # Config values override defaults
 		}
+
+		# An agent never makes a user gesture, so under Chrome's default policy the eyes' AudioContext stays
+		# suspended and every video is silent to them. Same switch as Chrome's own kiosk/automation setups.
+		profile_data['args'] = [*(profile_data.get('args') or []), AUTOPLAY_WITHOUT_GESTURE]
 
 		# Tool parameter overrides (highest priority)
 		if allowed_domains is not None:

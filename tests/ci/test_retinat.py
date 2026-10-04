@@ -26,6 +26,16 @@ def site():
 	server.stop()
 
 
+@pytest.fixture(scope='module')
+def beeps(site, tmp_path_factory):
+	from browser_use.eyes import bench
+
+	task = bench.beeps_task(1, tmp_path_factory.mktemp('beeps'))
+	site.expect_request('/beeps').respond_with_data(task.page('/beeps.webm'), content_type='text/html')
+	site.expect_request('/beeps.webm').respond_with_handler(lambda r: bench.media_response(r, task.media))
+	return task
+
+
 @pytest.fixture
 async def retinat(tmp_path, monkeypatch):
 	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
@@ -121,3 +131,16 @@ async def test_changes_reports_text_that_appeared_once_then_nothing(retinat, sit
 	assert 'Saved #4242' in first, first
 	second = _text(await _call(retinat, 'retinat_changes', {}))
 	assert 'Saved #4242' not in second, second
+
+
+async def test_the_server_hears_a_muted_video_with_no_gesture_even_when_asked_late(retinat, site, beeps):
+	# Through the server's own launch profile, as an MCP client gets it: no autoplay flag passed in by the
+	# test, and no click on the page. The model's first call after opening comes seconds later; beeps
+	# that played in between must still be counted.
+	import asyncio
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/beeps')})
+	await asyncio.sleep(3.0)
+	text = _text(await _call(retinat, 'retinat_watch', {'seconds': 11}))
+	assert 'none captured' not in text, text
+	assert f'{beeps.truth["count"]} onsets' in text, (beeps.truth, text)

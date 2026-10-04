@@ -159,6 +159,9 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 			lines.append(
 				'    (speech judged by heuristics only, unreliable with music; install the eyes extra for a speech model)'
 			)
+	if h.heard and 0 < len(h.onsets) <= 16 and 'speech' not in h.kinds and 'music' not in h.kinds:
+		# sparse discrete sounds (beeps, clicks, knocks): their number and timing is the information
+		lines.append(f'    distinct sounds: {len(h.onsets)}, at ' + ', '.join(_fmt(t) for t in h.onsets))
 	if h.transcript:
 		said = ' '.join(f'[{_fmt(u.t0)}] {u.text}' for u in h.transcript)
 		lines.append(f'    said: {said[:transcript_chars]}{"..." if len(said) > transcript_chars else ""}')
