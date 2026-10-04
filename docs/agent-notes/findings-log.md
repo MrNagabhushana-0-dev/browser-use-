@@ -938,3 +938,40 @@ an open flake under full-suite load, not explained, and now on the list.
 5. `find` and `zoom` in Retinat.
 6. Opt-in desktop eyes.
 7. Replay recording with cursor.
+
+## Round 20 (unattended loop): the MCP connect timeout after recycles, and the feed flake traced and fixed
+
+**MCP connect timeout.** After both container recycles today, the two MCP servers timed out at Claude Code's
+30 s default. In both cases the session started within the VM's first minute. What was measured:
+- Retinat answers `initialize` in 3.3 s at boot + 1 min.
+- The first `uv run` after boot takes 0.09 s, with no dependency sync.
+
+The cause is the VM's first ~30 s. Fix: `MCP_TIMEOUT=120000` in `.claude/settings.json` `env` (ms, per the
+Claude Code MCP docs). That file is gitignored in this repo, so it is local to this checkout, which has survived
+both recycles. Unverified: the docs do not say whether settings `env` applies before MCP servers connect, and only
+the next recycle can tell. The top item (the e2e re-run) stays blocked until a session's servers connect.
+
+**Feed flake (Round 19's open failure), traced.** `browse` now logs `next()`'s note. A failing eyes-file run then
+showed: `next by swipe in 4.9s (overshot by 1 item(s); flicked back (harder after a flick that did not take))`,
+then item 2 was the third reel. Under load, a flick back took late and was judged not to have taken. A second,
+harder flick followed, and "landed" was read at the instant the feed passed the target. A second hole came from
+reading the code: every retry flicked in the fixed "back" direction, so a flick back that overcorrected onto the
+start was followed by more flicks back into the top of the feed. That ends exactly on the starting reel, which is
+the symptom of Round 19's failing test.
+
+Fixed:
+- each correction decision and the final "landed" wait for the attended item to settle;
+- each flick's direction comes from where the feed is now.
+
+A loose test feed (the first flick back carries two items) failed on the old code exactly as the flake did,
+ending on `@first`. It passes now. Eyes file: 1 of 3 runs red before the settle fix, 4/4 green after. That is a
+small sample for an intermittent fault, so it is evidence, not proof.
+
+**Next, in order:**
+1. The e2e re-run with `retinat_changes`, 5+ seeds and a "watch late" variant, once the servers connect.
+   Check whether `MCP_TIMEOUT` took effect.
+2. More eyesbench tasks: carousel, live chart peak, spoken instruction, WebGL letter, plus static twins.
+3. Media-borne prompt-injection tests.
+4. `find` and `zoom` in Retinat.
+5. Opt-in desktop eyes.
+6. Replay recording with cursor.
