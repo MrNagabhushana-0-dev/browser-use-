@@ -111,8 +111,19 @@
 				bestScore = score;
 			}
 		}
+		if (best) return best;
+		// No video: a large canvas (2D or WebGL) is where an animation, a game or a chart is drawn.
+		for (const c of document.querySelectorAll('canvas')) {
+			const { area } = visible(c);
+			if (area >= opts.minArea * vp && area > bestScore) {
+				best = c;
+				bestScore = area;
+			}
+		}
 		return best;
 	};
+	const isCanvas = (el) => el instanceof HTMLCanvasElement;
+	const dims = (el) => (isCanvas(el) ? [el.width, el.height] : [el.videoWidth, el.videoHeight]);
 
 	// Text a person would read next to the video: caption, author, audio credit. Short on
 	// purpose: this is what is on screen, not the page's markup.
@@ -127,8 +138,23 @@
 		return '';
 	};
 
-	const describe = (v) => ({
+	const describe = (v) => isCanvas(v) ? {
 		vid: v === R.attended ? R.attendedId : 0,
+		el: idOf(v),
+		kind: 'canvas',
+		order: -1,
+		src: 'canvas',
+		w: v.width,
+		h: v.height,
+		duration: null,
+		t: Math.max(0, R.lastSampleT),
+		paused: false,
+		muted: true,
+		rect: visible(v).rect,
+		text: nearbyText(v),
+	} : ({
+		vid: v === R.attended ? R.attendedId : 0,
+		kind: 'video',
 		el: idOf(v),
 		// Position among the page's videos in document order: how a feed says which item is next.
 		order: Array.prototype.indexOf.call(document.querySelectorAll('video'), v),
@@ -147,7 +173,7 @@
 	// (virtualized feeds recycle a few <video> elements for every reel).
 	const attend = () => {
 		const v = pick();
-		const src = v ? String(v.currentSrc || v.src || '') : '';
+		const src = v ? (isCanvas(v) ? 'canvas' : String(v.currentSrc || v.src || '')) : '';
 		if (v === R.attended && src === R.attendedSrc) return;
 		R.attended = v;
 		R.attendedSrc = src;
@@ -160,7 +186,10 @@
 		R.lastThumbGrid = null;
 		R.lastThumbT = -1;
 		R.events.push(Object.assign({ type: 'attend', wt: performance.now() }, v ? describe(v) : { vid: 0 }));
-		if (v) {
+		if (v && isCanvas(v)) {
+			stopHearing(); // a canvas has no sound of its own
+			startCanvasSight(v);
+		} else if (v) {
 			if (opts.listen && v.muted) v.muted = false;
 			startSight(v);
 			if (opts.audio) startHearing(v);
@@ -175,6 +204,9 @@
 	const grid2d = gridCanvas.getContext('2d', { willReadFrequently: true });
 
 	const sampleGrid = (v) => {
+		// A canvas is area-averaged when shrunk to 16x16: the default point-samples, so a small drawn object
+		// aliases (flickers between cells) and its motion reads as jitter. Video sampling stays as it was.
+		grid2d.imageSmoothingQuality = isCanvas(v) ? 'high' : 'low';
 		grid2d.drawImage(v, 0, 0, GRID, GRID);
 		const d = grid2d.getImageData(0, 0, GRID, GRID).data;
 		const luma = new Uint8Array(GRID * GRID);
@@ -211,9 +243,10 @@
 	};
 
 	const captureThumb = (v, seq) => {
-		if (!v.videoWidth) return;
-		const w = Math.min(opts.thumbWidth, v.videoWidth);
-		const h = Math.max(1, Math.round((w * v.videoHeight) / v.videoWidth));
+		const [vw, vh] = dims(v);
+		if (!vw) return;
+		const w = Math.min(opts.thumbWidth, vw);
+		const h = Math.max(1, Math.round((w * vh) / vw));
 		const c = new OffscreenCanvas(w, h);
 		c.getContext('2d').drawImage(v, 0, 0, w, h);
 		c.convertToBlob({ type: 'image/jpeg', quality: 0.72 }).then((blob) => {
@@ -235,6 +268,33 @@
 			// A backwards jump is a loop or a seek: always sample it.
 			if (mt >= R.lastSampleT && mt - R.lastSampleT < 1 / opts.fps) return;
 			R.lastSampleT = mt;
+			sampleFrame(v, mt, now);
+		};
+		v.requestVideoFrameCallback(onFrame);
+	};
+
+	// A canvas has no frame callback or media clock: sample it once per animation frame, after the
+	// page has drawn (2D, or WebGL with preserveDrawingBuffer), on a clock that starts when attended.
+	const startCanvasSight = (c) => {
+		if (c.__retinaTapped) return;
+		c.__retinaTapped = true;
+		const t0 = performance.now();
+		const onFrame = (now) => {
+			if (!R.running || R.attended !== c) {
+				c.__retinaTapped = false;
+				return;
+			}
+			requestAnimationFrame(onFrame);
+			const mt = (now - t0) / 1000;
+			if (mt - R.lastSampleT < 1 / opts.fps) return;
+			R.lastSampleT = mt;
+			sampleFrame(c, mt, now);
+		};
+		requestAnimationFrame(onFrame);
+	};
+
+	const sampleFrame = (v, mt, now) => {
+		{
 			if (R.tainted.has(v)) return;
 			let s;
 			try {
@@ -258,8 +318,7 @@
 				captureThumb(v, seq);
 			}
 			R.frames.push([seq, R.attendedId, +mt.toFixed(3), +now.toFixed(1), b64(s.luma), s.rgb, thumb ? 1 : 0, b64(s.c4)]);
-		};
-		v.requestVideoFrameCallback(onFrame);
+		}
 	};
 
 	// -- hearing -------------------------------------------------------------------------
@@ -477,15 +536,16 @@ registerProcessor('retina-ear', RetinaEar);
 		watchText(); // in case the document element did not exist when the retina started
 		const v = R.attended;
 		if (R.ctx && R.ctx.state === 'suspended') R.ctx.resume().catch(() => {});
-		if (v && opts.audio && (R.audioMode === 'no-track' || R.audioMode.startsWith('error'))) startHearing(v);
-		if (v && opts.listen && v.muted) v.muted = false;
+		const media = v && !isCanvas(v) ? v : null;
+		if (media && opts.audio && (R.audioMode === 'no-track' || R.audioMode.startsWith('error'))) startHearing(media);
+		if (media && opts.listen && media.muted) media.muted = false;
 		R.events.push({
 			type: 'state',
 			wt: performance.now(),
 			vid: R.attendedId,
-			t: v ? v.currentTime : null,
-			paused: v ? v.paused : null,
-			muted: v ? v.muted || v.volume === 0 : null,
+			t: media ? media.currentTime : v ? Math.max(0, R.lastSampleT) : null,
+			paused: media ? media.paused : v ? false : null,
+			muted: media ? media.muted || media.volume === 0 : v ? true : null,
 			audio: R.audioMode,
 			ctx: R.ctx ? R.ctx.state : 'none',
 			sr: R.ctx ? R.ctx.sampleRate : null,
@@ -564,9 +624,10 @@ registerProcessor('retina-ear', RetinaEar);
 	// Take a keyframe right now from the attended video, for looks that are not tied to a sample.
 	R.snapshot = async (width) => {
 		const v = R.attended;
-		if (!v || !v.videoWidth || R.tainted.has(v)) return null;
-		const w = Math.min(width || opts.thumbWidth, v.videoWidth);
-		const h = Math.max(1, Math.round((w * v.videoHeight) / v.videoWidth));
+		const [vw, vh] = v ? dims(v) : [0, 0];
+		if (!v || !vw || R.tainted.has(v)) return null;
+		const w = Math.min(width || opts.thumbWidth, vw);
+		const h = Math.max(1, Math.round((w * vh) / vw));
 		const c = new OffscreenCanvas(w, h);
 		c.getContext('2d').drawImage(v, 0, 0, w, h);
 		const blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
@@ -600,7 +661,7 @@ registerProcessor('retina-ear', RetinaEar);
 
 	R.setListen = (on) => {
 		opts.listen = !!on;
-		if (R.attended && on) R.attended.muted = false;
+		if (R.attended && on && !isCanvas(R.attended)) R.attended.muted = false;
 		return R.state();
 	};
 

@@ -256,6 +256,7 @@ async def test_cuts_and_sounds_are_found_where_they_are(eyes, session, site):
 
 	assert len(p.items) == 1, p.text
 	item = p.items[0]
+	assert item.motion is None and 'motion:' not in p.text, 'cuts between full frames are not an object moving'
 	cuts = item.sight.cuts
 	assert len(cuts) == 3, f'expected cuts at 2.5/5/7.5, got {cuts}'
 	for got, want in zip(cuts, (SECTION, 2 * SECTION, 3 * SECTION)):

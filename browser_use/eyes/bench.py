@@ -50,7 +50,7 @@ class Task:
 
 	@property
 	def answer(self) -> Any:
-		return self.truth[{'flash': 'colour', 'beeps': 'count', 'toast': 'id'}[self.name]]
+		return self.truth[{'flash': 'colour', 'beeps': 'count', 'toast': 'id', 'bounce': 'count'}[self.name]]
 
 
 def _ffmpeg() -> str:
@@ -142,6 +142,37 @@ def toast_task(seed: int, work: Path) -> Task:
 	return Task('toast', seed, 'What order ID was confirmed?', 10.0, b'', {'id': order_id, 'at': at}, html=html)
 
 
+BOUNCE_PAGE = """<!doctype html><title>bounce</title><body style="margin:0;background:#000">
+<canvas width="360" height="640" style="height:100vh;display:block;margin:auto"></canvas>
+<script>const hits = {hits}; const c = document.querySelector('canvas'); const g = c.getContext('2d');
+const R = 30, floor = 640 - R - 10; let t0 = null;
+const y = (t) => {{
+  if (t < hits[0]) {{ const s = t / hits[0]; return floor - (floor - 60) * (1 - s * s); }}
+  for (let k = 0; k + 1 < hits.length; k++) if (t < hits[k + 1]) {{
+    const gap = hits[k + 1] - hits[k], s = (t - hits[k]) / gap, H = Math.min(480, 120 + 100 * gap);
+    return floor - H * 4 * s * (1 - s); }}
+  return floor; }};
+const draw = (now) => {{ if (t0 === null) t0 = now; const t = (now - t0) / 1000;
+  g.fillStyle = '#101418'; g.fillRect(0, 0, 360, 640);
+  g.fillStyle = '#f0f0f0'; g.beginPath(); g.arc(180 + 60 * Math.sin(t * 0.7), y(t), R, 0, 7); g.fill();
+  requestAnimationFrame(draw); }};
+requestAnimationFrame(draw);</script></body>"""
+
+
+def bounce_task(seed: int, work: Path) -> Task:
+	"""A ball on a <canvas> (no video element, nothing in the DOM) hits the floor N times at seeded moments."""
+	rng = random.Random(seed * 31 + 7)
+	n = rng.randint(3, 7)
+	hits: list[float] = []
+	while len(hits) < n:
+		t = round(rng.uniform(1.0, 10.5), 2)
+		if all(abs(t - x) >= 0.8 for x in hits):
+			hits.append(t)
+	hits.sort()
+	html = BOUNCE_PAGE.format(hits=hits)
+	return Task('bounce', seed, 'How many times does the ball hit the floor?', 12.0, b'', {'count': n, 'hits': hits}, html=html)
+
+
 def _mean_rgb(jpeg: bytes) -> tuple[int, int, int]:
 	from PIL import Image
 
@@ -229,7 +260,7 @@ def score_snapshots(task: Task, snaps: list[str]) -> dict[str, Any]:
 	if task.name == 'toast':
 		seen = any(str(task.truth['id']) in s for s in snaps)
 		return {'captured': seen, 'sent': seen, 'answer': task.truth['id'] if seen else None}
-	# A video's pixels and sound are not in the accessibility tree.
+	# A video's or a canvas's pixels and sound are not in the accessibility tree.
 	return {'captured': False, 'sent': False, 'answer': None}
 
 
@@ -240,7 +271,8 @@ def score_screenshots(task: Task, shots: list[bytes]) -> dict[str, Any]:
 	if task.name == 'toast':  # if a shot caught the toast, assume the model can read its large text
 		seen = any(_shows_toast(s) for s in shots)
 		return {'captured': seen, 'sent': seen, 'answer': task.truth['id'] if seen else None}
-	# Screenshots carry no sound.
+	# Screenshots carry no sound, and a count of bounces is not in any one frame: scored as not captured,
+	# which flatters nothing (a model would have to infer hits from a few ball positions).
 	return {'captured': False, 'sent': False, 'answer': None}
 
 
@@ -257,6 +289,10 @@ def score_retina(task: Task, percept) -> dict[str, Any]:
 		)
 		sent = any(k.jpeg and _shows_colour(k.jpeg, colour) for k in item.keyframes) or colour in percept.text
 		return {'captured': captured, 'sent': sent, 'answer': colour if sent else None}
+	if task.name == 'bounce':
+		hits = item.motion.bottom if item.motion else []
+		count = len(hits)
+		return {'captured': count == task.truth['count'], 'sent': f'the bottom {count} times' in percept.text, 'answer': count}
 	onsets = [t for t in item.hearing.onsets if 0.5 <= t <= 11.5]
 	count = len(onsets)
 	return {'captured': count == task.truth['count'], 'sent': f'{count} onsets' in percept.text, 'answer': count}
@@ -312,6 +348,8 @@ async def run(
 			for mode in modes:
 				page_path = f'/{task.name}-{seed}-{mode}'
 				serve(page_path, task.page(media_path), media_path, task.media)
+				if mode == 'retina' and task.name != 'toast':
+					await eyes.open()  # before the page loads, as retinat_open does: the first moments count
 				await session.navigate_to(base_url + page_path)
 				if mode == 'screenshots':
 					await asyncio.sleep(0.5)
@@ -325,7 +363,6 @@ async def run(
 					score, tokens = await _retina_toast(session, task, work)
 					observations = 1
 				else:
-					await eyes.open()
 					percept = await eyes.watch(seconds=task.seconds, until='time')
 					score = score_retina(task, percept)
 					tokens, observations = percept.tokens, 1

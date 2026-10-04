@@ -21,6 +21,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from browser_use.eyes import hearing as hearing_mod
+from browser_use.eyes import motion as motion_mod
 from browser_use.eyes import sight as sight_mod
 from browser_use.eyes.retina import AudioHop, FrameSample
 
@@ -65,6 +66,7 @@ class ItemPercept:
 	watched_s: float = 0.0
 	muted: bool | None = None
 	tainted: bool = False
+	motion: motion_mod.Motion | None = None
 
 	@property
 	def t_span(self) -> tuple[float, float]:
@@ -106,7 +108,7 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	lines: list[str] = []
 	size = f'{info.get("w")}x{info.get("h")}' if info.get('w') else 'size unknown'
 	duration = info.get('duration')
-	head = f'[{item.index}] video {size}'
+	head = f'[{item.index}] {"canvas" if info.get("kind") == "canvas" else "video"} {size}'
 	if duration:
 		head += f', {_fmt(duration)} long'
 	head += f', watched {item.watched_s:.1f}s'
@@ -143,8 +145,12 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	elif item.sight.rewinds:
 		lines.append(f'    rewound at {_fmt(item.sight.rewinds[0])} (seeked back, or restarted by the page); later frames repeat')
 
+	if item.motion:
+		lines.append('    ' + motion_mod.describe(item.motion, _fmt))
 	h = item.hearing
-	if not h.heard:
+	if info.get('kind') == 'canvas' and not h.heard:
+		pass  # a canvas has no sound of its own: nothing to say
+	elif not h.heard:
 		lines.append('    sound: none captured (no audio track, or it had not started)')
 	else:
 		kinds = ', '.join(h.kinds)

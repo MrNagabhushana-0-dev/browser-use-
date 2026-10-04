@@ -75,3 +75,27 @@ async def test_the_flash_detector_sees_a_flash_frame_when_the_video_is_paused_on
 	shots, tokens = await bench.screenshot_loop(session, 0.1)
 	assert shots and bench._shows_colour(shots[0], task.truth['colour'], centre_only=True)
 	assert tokens == 1196, 'one 1280x720 screenshot, costed as the screenshot agents downscale'
+
+
+async def test_the_retina_counts_bounces_drawn_on_a_canvas(server, session, tmp_path):
+	# No <video> and nothing in the DOM: the information is only in a canvas animation, which screenshots
+	# sample too sparsely to count and accessibility trees do not contain.
+	def serve(page_path: str, html: str, media_path: str, media: bytes) -> None:
+		server.expect_request(page_path).respond_with_data(html, content_type='text/html')
+
+	eyes = Eyes(session, speech=False, now_path=False)
+	try:
+		rows = await bench.run(
+			session,
+			eyes,
+			server.url_for('').rstrip('/'),
+			serve,
+			seeds=(1, 2),
+			work=tmp_path,
+			tasks=(bench.bounce_task,),
+			modes=('retina',),
+		)
+	finally:
+		await eyes.close()
+	print(bench.table(rows))
+	assert all(r['correct'] and r['sent'] for r in rows), bench.table(rows)

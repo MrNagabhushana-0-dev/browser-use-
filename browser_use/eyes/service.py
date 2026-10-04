@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from browser_use.eyes import asr, hearing, sight
+from browser_use.eyes import asr, hearing, motion, sight
 from browser_use.eyes.archive import FrameArchive
 from browser_use.eyes.percept import ItemPercept, Keyframe, Percept, assemble, estimate_image_tokens, render_strip
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
@@ -361,6 +361,7 @@ class Eyes:
 					watched_s=(max(walls) - min(walls)) if walls else 0.0,
 					muted=muted_by_vid.get(vid),
 					tainted=vid in tainted,
+					motion=motion.track(f),
 				)
 			)
 		page = self.retina.state.get('url', '')
@@ -386,7 +387,8 @@ class Eyes:
 		if not self.retina.running:
 			await self.open()
 		await self.retina.wait_for_data(0.6)
-		if self.retina.attended.get('vid'):
+		# A video is watched briefly; a canvas is shown with the page around it (watch follows a canvas over time).
+		if self.retina.attended.get('vid') and self.retina.attended.get('kind') != 'canvas':
 			return await self.watch(seconds=seconds, until='time', min_seconds=seconds, detail=detail, keyframes=2)
 		jpeg = await self._page_watcher().wait_latest()
 		url = self.retina.state.get('url', '')
