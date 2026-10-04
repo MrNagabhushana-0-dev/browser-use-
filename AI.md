@@ -65,6 +65,7 @@ continuous stream on disk rather than in your context.
 | See what's on screen now | `retinat_look` | 1 image (about 400–900 tokens) |
 | Understand a whole canvas or scroll-driven page | `retinat_scan` | 1 sheet (about 1–1.5k tokens) |
 | Watch a video or reel, including its sound | `retinat_watch` with `until=bored` | 1 sheet plus a timeline (about 300–900 tokens per item) |
+| Follow an animation drawn on a canvas (a game, a chart, a physics demo): count bounces, swings, sweeps | `retinat_watch` on a page with no video (it attends the largest canvas; the percept has a `motion:` line with turning points and times) | about 200-500 tokens |
 | Scroll Reels or Shorts like a person | `retinat_browse` with `items=N` | 1 sheet, one row per item |
 | Go to the next or previous feed item | `retinat_next` | text only |
 | Tap, swipe, click, type, press a key | `retinat_tap`, `retinat_swipe`, `retinat_click`, `retinat_type`, `retinat_key` | text only |
