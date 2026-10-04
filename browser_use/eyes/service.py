@@ -597,6 +597,18 @@ class Eyes:
 			await self.retina.wait_for_data(0.1)
 		return current not in (before, 0)
 
+	async def _settle(self, timeout: float) -> None:
+		"""Wait until the attended item has stayed the same for SETTLE_S (or `timeout` passes)."""
+		deadline = time.monotonic() + timeout
+		current, since = self.retina.attended.get('vid', 0), time.monotonic()
+		while time.monotonic() < deadline:
+			await self.retina.wait_for_data(0.1)
+			vid = self.retina.attended.get('vid', 0)
+			if vid != current:
+				current, since = vid, time.monotonic()
+			elif time.monotonic() - since >= SETTLE_S:
+				return
+
 	async def _correct_overshoot(self, before_order: int | None, direction: str) -> str:
 		"""If the flick carried the feed past the next item, flick back as a person would, until it lands.
 
@@ -614,23 +626,30 @@ class Eyes:
 		if step <= 1:
 			return ''
 		w, h = await self.touch.viewport()
-		back = 'down' if direction == 'down' else 'up'  # finger direction that scrolls back toward the target
+		# Finger directions: 'back' scrolls toward earlier items in the direction of travel, 'on' further along.
+		back, on = ('down', 'up') if direction == 'down' else ('up', 'down')
 		fractions = iter((0.45, 0.72, 0.72))
 		fraction = next(fractions)
-		tries = 0
+		tries, reversed_ = 0, False
 		for _ in range(3):
+			await self._settle(NEXT_CONFIRM_S)  # a late-taking flick lands before the next decision
 			order = self.retina.attended.get('order')
-			if order == target:
+			if not isinstance(order, int) or order == target:
 				break
+			# Decide from where the feed is now: a flick back can overcorrect past the target too.
+			past = (order - target) * forward > 0
+			reversed_ = reversed_ or not past
 			current = self.retina.attended.get('vid', 0)
 			tries += 1
-			await self.touch.flick(back, fraction=fraction, around=(w / 2, h * 0.5))
+			await self.touch.flick(back if past else on, fraction=fraction, around=(w / 2, h * 0.5))
 			if not await self._wait_for_item_change(current, NEXT_CONFIRM_S):
 				fraction = next(fractions, 0.72)  # it snapped back: flick harder next time
+		await self._settle(NEXT_CONFIRM_S)  # judged where the feed comes to rest, not where it is passing through
 		landed = self.retina.attended.get('order') == target
-		harder = ' (harder after a flick that did not take)' if tries > 1 and landed else ''
+		harder = ' (harder after a flick that did not take)' if tries > 1 and landed and not reversed_ else ''
+		again = ' (and forward again after the flick back overcorrected)' if landed and reversed_ else ''
 		if landed:
-			return f'overshot by {step - 1} item(s); flicked back{harder}'
+			return f'overshot by {step - 1} item(s); flicked back{harder}{again}'
 		return f'overshot by {step - 1} item(s); {tries} flick(s) back did not reach the next item'
 
 	async def next(
@@ -710,7 +729,7 @@ class Eyes:
 			if i + 1 < items:
 				moved = await self.next()
 				log.append(
-					f'  -> next by {moved.method} in {moved.seconds:.1f}s'
+					f'  -> next by {moved.method} in {moved.seconds:.1f}s' + (f' ({moved.note})' if moved.note else '')
 					if moved.moved
 					else f'  -> feed did not move ({moved.note}); stopping'
 				)

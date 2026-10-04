@@ -69,6 +69,19 @@ def _solid(path: Path, colour: str, seconds: float, tone_hz: float | None = None
 	)
 
 
+# A flick back that carries two items overcorrects onto the starting item; later flicks move one. The fix
+# has to flick forward again from there, not keep flicking back into the top of the feed.
+LOOSE_OVERSHOOT = """
+const feed = document.getElementById('feed'); feed.style.overflowY = 'hidden'; feed.style.touchAction = 'none';
+let y0 = null, forward = 0, back = 0;
+feed.addEventListener('touchstart', e => { y0 = e.touches[0].clientY }, {passive: true});
+feed.addEventListener('touchend', e => { if (y0 === null) return;
+  const dy = (e.changedTouches[0] || {}).clientY - y0; y0 = null; if (Math.abs(dy) < 80) return;
+  const items = dy < 0 ? (forward++ === 0 ? 2 : 1) : (back++ === 0 ? -2 : -1);
+  feed.scrollBy({top: items * innerHeight}) }, {passive: true});
+"""
+
+
 @pytest.fixture(scope='module')
 def media(tmp_path_factory):
 	root = tmp_path_factory.mktemp('eyes_media')
@@ -187,6 +200,9 @@ def site(media):
 	server.expect_request('/feed').respond_with_data(FEED.replace('/*EXTRA*/', ''), content_type='text/html')
 	server.expect_request('/wheel-feed').respond_with_data(FEED.replace('/*EXTRA*/', WHEEL_ONLY), content_type='text/html')
 	server.expect_request('/overshoot-feed').respond_with_data(FEED.replace('/*EXTRA*/', OVERSHOOT), content_type='text/html')
+	server.expect_request('/loose-overshoot-feed').respond_with_data(
+		FEED.replace('/*EXTRA*/', LOOSE_OVERSHOOT), content_type='text/html'
+	)
 	server.expect_request('/stiff-overshoot-feed').respond_with_data(
 		FEED.replace('/*EXTRA*/', STIFF_OVERSHOOT), content_type='text/html'
 	)
@@ -403,6 +419,14 @@ async def test_a_flick_back_that_does_not_take_is_tried_again_harder(eyes, sessi
 	await eyes.watch(seconds=1.0)
 	moved = await eyes.next()
 	assert moved.moved and 'overshot by 1' in moved.note and 'flicked back' in moved.note, moved
+	assert eyes.retina.attended['text'].startswith('@second'), (eyes.retina.attended.get('text'), moved.note)
+
+
+async def test_a_flick_back_that_overcorrects_onto_the_start_is_followed_by_a_flick_forward(eyes, session, site):
+	await _open(eyes, session, site.url_for('/loose-overshoot-feed'))
+	await eyes.watch(seconds=1.0)
+	moved = await eyes.next()
+	assert moved.moved and 'overshot by 1' in moved.note, moved
 	assert eyes.retina.attended['text'].startswith('@second'), (eyes.retina.attended.get('text'), moved.note)
 
 
