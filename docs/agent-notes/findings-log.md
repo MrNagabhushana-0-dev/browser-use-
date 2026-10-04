@@ -916,6 +916,12 @@ The new negative test caught a false positive: the calibration video's cuts read
 were excluded. The eyes file A/B (baseline vs these changes, 3 runs each) was green 6/6. The known
 "click-train heard as sound" flake hit once in 4 runs of the new code, in line with its known rate.
 
+**CI.** Full `tests/ci` on `c88ec9e`: 1,565 passed, 30 skipped, **1 failed**:
+`test_a_flick_moves_the_feed_and_next_confirms_it_by_sight`. `next()` reported a swipe, but the attended reel
+was unchanged, which looks like overshoot correction going back too far (the Round 14 family). The feed page has
+no canvas, so the new fallback cannot touch it. The test passed 5/5 alone and 6/6 in the eyes-file A/B. It is
+an open flake under full-suite load, not explained, and now on the list.
+
 **Not measured.**
 - WebGL canvases without `preserveDrawingBuffer` may read blank between frames. Untested.
 - Times are relative to when the retina attended, about 0.2 s after the page's first frame.
@@ -925,8 +931,10 @@ were excluded. The eyes file A/B (baseline vs these changes, 3 runs each) was gr
 **Next, in order:**
 1. The e2e re-run with `retinat_changes`, 5+ seeds, and a "watch late" variant, in a session where the MCP
    servers connect.
-2. More eyesbench tasks: carousel, live chart peak, spoken instruction, WebGL letter, plus static twins.
-3. Media-borne prompt-injection tests.
-4. `find` and `zoom` in Retinat.
-5. Opt-in desktop eyes.
-6. Replay recording with cursor.
+2. Trace the feed `next()` flake under load: instrument the correction path as in Round 14 and catch a
+   failing run.
+3. More eyesbench tasks: carousel, live chart peak, spoken instruction, WebGL letter, plus static twins.
+4. Media-borne prompt-injection tests.
+5. `find` and `zoom` in Retinat.
+6. Opt-in desktop eyes.
+7. Replay recording with cursor.
