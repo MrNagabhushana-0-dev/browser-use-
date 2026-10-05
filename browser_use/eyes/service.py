@@ -64,6 +64,8 @@ BORED_SOUND_S = 4.0
 # How far back a watch reaches for what the item did before the call (the caller's own latency, or a question
 # asked long after). The retina's rings hold ~130 s of sound (MAX_HOPS) and ~150 s of frames at 10 fps.
 BACKFILL_MAX_S = 120.0
+# Seconds of speech or music below which onsets still count as discrete sounds (a heuristic blip is not talk).
+VOICED_VETO_S = 2.0
 # How long `next()` waits for the feed to show a different item after one gesture.
 NEXT_CONFIRM_S = 2.0
 # ...and how long the new item must stay attended to count as where the feed came to rest.
@@ -916,7 +918,9 @@ def _sounds_line(hops: list[AudioHop], sr: Any) -> str | None:
 		return None
 	heard_s = sum(seg.duration for seg in h.segments if seg.kind != 'silence')
 	voiced_s = sum(seg.duration for seg in h.segments if seg.kind in ('speech', 'music'))
-	if heard_s and voiced_s > heard_s / 2:  # mostly talk or music: onsets there are syllables and notes, not events
+	# Mostly talk or music: onsets there are syllables and notes, not events. Real talk or music lasts seconds; a
+	# sub-second "speech" blip among beeps (the heuristic misreads a short tone) must not veto the count.
+	if voiced_s >= VOICED_VETO_S and voiced_s > heard_s / 2:
 		return None
 	return f'heard {len(h.onsets)} distinct sounds (at ' + ', '.join(sight.fmt_t(t) for t in h.onsets) + ')'
 

@@ -465,6 +465,7 @@ registerProcessor('retina-ear', RetinaEar);
 			} catch (e) {}
 		}
 		R.audioSource = null;
+		R.audioTrack = null;
 	};
 
 	const startHearing = async (v) => {
@@ -482,6 +483,7 @@ registerProcessor('retina-ear', RetinaEar);
 			}
 			R.audioSource = R.ctx.createMediaStreamSource(new MediaStream(tracks));
 			R.audioSource.connect(node);
+			R.audioTrack = tracks[0];
 			R.audioMode = 'worklet';
 		} catch (e) {
 			R.audioMode = 'error: ' + String((e && e.message) || e).slice(0, 120);
@@ -549,6 +551,8 @@ registerProcessor('retina-ear', RetinaEar);
 			audio: R.audioMode,
 			ctx: R.ctx ? R.ctx.state : 'none',
 			sr: R.ctx ? R.ctx.sampleRate : null,
+			// A muted or ended capture track delivers silence: say so rather than let it read as a quiet video.
+			track: R.audioTrack ? (R.audioTrack.readyState === 'ended' ? 'ended' : R.audioTrack.muted ? 'muted' : 'live') : null,
 			hidden: document.hidden,
 			url: location.href.slice(0, 200),
 		});
