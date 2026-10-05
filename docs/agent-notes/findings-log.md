@@ -1140,3 +1140,59 @@ source's restart at 0 as a rewind of the first item, which cut the first item's 
 4. Media-borne prompt-injection tests.
 5. `find` and `zoom` in Retinat.
 6. Opt-in desktop eyes.
+
+## Round 24 (unattended loop): clip swaps the Media Source way, and a stray hop
+
+**Item.** MSE source swaps, the top of Round 23's list.
+
+**How real players swap, from source.** hls.js (`src/controller/buffer-controller.ts`, around lines 323-339) and
+Shaka (`lib/media/media_source_engine.js`, around lines 279-294) both:
+- create a fresh `MediaSource` for each stream they load;
+- assign its blob URL to `media.src`;
+- detach the old stream with `removeAttribute('src')`.
+
+So for the retina, a recycled player is a src change to a new blob URL, and the audio track only appears once a
+segment has been appended. Swapping `SourceBuffer` contents within one `MediaSource` (`changeType`) keeps the
+src. The retina treats that as one continuing item, which is arguably right, and it is not tested.
+
+**Test page.** It does what those players do:
+- a fresh `MediaSource` per clip;
+- one `SourceBuffer` per content type, all added before any data goes in. Chrome refuses `addSourceBuffer`
+  once another buffer has taken data ("reached the limit of SourceBuffer objects");
+- separate audio-only and video-only WebM files.
+
+Interleaved VP9+Opus WebM from the bundled ffmpeg is rejected by Chrome's MSE demuxer ("Got a block with a
+timecode before the previous block"). Each track appends cleanly alone, and VP9+Vorbis interleaved works.
+`-avoid_negative_ts make_zero` and `-auto-alt-ref 0` did not help.
+
+**Found while looping.** The plain swap test from Round 23 failed about 1 run in 8-12.
+- Setting `src` resets `currentTime` to 0 at once, but `currentSrc` keeps the old URL until resource selection
+  runs. The retina compared `currentSrc` first, so a hop in that window went out under the old item's id at the
+  new time 0.
+- That one backward hop at the tail made hearing see a loop boundary, and the old item's sound shrank to
+  0.01-0.02 s.
+- Fixed (`d1f4530`): `srcOf` reads the `src` attribute first and falls back to `currentSrc` for `<source>`
+  children.
+
+**Measured.**
+- Plain swap alone: 16/16.
+- Both swap tests as a pair: 6/6, against 5/6 before the fix.
+- MSE swap alone: 5/5.
+- Eyes + Retinat + eyesbench: 50/50.
+- Full `tests/ci`: **1,572 passed, 30 skipped, 0 failed** (22m17s).
+
+**Not measured.**
+- `changeType` or same-`MediaSource` swaps.
+- Real streaming sites. They are out of scope for CI, and their media is not ours to download.
+- Hearing is still fragile to a single backward hop: one stray sample can still read as a loop and cut an item's
+  sound down to its tail. The stamping fix removes the known source of such hops, not the fragility.
+
+**Next, in order:**
+1. Make `hearing.listen` (and `sight.read`) require a backward jump to persist for several hops before calling it
+   a loop, so one stray sample cannot truncate an item.
+2. Reproduce the cross-process launch race (two MCP server processes starting Chrome on one profile at once) and
+   fix it.
+3. More eyesbench tasks (carousel, live chart peak, spoken instruction, WebGL letter) plus static twins.
+4. Media-borne prompt-injection tests.
+5. `find` and `zoom` in Retinat.
+6. Opt-in desktop eyes.
