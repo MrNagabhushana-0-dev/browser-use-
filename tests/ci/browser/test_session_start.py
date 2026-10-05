@@ -147,6 +147,25 @@ class TestBrowserSessionStart:
 		assert 'browser-use-user-data-dir-' not in str(profile3.user_data_dir)
 
 
+async def test_a_throwaway_profile_is_removed_when_the_browser_is_killed_and_a_chosen_one_is_kept(tmp_path):
+	"""user_data_dir=None makes a temporary Chrome profile. It must not outlive the browser (thousands of them once
+	filled a disk), while a profile directory the caller chose is theirs and stays."""
+	from pathlib import Path
+
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=False))
+	await session.start()
+	throwaway = Path(str(session.browser_profile.user_data_dir))
+	assert throwaway.is_dir() and any(throwaway.iterdir()), throwaway
+	await session.kill()
+	assert not throwaway.exists(), f'temporary profile left behind: {throwaway}'
+
+	chosen = tmp_path / 'profile'
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=chosen, keep_alive=False))
+	await session.start()
+	await session.kill()
+	assert chosen.is_dir() and any(chosen.iterdir()), 'a profile the caller chose is never deleted'
+
+
 class TestBrowserSessionReusePatterns:
 	"""Tests for all browser re-use patterns documented in docs/customize/real-browser.mdx"""
 

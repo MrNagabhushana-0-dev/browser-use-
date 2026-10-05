@@ -89,6 +89,7 @@ class LocalBrowserWatchdog(BaseWatchdog):
 		for temp_dir in self._temp_dirs_to_cleanup:
 			self._cleanup_temp_dir(temp_dir)
 		self._temp_dirs_to_cleanup.clear()
+		self._remove_throwaway_profile(self.browser_session.browser_profile.user_data_dir)
 
 		# Restore original user_data_dir if it was modified
 		if self._original_user_data_dir is not None:
@@ -518,6 +519,21 @@ class LocalBrowserWatchdog(BaseWatchdog):
 		except Exception:
 			# Ignore any other errors during cleanup
 			pass
+
+	def _remove_throwaway_profile(self, user_data_dir: str | Path | None) -> None:
+		"""Delete the temporary profile the library made for user_data_dir=None (or a temp copy of a real profile).
+
+		Only a directory directly in the system temp dir with the library's prefix, and only once no live Chrome
+		holds it: a profile the caller chose is theirs, and one shared with a still-running browser stays.
+		"""
+		if not user_data_dir:
+			return
+		path = Path(user_data_dir)
+		ours = path.name.startswith('browser-use-user-data-dir-') and path.parent == Path(tempfile.gettempdir())
+		if not ours or not path.is_dir() or _profile_holder_pid(path):
+			return
+		shutil.rmtree(path, ignore_errors=True)
+		self.logger.debug(f'[LocalBrowserWatchdog] Removed temporary profile {path}')
 
 	def _cleanup_temp_dir(self, temp_dir: Path | str) -> None:
 		"""Clean up temporary directory.

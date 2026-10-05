@@ -6,7 +6,6 @@ Sets up environment variables to ensure tests never connect to production servic
 
 import os
 import socketserver
-import tempfile
 from unittest.mock import AsyncMock
 
 import pytest
@@ -43,9 +42,6 @@ def setup_test_environment():
 	"""
 	Automatically set up test environment for all tests.
 	"""
-
-	# Create a temporary directory for test config (but not for extensions)
-	config_dir = tempfile.mkdtemp(prefix='browseruse_tests_')
 
 	original_env = {}
 	test_env_vars = {
