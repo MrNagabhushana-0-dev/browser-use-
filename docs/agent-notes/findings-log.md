@@ -1092,3 +1092,51 @@ silence" reading was this same failure, misread from a probe that printed only t
 4. Media-borne prompt-injection tests.
 5. `find` and `zoom` in Retinat.
 6. Opt-in desktop eyes.
+
+## Round 23 (unattended loop): a player's next source was reported as silence
+
+**Item.** Act on the capture track's state, the top of Round 22's list. Probing it first turned up a worse,
+real defect.
+
+**Found.** A playlist-style page swaps `src` on the same `<video>` 2.5 s in, from a 440 Hz tone to a 550 Hz one.
+The percept said `sound: silence; silent` for the second source while it played a tone. It also read the new
+source's restart at 0 as a rewind of the first item, which cut the first item's sound down to its last 0.14 s.
+
+**Cause, from the specs.**
+- The ear built a `MediaStream` from a snapshot of the element's tracks. Web Audio (`MediaStreamAudioSourceNode`
+  constructor) sorts audio tracks by `id`, takes the first, and says later changes to the stream do not affect it.
+  So after a source change the ear stayed on the old track.
+- mediacapture-fromelement: the captured tracks change when the source changes, and new ones arrive by
+  `addtrack`. Following `addtrack` alone was intermittent (one silent run in two). In that run the tapped
+  track read `live` while silent, which fits both tracks being live at that moment and the id sort picking the old
+  one. Chrome's ordering of end/remove/add was not observed directly.
+- `attend` polls every 250 ms, so the new source's first frames and hops carried the old item's id.
+
+**Fixed (`53de564`).**
+- The retina taps exactly one track, the newest live one.
+- It re-hears on `addtrack`, and from the heartbeat when its track has ended or left the stream.
+- A sample, frame or hop, whose element source no longer matches the attended one triggers `attend()` before it
+  is stamped, and an audio hop caught mid-change is dropped.
+- Percepts carry `deaf` spans from the heartbeat's track field and print
+  `sound unknown t0-t1 (the capture track was muted/ended)` for them.
+
+**Measured.**
+- The new swap test passed 4/4 after the fix. Before it: 0/1 with no fix, and 1/2 with the `addtrack`-only fix.
+- Eyes + Retinat + eyesbench: 49/49.
+- Full `tests/ci`: **1,571 passed, 30 skipped, 0 failed** (21m59s).
+
+**Not measured.**
+- A real muted or ended track in a browser. Nothing on a test page can mute a capture track on demand, so
+  `deaf_spans` and the percept line are tested on real `RetinaEvent`s, not live.
+- MSE players that swap `SourceBuffer`s rather than `src`, which is how most real feeds change reels.
+- The span edges are only as fine as the 1 s heartbeat.
+
+**Next, in order:**
+1. MSE source swaps: a test page that appends a second stream's segments into one `MediaSource`, checking that
+   sound follows and the item boundary is right.
+2. Reproduce the cross-process launch race (two MCP server processes starting Chrome on one profile at once) and
+   fix it.
+3. More eyesbench tasks (carousel, live chart peak, spoken instruction, WebGL letter) plus static twins.
+4. Media-borne prompt-injection tests.
+5. `find` and `zoom` in Retinat.
+6. Opt-in desktop eyes.
