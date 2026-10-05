@@ -1263,3 +1263,68 @@ stalled with a setup error in `test_cross_origin_click.py`. Neither had anything
 5. `find` and `zoom` in Retinat.
 6. Opt-in desktop eyes.
 7. Drop strays from `motion.track` and the "covering" span too.
+
+## Round 26 (unattended loop): the full-run-only eyes timeout, measured and made survivable
+
+**Item.** The eyes failure that only shows deep in a full run: a keyframe `Runtime.evaluate` gets no reply for 20 s
+(Round 25, and task #43 since Round 8).
+
+**Measured: the shared event loop is not being blocked.** All ~1,600 tests share one session-scoped asyncio loop.
+A long-lived leaked task making a synchronous call would explain a 20 s timeout. Round 9 tested a busy loop, not a
+blocked one.
+- A new pytest plugin, `docs/agent-notes/e2e/loopwatch.py`, runs a watchdog thread. It logs every stall of over 1 s
+  while the loop is running, with the test, and dumps the main thread's stack for stalls over 3 s.
+- Whole run on `80ca07b`: green, 1,574 passed. Only 2 stalls (1.7 s in the eyes `search` test, 1.1 s in a
+  multi-act test) and none over 3 s.
+- So a blocked Python loop is not what normally happens late in a run. Whether one coincides with the red runs
+  is still unmeasured, because none has failed under the watchdog yet.
+
+**Fixed (`908915e`): a page that stops answering costs the pictures, not the watch.**
+- The frames and sound are already held when the keyframe JPEGs are read from the page.
+- `Retina.read_keyframes` returns the images plus, on a timeout, a diagnosis from a 2 s probe: the page's main
+  thread is busy or hung, or it answers again and only the read stuck.
+- The percept says `no keyframe images: ...` and skips further reads within that percept.
+- Finding the isolated world now shares `evaluate`'s timeout; before, it could wait unbounded.
+- A real test page busies its main thread for 10 s mid-watch. The watch returns in under 7 s with its frames and
+  the reason. Before, it waited out the stall (or raised at 20 s).
+- The original failure will no longer fail the feed test. It now shows up as a `keyframes:` warning in the run log,
+  which each full run is grepped for.
+
+**Measured.**
+- Eyes + Retinat + eyesbench: 52/52. One earlier run of the same three files failed at
+  `test_cuts_and_sounds_are_found_where_they_are` after 20 s, and its error text was not kept. That test then passed
+  8/8 in a loop, so it is unexplained, not a "flake".
+- Full `tests/ci` on `908915e` with the watchdog: **red**, 1 failed and 967 passed before stopping, on a different eyes
+  test (below). One stall in the whole run (1.2 s, unrelated), and no `keyframes:` warning.
+
+**That red run, traced and fixed (`8519c06`): a browse sheet in glimpse order.**
+- `test_browse_watches_each_reel_once_and_puts_them_on_one_sheet` listed the reels as first, third, second.
+- The log shows the real scroll-snap flick overshot under load, and the correction landed back on the second reel.
+  Browse then watched first, second, third, as intended.
+- But `perceive` orders items by first appearance in the samples, and the third reel had been glimpsed during the
+  overshoot.
+- Fix: `browse` now records the item each step ended on and passes it to `perceive(order=...)`. Anything only
+  glimpsed comes after.
+- The test now also runs on the overshoot feed, where the first flick always carries two reels. That reproduced the
+  failure deterministically, and it passes 4/4 on both feeds after the fix.
+- Eyes + Retinat + eyesbench: 53/53.
+- Full `tests/ci` on `8519c06` with the watchdog: **green, 1,576 passed, 30 skipped, 0 failed** (21m37s). Three
+  stalls in the whole run (1.0-1.5 s) and no `keyframes:` warnings.
+
+**Not measured.**
+- The root cause of the 20 s silence. The probe now says, next time, whether the renderer's main thread was hung or
+  only the read stuck.
+- Whether the background archiver should back off after a timeout. It currently retries every 2 s and waits up to
+  `keyframes_timeout` each time while a page is hung.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it. If the keyframe timeout recurs, read the
+   probe's diagnosis (renderer hung, or only the read stuck) and follow that.
+2. Let the archiver back off after a keyframe timeout, instead of waiting on a hung page every 2 s.
+3. Reproduce the cross-process launch race (two MCP server processes starting Chrome on one profile at once) and
+   fix it.
+4. More eyesbench tasks (carousel, live chart peak, spoken instruction, WebGL letter) plus static twins.
+5. Media-borne prompt-injection tests.
+6. `find` and `zoom` in Retinat.
+7. Opt-in desktop eyes.
+8. Drop strays from `motion.track` and the "covering" span too.
