@@ -812,3 +812,25 @@ async def test_search_finds_the_moment_by_what_it_looks_like(eyes, session, site
 		assert found.frames, found.text
 		top_t = found.frames[0][0]
 		assert lo - 0.3 <= top_t <= hi + 0.3, (query, top_t, found.text)
+
+
+def test_colours_are_named_by_hue_as_people_name_them():
+	# Pure cyan was called "teal" (nearest neighbour in RGB to a dark teal swatch); agents had to overrule it.
+	named = {
+		(0, 255, 255): 'cyan',
+		(255, 0, 255): 'magenta',
+		(0, 255, 0): 'green',
+		(255, 255, 0): 'yellow',
+		(255, 0, 0): 'red',
+		(0, 0, 255): 'blue',
+		(255, 122, 0): 'orange',
+		(0, 128, 128): 'dark cyan',
+		(120, 75, 40): 'brown',
+		(230, 120, 180): 'pink',
+		(130, 50, 170): 'purple',
+		(16, 20, 24): 'black',
+		(128, 128, 128): 'grey',
+		(245, 245, 245): 'white',
+	}
+	got = {rgb: sight.colour_name(rgb) for rgb in named}
+	assert got == named, {rgb: (got[rgb], want) for rgb, want in named.items() if got[rgb] != want}

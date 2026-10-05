@@ -27,6 +27,7 @@ the same framing look alike; text changing on a static background is nearly invi
 slow fade is reported as a cut where it changes fastest, or not at all.
 """
 
+import colorsys
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -52,20 +53,19 @@ LOOP_END_S = 0.6
 # Width of the similarity kernel, in grid-distance units.
 SIGMA = 14.0
 
-_PALETTE = {
-	'black': (15, 15, 15),
-	'grey': (128, 128, 128),
-	'white': (240, 240, 240),
-	'red': (200, 30, 30),
-	'orange': (230, 130, 30),
-	'yellow': (225, 210, 40),
-	'green': (40, 160, 60),
-	'teal': (30, 150, 150),
-	'blue': (40, 70, 200),
-	'purple': (130, 50, 170),
-	'pink': (230, 120, 180),
-	'brown': (120, 75, 40),
-}
+# Upper hue bound (degrees) of each colour name, in order around the wheel.
+_HUES = (
+	(15, 'red'),
+	(45, 'orange'),
+	(70, 'yellow'),
+	(160, 'green'),
+	(200, 'cyan'),
+	(255, 'blue'),
+	(285, 'purple'),
+	(330, 'magenta'),
+	(345, 'pink'),
+	(361, 'red'),
+)
 
 
 @dataclass
@@ -119,15 +119,22 @@ def motion_word(motion: float) -> str:
 
 
 def colour_name(rgb: tuple[int, int, int] | np.ndarray) -> str:
+	"""The colour a person would say, from the hue (HSV), with lightness words for the unsaturated and dark.
+
+	Hue sectors, not nearest swatch in RGB: the nearest-swatch namer called pure cyan "teal".
+	"""
 	r, g, b = (float(x) for x in rgb)
 	top, bottom = max(r, g, b), min(r, g, b)
 	if top - bottom < 28:  # unsaturated: name it by lightness alone
 		return 'black' if top < 45 else 'white' if bottom > 200 else 'dark grey' if top < 100 else 'grey'
-	best = min(
-		(name for name in _PALETTE if name not in ('black', 'grey', 'white')),
-		key=lambda n: sum((a - c) ** 2 for a, c in zip((r, g, b), _PALETTE[n])),
-	)
-	return f'dark {best}' if top < 90 else best
+	h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+	hue = h * 360
+	if 10 <= hue < 45 and v < 0.6:
+		return 'brown'
+	name = next(n for limit, n in _HUES if hue < limit)
+	if name in ('red', 'magenta') and s < 0.6 and v > 0.7:
+		name = 'pink'
+	return f'dark {name}' if v < 0.55 else name
 
 
 def colourfulness(frames: list[FrameSample]) -> tuple[float, list[str]]:
