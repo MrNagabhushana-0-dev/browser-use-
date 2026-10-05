@@ -1058,3 +1058,37 @@ failures, both explained above.
 4. Media-borne prompt-injection tests.
 5. `find` and `zoom` in Retinat.
 6. Opt-in desktop eyes.
+
+## Round 22 (unattended loop): the "audio captured as silence" mode, caught under load
+
+**How it was caught.** The asked-late beeps CI test was looped under CPU load: three busy processes on four cores,
+with a temporary probe logging the retina's audio state and the hearing analysis. It failed 2 of 8. In both
+failures:
+- the audio was captured fine (worklet running, peak -7.4 dB, the same as passing runs);
+- the onsets were exact (1.55, 5.46, 6.36, 8.57).
+
+Segmentation had folded the 120 ms beeps into silence and labelled one 0.4 s blip "speech". As the only
+non-silence segment, that blip made "mostly speech" true, and the count was vetoed. Round 21's "captured as
+silence" reading was this same failure, misread from a probe that printed only the kinds.
+
+**Fixed.**
+- **The veto now needs real talk or music:** at least 2 s of it (`VOICED_VETO_S`) as well as a majority of what was
+  heard.
+- **The retina's state heartbeat reports the capture track** as live, muted or ended. A muted or ended track
+  delivers silence, so this is the evidence to check when silence is suspect.
+- **Results:** under the same load, 10/10 (was 6/8). Eyes + Retinat + eyesbench: 47/47. Full `tests/ci` on
+  `ca33d6b`: **1,569 passed, 30 skipped, 0 failed**.
+
+**Not measured.**
+- The percept does not yet act on `track` (for example, saying "the audio track was muted, sound unknown").
+- The heuristic speech classifier still misreads short tones. This fix only stops that misreading from vetoing
+  counts.
+
+**Next, in order:**
+1. Use the track state in percepts: muted or ended for a stretch means sound is unknown, not silent.
+2. Reproduce the cross-process launch race (two MCP server processes starting Chrome on one profile at once) and
+   fix it.
+3. More eyesbench tasks (carousel, live chart peak, spoken instruction, WebGL letter) plus static twins.
+4. Media-borne prompt-injection tests.
+5. `find` and `zoom` in Retinat.
+6. Opt-in desktop eyes.
