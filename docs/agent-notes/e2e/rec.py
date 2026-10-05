@@ -1,5 +1,7 @@
-import json, sys
+import json
+import sys
 from pathlib import Path
+
 p = Path(__file__).parent / 'results.json'
 r = json.loads(p.read_text())
 rid, answer, tokens, ms, calls = sys.argv[1:6]

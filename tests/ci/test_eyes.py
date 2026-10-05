@@ -548,8 +548,11 @@ async def _feed_position(session) -> str:
 	return r['result']['value']
 
 
-async def test_browse_watches_each_reel_once_and_puts_them_on_one_sheet(eyes, session, site):
-	await _open(eyes, session, site.url_for('/feed'))
+@pytest.mark.parametrize('feed', ['/feed', '/overshoot-feed'])
+async def test_browse_watches_each_reel_once_and_puts_them_on_one_sheet(eyes, session, site, feed):
+	# On the overshoot feed the first flick carries the third reel into view before the correction brings the
+	# second back: the sheet is in the order the reels were watched, not the order they were first glimpsed.
+	await _open(eyes, session, site.url_for(feed))
 	p = await eyes.browse(items=3, max_seconds=4.0, min_seconds=1.0)
 	captions = [i.info.get('text', '') for i in p.items]
 	assert [c.split()[0] for c in captions] == ['@first', '@second', '@third'], (

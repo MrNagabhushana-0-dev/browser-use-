@@ -312,14 +312,14 @@ class Eyes:
 		transcribe: bool | None = None,
 		header: str | None = None,
 		text_since: float | None = None,
+		order: list[int] | None = None,
 	) -> Percept:
 		"""Build a percept from everything the retina gathered since `since` (monotonic time), and the page text
-		that appeared since `text_since` (default: `since`)."""
+		that appeared since `text_since` (default: `since`). `order` puts these items first, in this order."""
 		frames, hops, events = self._since(since)
-		order: list[int] = []
-		for vid in [f.vid for f in frames] + [h.vid for h in hops]:
-			if vid and vid not in order:
-				order.append(vid)
+		seen = [vid for vid in dict.fromkeys([f.vid for f in frames] + [h.vid for h in hops]) if vid]
+		# Items in the given order (what was watched, in turn), then anything else seen, in order of first sight.
+		order = [vid for vid in (order or []) if vid in seen] + [vid for vid in seen if vid not in (order or [])]
 		info_by_vid: dict[int, dict] = {}
 		for e in list(self.retina.events):
 			if e.type == 'attend' and e.data.get('vid'):
@@ -735,8 +735,11 @@ class Eyes:
 			await self.open()
 		start = time.monotonic()
 		log: list[str] = []
+		watched: list[int] = []  # the item each step watched, in order (a reel glimpsed while overshooting is not one)
 		for i in range(items):
 			p = await self.watch(seconds=max_seconds, until='bored', min_seconds=min_seconds, detail=detail, keyframes=keyframes)
+			if (vid := self.retina.attended.get('vid', 0)) and vid not in watched:
+				watched.append(vid)  # what the watch ended on (before it, a just-opened page may attend nothing yet)
 			log.append(f'item {i + 1}: {p.stop_reason}')
 			if i + 1 < items:
 				moved = await self.next()
@@ -749,7 +752,7 @@ class Eyes:
 					break
 		if hold:
 			await self._hold()
-		percept = await self.perceive(since=start, detail=detail, keyframes=keyframes)
+		percept = await self.perceive(since=start, detail=detail, keyframes=keyframes, order=watched)
 		percept.text = percept.text.replace('{REASON}', f'browsed {len(log) - sum(1 for x in log if x.startswith("  "))} item(s)')
 		percept.text += '\n' + '\n'.join(log)
 		percept.stop_reason = 'browsed'

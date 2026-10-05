@@ -4,7 +4,6 @@ cyan == aqua; yellow); count: the exact integer; toast id: the exact 5 digits. U
 
 import json
 import re
-import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
