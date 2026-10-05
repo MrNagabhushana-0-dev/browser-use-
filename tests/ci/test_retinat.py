@@ -164,3 +164,16 @@ async def test_after_a_video_page_a_text_page_is_seen_as_a_page_with_its_toast(r
 	assert 'no video playing' in _text(looked), _text(looked)
 	assert any(isinstance(b, types.ImageContent) for b in looked.content)
 	assert 'watching a video' not in _text(await _call(retinat, 'retinat_now', {}))
+
+
+async def test_beeps_asked_about_long_after_the_video_ended_are_still_counted(retinat, site, beeps):
+	# The question can come long after playback: the journal must hold the count (it only logged sound-class
+	# changes, and beeps over silence are none), and a watch must reach back past a 30 s cap the ring outlasts.
+	import asyncio
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/beeps')})
+	await asyncio.sleep(33.0)
+	changes = _text(await _call(retinat, 'retinat_changes', {}))
+	assert f'{beeps.truth["count"]} distinct sounds' in changes, changes
+	watched = _text(await _call(retinat, 'retinat_watch', {'seconds': 2, 'until': 'time'}))
+	assert f'distinct sounds: {beeps.truth["count"]}' in watched, watched

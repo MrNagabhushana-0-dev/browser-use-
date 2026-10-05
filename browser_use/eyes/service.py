@@ -61,8 +61,9 @@ BORED_NOVELTY = 0.04
 BORED_WINDOW_S = 2.0
 # Discrete sounds this recent (beeps, knocks, notifications) keep a still picture worth watching.
 BORED_SOUND_S = 4.0
-# How far back a watch reaches for what the item did before the call (the caller's own latency).
-BACKFILL_MAX_S = 30.0
+# How far back a watch reaches for what the item did before the call (the caller's own latency, or a question
+# asked long after). The retina's rings hold ~130 s of sound (MAX_HOPS) and ~150 s of frames at 10 fps.
+BACKFILL_MAX_S = 120.0
 # How long `next()` waits for the feed to show a different item after one gesture.
 NEXT_CONFIRM_S = 2.0
 # ...and how long the new item must stay attended to count as where the feed came to rest.
@@ -806,6 +807,20 @@ class Eyes:
 			parts.append('sound: ' + f['sound_text'])
 		return ' · '.join(parts)
 
+	def _distinct_sounds(self, vid: int) -> str | None:
+		"""'heard N distinct sounds (at ...)' for an item whose sound was sparse discrete events, else None.
+
+		Beeps over silence never change the sound class, so the class-change entries alone left a question asked
+		after playback with nothing to answer from.
+		"""
+		hops = [h for h in self.retina.hops if h.vid == vid]
+		if not hops:
+			return None
+		h = hearing.listen(hops, self.retina.state.get('sr'))
+		if not h.heard or not 0 < len(h.onsets) <= 16 or 'speech' in h.kinds or 'music' in h.kinds:
+			return None
+		return f'heard {len(h.onsets)} distinct sounds (at ' + ', '.join(sight.fmt_t(t) for t in h.onsets) + ')'
+
 	def _journal(self, f: dict[str, Any]) -> None:
 		"""Append what changed since the last entry: page, item, sound or play state. Never every tick."""
 		if self.journal_path is None:
@@ -825,7 +840,12 @@ class Eyes:
 			if f.get('sound') and f.get('sound') != last.get('sound'):
 				entries.append(('sound', f'sound became {f["sound_text"]}'))
 			if 'paused' in last and f.get('paused') != last.get('paused'):
+				if f.get('paused') and (heard := self._distinct_sounds(vid)):
+					entries.append(('sound', heard))
 				entries.append(('state', 'paused' if f.get('paused') else 'playing again'))
+		if vid != last.get('vid') and last.get('vid') and not last.get('paused'):
+			if heard := self._distinct_sounds(last['vid']):  # leaving an item mid-play: say what it sounded like
+				entries.insert(0, ('sound', heard))
 		self._journaled = {**last, **{k: f.get(k) for k in ('url', 'vid', 'sound', 'paused')}}
 		texts, self._pending_text = self._pending_text, []
 		entries += [('text', f'text appeared: "{t[:160]}"') for t in texts]
