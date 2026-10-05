@@ -334,6 +334,7 @@ class Eyes:
 		k = keyframes or KEYFRAMES[detail]
 		do_speech = self.speech if transcribe is None else (transcribe and asr.available())
 		items: list[ItemPercept] = []
+		trouble: str | None = None
 		for vid in order:
 			f = [x for x in frames if x.vid == vid]
 			h = [x for x in hops if x.vid == vid]
@@ -348,7 +349,11 @@ class Eyes:
 			first_pass = [sh for sh in seen.shots if not sh.after_loop]
 			selection = sight.select_keyframes(f, min(2 * k, max(k, len(first_pass))))
 			seqs = [f[i].seq for i in selection.indices]
-			jpegs = await self.retina.keyframes(seqs) if seqs else []
+			# Once the page has failed to hand over images in this percept, do not wait on it again per item.
+			if trouble:
+				jpegs: list[bytes | None] = [None] * len(seqs)
+			else:
+				jpegs, trouble = await self.retina.read_keyframes(seqs)
 			walls = [x.wall for x in f] + [x.wall for x in h]
 			self._items_seen = max(self._items_seen, vid)
 			items.append(
@@ -372,6 +377,8 @@ class Eyes:
 		page = self.retina.state.get('url', '')
 		head = header or f'👁 {len(items)} item(s) watched on {page[:120]} · stopped: {{REASON}}'
 		head += _text_lines(self.retina.events, since if text_since is None else text_since, self.retina.page_since)
+		if trouble:
+			head += f'\n    no keyframe images: {trouble}'
 		return assemble(items, head, detail)
 
 	async def _show_page(self, percept: Percept) -> None:

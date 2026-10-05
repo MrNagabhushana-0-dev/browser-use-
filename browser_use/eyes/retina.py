@@ -102,6 +102,7 @@ class Retina:
 		self.hops: deque[AudioHop] = deque(maxlen=MAX_HOPS)
 		self.events: deque[RetinaEvent] = deque(maxlen=MAX_EVENTS)
 		self.state: dict[str, Any] = {}
+		self.keyframes_timeout = 20.0  # seconds to wait for the page to hand over keyframe images
 		self.attended: dict[str, Any] = {}
 		self.page_since = 0.0  # monotonic time the current page's first report arrived
 		self.target_id: str | None = None
@@ -192,19 +193,17 @@ class Retina:
 	async def evaluate(self, expression: str, timeout: float = 10.0) -> Any:
 		"""Run JS in the retina's world and return its (JSON) value."""
 		assert self._cdp is not None, 'retina not started'
-		context_id = await self._context_id()
-		result = await asyncio.wait_for(
-			self._cdp.cdp_client.send.Runtime.evaluate(
-				params={
-					'expression': expression,
-					'contextId': context_id,
-					'awaitPromise': True,
-					'returnByValue': True,
-				},
+		cdp = self._cdp
+
+		async def run() -> dict[str, Any]:
+			# Finding the world needs the renderer too: it shares the timeout rather than wait unbounded.
+			context_id = await self._context_id()
+			return await cdp.cdp_client.send.Runtime.evaluate(
+				params={'expression': expression, 'contextId': context_id, 'awaitPromise': True, 'returnByValue': True},
 				session_id=self._session_id,
-			),
-			timeout=timeout,
-		)
+			)
+
+		result = await asyncio.wait_for(run(), timeout=timeout)
 		if result.get('exceptionDetails'):
 			details = result['exceptionDetails']
 			text = (details.get('exception') or {}).get('description') or details.get('text')
@@ -212,11 +211,35 @@ class Retina:
 		return (result.get('result') or {}).get('value')
 
 	async def keyframes(self, seqs: list[int]) -> list[bytes | None]:
-		"""JPEG bytes of the keyframes taken at these sample numbers (None if evicted)."""
+		"""JPEG bytes of the keyframes taken at these sample numbers (None if evicted, or if the page did not answer)."""
+		return (await self.read_keyframes(seqs))[0]
+
+	async def read_keyframes(self, seqs: list[int]) -> tuple[list[bytes | None], str | None]:
+		"""Like keyframes(), plus why they are all missing when the page did not hand them over in time."""
 		if not seqs:
-			return []
-		urls = await self.evaluate(f'window.__retina.keyframes({json.dumps(list(seqs))})', timeout=20.0)
-		return [_decode_data_url(u) for u in (urls or [None] * len(seqs))]
+			return [], None
+		try:
+			urls = await self.evaluate(f'window.__retina.keyframes({json.dumps(list(seqs))})', timeout=self.keyframes_timeout)
+		except TimeoutError:
+			# What was seen and heard is already held; losing the pictures must not lose the watch.
+			why = await self._why_no_answer()
+			logger.warning(f'👁️ keyframes: {why}')
+			return [None] * len(seqs), why
+		return [_decode_data_url(u) for u in (urls or [None] * len(seqs))], None
+
+	async def _why_no_answer(self, probe_s: float = 2.0) -> str:
+		"""After a read timed out: is the renderer answering at all, or only that read stuck?"""
+		assert self._cdp is not None
+		try:
+			await asyncio.wait_for(
+				self._cdp.cdp_client.send.Runtime.evaluate(params={'expression': '1'}, session_id=self._session_id),
+				timeout=probe_s,
+			)
+		except TimeoutError:
+			return f'the page did not answer in {self.keyframes_timeout:.0f}s, and its main thread is busy or hung'
+		except Exception as e:
+			return f'the page did not answer in {self.keyframes_timeout:.0f}s, and then failed: {type(e).__name__}: {e}'
+		return f'the page did not answer in {self.keyframes_timeout:.0f}s, though it answers now (the read itself stuck)'
 
 	async def snapshot(self, width: int = 480) -> bytes | None:
 		"""A JPEG of the attended video's current frame, drawn from the element (not the screen)."""

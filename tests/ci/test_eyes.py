@@ -209,6 +209,10 @@ load('b'); setTimeout(() => load('c'), 2500);
 </script>"""
 
 
+# The page's main thread busy for 10 s, 1.5 s in: nothing in the page can answer until it is done.
+STALL = '<script>setTimeout(() => { const t = performance.now(); while (performance.now() - t < 10000) {} }, 1500)</script>'
+
+
 @pytest.fixture(scope='module')
 def site(media):
 	server = HTTPServer()
@@ -241,6 +245,9 @@ def site(media):
 	)
 	server.expect_request('/mse-swap').respond_with_data(
 		PLAYER.format(src='', attrs='id=v', extra=MSE_SWAP).replace(' src=""', ''), content_type='text/html'
+	)
+	server.expect_request('/stall').respond_with_data(
+		PLAYER.format(src='/calib.webm', attrs='autoplay', extra=STALL), content_type='text/html'
 	)
 	server.expect_request('/none').respond_with_data('<!doctype html><p>no video here</p>', content_type='text/html')
 	yield server
@@ -378,6 +385,20 @@ def test_a_capture_track_that_was_not_live_is_unknown_sound_not_silence():
 	text = describe_item(item)
 	assert 'sound unknown 2.0s-4.0s (the capture track was muted)' in text, text
 	assert 'sound unknown 5.0s-6.0s (the capture track ended)' in text, text
+
+
+async def test_a_page_that_stops_answering_costs_the_pictures_not_the_watch(eyes, session, site):
+	# What was seen and heard before the page hung is already held; only the keyframe images have to be read
+	# from the page. Their timing out must leave a percept that says so, not an exception.
+	await _open(eyes, session, site.url_for('/stall'))
+	eyes.retina.keyframes_timeout = 1.0
+	loop = asyncio.get_event_loop()
+	t0 = loop.time()
+	p = await eyes.watch(seconds=2.0, until='time')
+	assert loop.time() - t0 < 7.0, 'the watch gives up on the page after the keyframe timeout and a probe, not 10 s'
+	assert p.items and p.items[0].frames, p.text
+	assert 'no keyframe images' in p.text and 'did not answer' in p.text, p.text
+	await asyncio.sleep(6.0)  # let the page finish its stall before the next test
 
 
 async def test_keyframes_are_the_videos_own_pixels_not_a_screenshot(eyes, session, site):
