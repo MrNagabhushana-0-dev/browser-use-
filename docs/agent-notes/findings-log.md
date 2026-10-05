@@ -1196,3 +1196,70 @@ timecode before the previous block"). Each track appends cleanly alone, and VP9+
 4. Media-borne prompt-injection tests.
 5. `find` and `zoom` in Retinat.
 6. Opt-in desktop eyes.
+
+## Round 25 (unattended loop): one stray sample can no longer cut an item short
+
+**Item.** Robustness to a single backward sample, the top of Round 24's list. Round 24 removed the known source of
+such samples. This round removes the fragility itself.
+
+**Changed (`ea29042`).**
+- New `sight.strays(ts, jump)`: a jump back in media time is believed only when the next `CONFIRM_JUMP` (2)
+  samples carry on from where it landed, as a loop or a seek does.
+- A lone backward sample, or one with nothing after it, is dropped before `sight.read` and `hearing.listen`
+  analyse the item.
+- Both now share `LOOP_JUMP_S` (0.4 s); hearing had its own literal.
+
+**Measured.**
+- New unit test on real `FrameSample`/`AudioHop` objects. A stray at time 0 at the tail, or in the middle, of a
+  0-2.3 s tone used to report a rewind at 2.3 s. Now it gives no loop or rewind, and one segment covering 0-2.3 s.
+  A real loop (three samples carrying on from 0) is still found.
+- Eyes + Retinat + eyesbench: 51/51. That includes the looping feed reels and the loop and keyframe tests.
+- Full `tests/ci` on `2bb028e` (both commits): first run **red**, 1 failed and 961 passed before stopping. `test_a_flick_moves_the_feed_and_next_confirms_it_by_sight` timed out after 20 s fetching keyframes (`Runtime.evaluate` got no reply).
+  - The same test then passed 8/8 alone, and the whole eyes file passed 3/3 (38/38 each).
+  - The rerun on the same commit was **green: 1,574 passed, 30 skipped, 0 failed** (21m21s).
+  - This is the long-open eyes full-suite flake: it only shows deep into a full run. Its cause is still unknown and it is now at the top of Next.
+
+**Not measured.**
+- A real loop whose wrap is caught by only the last one or two samples of a watch is no longer reported. Those
+  samples are dropped, so the percept loses at most about 0.2 s of a repeat it would have called a loop.
+- `motion.track` and the percept's "covering t0-t1" still read the raw samples. A stray can stretch "covering" back
+  to 0. That is cosmetic, but not fixed.
+
+**Then the disk filled up.** The first full-suite run on `ea29042` was killed at its 1 h limit, and a rerun
+stalled with a setup error in `test_cross_origin_click.py`. Neither had anything to do with the change: the disk had
+5.8 MB free. `/tmp` held over 100,000 leftovers from this branch's repeated suite runs:
+- 86,908 empty `browseruse_tests_*` dirs, from a dead `mkdtemp` in `tests/ci/conftest.py` that ran once per test
+  and was never used;
+- 10,922 `browser-use-user-data-dir-*` Chrome profiles, which held the actual space.
+
+**Library leak fixed (`2bb028e`).**
+- With `user_data_dir=None` the profile validator makes a temp Chrome profile, and nothing deleted it: the watchdog
+  only cleaned its own `browseruse-tmp-*` dirs. The same was true of a temp copy of a real Chrome profile, cookies
+  included.
+- On `BrowserKillEvent` the watchdog now removes the profile dir, but only one directly in the system temp dir with
+  the library's prefix, and only when no live Chrome holds it. A profile the caller chose is never touched; the new
+  test checks both cases.
+- The dead `mkdtemp` in conftest is gone.
+- Deleting the leftovers took free space from 5.8 MB to 26 GB.
+- Browser/session tests: 96 passed, 4 skipped. After that run the only new leftovers were empty 4 KB dirs.
+- A full run now leaves about 266 empty dirs, 1.1 MB in all. Before, each run left about 1,600 real profiles, gigabytes in all.
+
+**Also not measured.**
+- The validator still makes an empty temp dir each time a profile is built with `user_data_dir=None`, including
+  profiles that are never launched. These are 4 KB each and only deleted if a browser is launched on them and
+  killed. Making the dir lazy would change `user_data_dir`'s type and is left alone.
+- `browser-use-downloads-*` dirs (9,993) are also never removed. They can hold a user's downloads, so the library
+  does not delete them. A test-only cleanup would be the safe fix.
+- A session that is stopped without being killed (`keep_alive=True`) keeps its profile, which is intended.
+
+**Next, in order:**
+1. The eyes full-suite flake. A keyframe `Runtime.evaluate` gets no reply for 20 s, only after about 960 earlier tests.
+   Log the renderer's state (`Inspector.targetCrashed`, target info) when it happens, and run the eyes file after the
+   browser tests to see whether it reproduces.
+2. Reproduce the cross-process launch race (two MCP server processes starting Chrome on one profile at once) and
+   fix it.
+3. More eyesbench tasks (carousel, live chart peak, spoken instruction, WebGL letter) plus static twins.
+4. Media-borne prompt-injection tests.
+5. `find` and `zoom` in Retinat.
+6. Opt-in desktop eyes.
+7. Drop strays from `motion.track` and the "covering" span too.
