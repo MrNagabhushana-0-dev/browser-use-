@@ -976,3 +976,69 @@ passed, 30 skipped, 0 failed** (21m35s).
 4. `find` and `zoom` in Retinat.
 5. Opt-in desktop eyes.
 6. Replay recording with cursor.
+
+## Round 21 (unattended loop): the end-to-end re-run, five seeds, four tasks, and "asked late"
+
+**MCP timeout fix verified.** After this run's container recycle both MCP servers connected; the previous two
+recycles had both timed out. `MCP_TIMEOUT=120000` in the checkout-local `.claude/settings.json` took effect.
+
+**Method.** As in Round 18: blind general-purpose sub-agents, one way of seeing each, random URLs, truth only in
+the scorer, rules fixed first. This time:
+- seeds 31-35 (new);
+- four tasks, including the canvas bounce;
+- `retinat_changes` was available.
+
+DOM state ran only on the toast; on video and canvas it cannot apply (0/9 in Round 18). The new **asked-late**
+variant has two phases: the agent opens the page with no question, and gets it about 30 s later, when the event is
+over. Phases are joined by resuming the same agent, and tokens are summed. The audit found 0 non-Chrome requests.
+Harness and raw data are in `docs/agent-notes/e2e/` (`host2.py`, `results-2026-10-05.json`).
+
+**Results (66 runs):**
+
+| Condition | Flash | Beeps | Toast | Bounce | Mean tokens |
+|---|---|---|---|---|---|
+| Retina (5 seeds) | **5/5** | **5/5** | **5/5** | **5/5** | ~55.8k |
+| Screenshots (5 seeds) | 0/5 | 0/5 | 3/5 | 0/5 | ~79.9k |
+| DOM state (5 seeds) | - | - | 0/5 | - | ~59.0k |
+| Retina, asked late (3) | 3/3 | 0/3 -> **3/3 after the fix** | 3/3 | - | ~117.5k |
+| Screenshots, asked late (3) | 0/3 | 0/3 | 0/3 | - | ~119.5k |
+
+Retina runs were mostly two calls (open, watch). Toasts went open + `retinat_changes` + one look. Asked late, flash
+and toast were answered from `retinat_changes` and `retinat_recall` alone. The screenshot agents caught 3 of 5
+toasts, the ones shown early, in 2-4 shots. Asked late, they sometimes re-navigated to replay the page, which never
+helped.
+
+**What the asked-late runs found, all fixed and re-measured.** Beeps asked late were 0/3 before the fixes: one
+UNKNOWN, one "4" (truth 7), and one confident "0" (truth 3). Three causes:
+1. The journal logged only changes of sound class, and beeps over silence are none. It now writes
+   "heard N distinct sounds (at ...)" when an item pauses or is left.
+2. `watch`'s 30 s backfill no longer reached the start. It now reaches up to 120 s; the rings hold ~130 s of
+   sound and ~150 s of frames.
+3. A percept that covered only the paused tail said "silence, 0 onsets" without saying the start was unheld,
+   which produced the confident wrong "0". Items now state "covering <t0>-<t1>" and say plainly when the start
+   was not held.
+
+Post-fix, the same three pages with fresh blind agents scored 3/3: two from `retinat_changes` alone, one from
+`watch`. These are labelled "postfix" in the data and are not mixed into the pre-fix row.
+
+**Also observed:**
+- **Launch race:** both servers launched Chrome at the same moment on one profile. The screenshot agent's first
+  navigate failed, and the retry worked thanks to Round 18's failed-launch reset. An in-process two-session race
+  test did not reproduce it (3/3 passed), so it is recorded as unreproduced rather than "fixed".
+- **Colour label:** pure cyan (#00ffff) is labelled "teal" in percept text. Agents corrected it from the keyframe,
+  but the label is wrong.
+
+**Not measured.**
+- One model family.
+- Local seeded pages, not real sites.
+- Asked-late runs used 3 seeds each.
+- The post-fix late beeps re-run reused pages already seen by other agents. The agents are fresh and the media is
+  static, but it is not an independent seed set.
+
+**Next, in order:**
+1. Fix the colour names (cyan, not teal) with a test.
+2. Reproduce the cross-process launch race (two MCP server processes) and fix it.
+3. More eyesbench tasks (carousel, live chart peak, spoken instruction, WebGL letter) plus static twins.
+4. Media-borne prompt-injection tests.
+5. `find` and `zoom` in Retinat.
+6. Opt-in desktop eyes.

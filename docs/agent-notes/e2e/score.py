@@ -26,12 +26,12 @@ if __name__ == '__main__':
 	rows = []
 	for rid, res in results.items():
 		if ':' in rid:
-			print(f'pre-fix {rid.split(":", 1)[1]}: {res["answer"]!r} vs {truth[rid.split(":", 1)[1]]["truth"]!r}', correct(truth[rid.split(":", 1)[1]], res['answer']))
+			print(f'{rid.split(":", 1)[0]} {rid.split(":", 1)[1]}: {res["answer"]!r} vs {truth[rid.split(":", 1)[1]]["truth"]!r}', correct(truth[rid.split(":", 1)[1]], res['answer']))
 			continue
 		run = truth[rid]
 		rows.append((run['task'], run['condition'], correct(run, res['answer']), res['tokens'], res['seconds'], res['answer'], run['truth']))
-	for cond in ('retina', 'screenshots', 'dom'):
-		for task in ('flash', 'beeps', 'toast'):
+	for cond in ('retina', 'screenshots', 'dom', 'retina-late', 'screenshots-late'):
+		for task in ('flash', 'beeps', 'toast', 'bounce'):
 			rs = [r for r in rows if r[0] == task and r[1] == cond]
 			if rs:
 				print(f'{task:6} {cond:12} {sum(r[2] for r in rs)}/{len(rs)}  tokens~{sum(r[3] for r in rs) // len(rs):>6}  s~{sum(r[4] for r in rs) / len(rs):5.0f}  '
