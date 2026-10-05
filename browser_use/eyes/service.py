@@ -124,6 +124,7 @@ class Eyes:
 		self._items_seen = 0
 		self._reported: dict[int, float] = {}  # item id -> when a percept last covered it
 		self._last_percept_end = 0.0
+		self._sounds_noted: dict[int, str] = {}  # item id -> the distinct-sounds line last journaled for it
 		self._pages = None
 
 	# -- lifecycle -----------------------------------------------------------------------
@@ -813,13 +814,37 @@ class Eyes:
 		Beeps over silence never change the sound class, so the class-change entries alone left a question asked
 		after playback with nothing to answer from.
 		"""
-		hops = [h for h in self.retina.hops if h.vid == vid]
-		if not hops:
-			return None
-		h = hearing.listen(hops, self.retina.state.get('sr'))
-		if not h.heard or not 0 < len(h.onsets) <= 16 or 'speech' in h.kinds or 'music' in h.kinds:
-			return None
-		return f'heard {len(h.onsets)} distinct sounds (at ' + ', '.join(sight.fmt_t(t) for t in h.onsets) + ')'
+		return _sounds_line([h for h in self.retina.hops if h.vid == vid], self.retina.state.get('sr'))
+
+	def _note_sounds_soon(self, vid: int) -> None:
+		"""Journal an item's distinct sounds from a thread: leaving an item happens mid-swipe, when the event loop
+		is timing the feed and ~30 ms of analysis on it is unwelcome."""
+		hops, sr = [h for h in self.retina.hops if h.vid == vid], self.retina.state.get('sr')
+
+		def done(task: asyncio.Task) -> None:
+			heard = None if task.cancelled() or task.exception() else task.result()
+			if heard and self._sounds_noted.get(vid) != heard and self.journal_path is not None:
+				self._sounds_noted[vid] = heard
+				self._append_journal([('sound', heard)], vid, None)
+
+		try:
+			asyncio.get_running_loop().create_task(asyncio.to_thread(_sounds_line, hops, sr)).add_done_callback(done)
+		except RuntimeError:  # no running loop (called outside asyncio): skip rather than block
+			pass
+
+	def note_sounds(self) -> None:
+		"""Journal the current item's distinct sounds now if they changed since last noted.
+
+		For a reader asking between pauses (retinat_changes): the pause that would have noted them can come late
+		or not be seen at all, and the count should not depend on catching that transition.
+		"""
+		vid = self.retina.attended.get('vid') or self._journaled.get('vid')
+		if not vid or self.journal_path is None:
+			return
+		heard = self._distinct_sounds(vid)
+		if heard and self._sounds_noted.get(vid) != heard:
+			self._sounds_noted[vid] = heard
+			self._append_journal([('sound', heard)], vid, self.retina.state.get('t'))
 
 	def _journal(self, f: dict[str, Any]) -> None:
 		"""Append what changed since the last entry: page, item, sound or play state. Never every tick."""
@@ -840,17 +865,20 @@ class Eyes:
 			if f.get('sound') and f.get('sound') != last.get('sound'):
 				entries.append(('sound', f'sound became {f["sound_text"]}'))
 			if 'paused' in last and f.get('paused') != last.get('paused'):
-				if f.get('paused') and (heard := self._distinct_sounds(vid)):
+				if f.get('paused') and (heard := self._distinct_sounds(vid)) and self._sounds_noted.get(vid) != heard:
+					self._sounds_noted[vid] = heard
 					entries.append(('sound', heard))
 				entries.append(('state', 'paused' if f.get('paused') else 'playing again'))
 		if vid != last.get('vid') and last.get('vid') and not last.get('paused'):
-			if heard := self._distinct_sounds(last['vid']):  # leaving an item mid-play: say what it sounded like
-				entries.insert(0, ('sound', heard))
+			self._note_sounds_soon(last['vid'])  # leaving an item mid-play: say what it sounded like
 		self._journaled = {**last, **{k: f.get(k) for k in ('url', 'vid', 'sound', 'paused')}}
 		texts, self._pending_text = self._pending_text, []
 		entries += [('text', f'text appeared: "{t[:160]}"') for t in texts]
-		if not entries:
-			return
+		if entries:
+			self._append_journal(entries, vid, t)
+
+	def _append_journal(self, entries: list[tuple[str, str]], vid: int, t: Any) -> None:
+		assert self.journal_path is not None
 		at = time.time()
 		lines = [json.dumps({'at': at, 'kind': k, 'vid': vid, 't': t, 'text': text}) for k, text in entries]
 		self.journal_path.parent.mkdir(parents=True, exist_ok=True)
@@ -877,6 +905,20 @@ class Eyes:
 			tmp.replace(self.now_path)
 		except Exception as e:
 			logger.debug(f'eyes: could not write {self.now_path}: {type(e).__name__}: {e}')
+
+
+def _sounds_line(hops: list[AudioHop], sr: Any) -> str | None:
+	"""'heard N distinct sounds (at ...)' when the sound was sparse discrete events (beeps, knocks), else None."""
+	if not hops:
+		return None
+	h = hearing.listen(hops, sr)
+	if not h.heard or not 0 < len(h.onsets) <= 16:
+		return None
+	heard_s = sum(seg.duration for seg in h.segments if seg.kind != 'silence')
+	voiced_s = sum(seg.duration for seg in h.segments if seg.kind in ('speech', 'music'))
+	if heard_s and voiced_s > heard_s / 2:  # mostly talk or music: onsets there are syllables and notes, not events
+		return None
+	return f'heard {len(h.onsets)} distinct sounds (at ' + ', '.join(sight.fmt_t(t) for t in h.onsets) + ')'
 
 
 def _text_lines(events, since: float, page_since: float, limit: int = 12) -> str:

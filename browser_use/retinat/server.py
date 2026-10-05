@@ -411,6 +411,7 @@ class RetinatServer(BrowserUseServer):
 			from browser_use.eyes import hook
 
 			await eyes.retina.wait_for_data(1.2)  # let the latest batch land in the journal
+			eyes.note_sounds()  # the count of discrete sounds, even if no pause was seen to trigger it
 			assert eyes.now_path is not None, 'the eyes keep no journal (now_path=False)'
 			lines = hook.new_entries(eyes.now_path, limit=int(args.get('limit', 20)), reader='retinat')
 			return 'Changes since last asked:\n' + '\n'.join(lines) if lines else 'No changes since last asked.'

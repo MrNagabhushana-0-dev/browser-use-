@@ -97,6 +97,12 @@ class TestBrowserSessionStart:
 
 	async def test_user_data_dir_not_allowed_to_corrupt_default_profile(self):
 		"""Test user_data_dir handling for different browser channels and version mismatches."""
+		from browser_use.browser.watchdogs.local_browser_watchdog import _profile_holder_pid
+
+		if holder := _profile_holder_pid(CONFIG.BROWSER_USE_DEFAULT_USER_DATA_DIR):
+			# a running Chrome (e.g. an MCP server's) holds the default profile: launching on a temporary copy is
+			# then the right behaviour, and "the dir was not changed" cannot hold
+			pytest.skip(f'the default profile is held by a running Chrome (pid {holder})')
 		# Test 1: Chromium with default user_data_dir and default channel should work fine
 		session = BrowserSession(
 			browser_profile=BrowserProfile(
