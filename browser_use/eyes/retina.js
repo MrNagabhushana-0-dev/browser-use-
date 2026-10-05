@@ -169,7 +169,9 @@
 		text: nearbyText(v),
 	});
 
-	const srcOf = (v) => String(v.currentSrc || v.src || '');
+	// The src attribute first: setting it resets currentTime at once, while currentSrc keeps the old URL until
+	// resource selection runs, so a hop or frame in between would carry the old item's id at the new time 0.
+	const srcOf = (v) => String(v.src || v.currentSrc || '');
 
 	// An *item* is one thing watched: a new element, or the same element given a new source
 	// (virtualized feeds recycle a few <video> elements for every reel).

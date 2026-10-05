@@ -107,6 +107,10 @@ def media(tmp_path_factory):
 		],
 		str(root / 'speech.webm'),
 	)
+	# Streaming players keep one SourceBuffer per content type, so the stream is served as separate tracks.
+	for name in ('b', 'c'):
+		for kind in ('a', 'v'):
+			_run('-i', str(root / f'{name}.webm'), '-map', f'0:{kind}', '-c', 'copy', str(root / f'mse-{name}-{kind}.webm'))
 	return {p.name: p.read_bytes() for p in root.glob('*.webm')}
 
 
@@ -183,6 +187,28 @@ feed.addEventListener('touchend', e => { if (y0 === null) return;
 SWAP = "<script>setTimeout(() => { const v = document.getElementById('v'); v.src = '/c.webm'; v.play().catch(() => {}) }, 2500)</script>"
 
 
+# The same swap the way hls.js and Shaka do it: a fresh MediaSource per stream, its blob URL as the element's
+# source, the old one detached with removeAttribute('src'). The audio track only exists once a segment is in.
+MSE_SWAP = """<script>
+const v = document.getElementById('v');
+async function load(name) {
+  const ms = new MediaSource();
+  v.removeAttribute('src'); v.load();
+  v.src = URL.createObjectURL(ms);
+  await new Promise(r => ms.addEventListener('sourceopen', r, {once: true}));
+  // Every SourceBuffer is added before any data goes in, as players do: none can be added after.
+  const buffers = [['v', 'video/webm; codecs="vp9"'], ['a', 'audio/webm; codecs="opus"']].map(([k, type]) => [k, ms.addSourceBuffer(type)]);
+  await Promise.all(buffers.map(async ([k, sb]) => {
+    sb.appendBuffer(await (await fetch(`/mse-${name}-${k}.webm`)).arrayBuffer());
+    await new Promise(r => sb.addEventListener('updateend', r, {once: true}));
+  }));
+  ms.endOfStream();
+  v.play().catch(() => {});
+}
+load('b'); setTimeout(() => load('c'), 2500);
+</script>"""
+
+
 @pytest.fixture(scope='module')
 def site(media):
 	server = HTTPServer()
@@ -212,6 +238,9 @@ def site(media):
 	)
 	server.expect_request('/swap').respond_with_data(
 		PLAYER.format(src='/b.webm', attrs='autoplay id=v', extra=SWAP), content_type='text/html'
+	)
+	server.expect_request('/mse-swap').respond_with_data(
+		PLAYER.format(src='', attrs='id=v', extra=MSE_SWAP).replace(' src=""', ''), content_type='text/html'
 	)
 	server.expect_request('/none').respond_with_data('<!doctype html><p>no video here</p>', content_type='text/html')
 	yield server
@@ -309,10 +338,11 @@ async def test_a_muted_video_is_still_heard_and_said_to_be_muted(eyes, session, 
 	assert 'muted for the person watching' in p.text
 
 
-async def test_the_next_source_on_the_same_player_is_still_heard(eyes, session, site):
+@pytest.mark.parametrize('page', ['/swap', '/mse-swap'])
+async def test_the_next_source_on_the_same_player_is_still_heard(eyes, session, site, page):
 	# Changing a media element's source ends the audio track captureStream gave for the old one. Hearing
 	# has to follow onto the new source rather than report silence for the rest of the item.
-	await _open(eyes, session, site.url_for('/swap'))
+	await _open(eyes, session, site.url_for(page))
 	p = await eyes.watch(seconds=6.0, until='time')
 
 	tones = [s for item in p.items for s in item.hearing.segments if s.kind == 'tone' and s.duration >= 0.5]
