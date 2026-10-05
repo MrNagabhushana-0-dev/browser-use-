@@ -1028,6 +1028,21 @@ Post-fix, the same three pages with fresh blind agents scored 3/3: two from `ret
 - **Colour label:** pure cyan (#00ffff) is labelled "teal" in percept text. Agents corrected it from the keyframe,
   but the label is wrong.
 
+**After the run, in this round:**
+- **Colours named by hue (HSV sectors):** pure cyan is "cyan", not "teal".
+- **The new asked-late CI test was itself intermittent in the full suite.** A temporary probe traced three modes:
+  1. heuristic "speech" on part of a beep track vetoed the summary; it now refuses only when speech or music
+     is most of what was heard;
+  2. no pause was journaled under load; `retinat_changes` now notes the count on demand;
+  3. the leave-item analysis ran on the event loop mid-swipe; it now runs in a thread.
+- **A fourth mode is open:** audio captured as silence (0 onsets, worklet running). Seen once, not reproduced in 11
+  runs since.
+- **Environment-dependent test:** the default-profile session test now skips when a running Chrome holds that
+  profile.
+
+Full `tests/ci` on `0375d85`: **1,568 passed, 31 skipped, 0 failed**. The run before it, on `78560ab`, had 2
+failures, both explained above.
+
 **Not measured.**
 - One model family.
 - Local seeded pages, not real sites.
@@ -1036,7 +1051,8 @@ Post-fix, the same three pages with fresh blind agents scored 3/3: two from `ret
   static, but it is not an independent seed set.
 
 **Next, in order:**
-1. Fix the colour names (cyan, not teal) with a test.
+1. Catch the "audio captured as silence" mode: run the asked-late beeps test in a loop under load, with the
+   retina's audio graph state logged.
 2. Reproduce the cross-process launch race (two MCP server processes) and fix it.
 3. More eyesbench tasks (carousel, live chart peak, spoken instruction, WebGL letter) plus static twins.
 4. Media-borne prompt-injection tests.
