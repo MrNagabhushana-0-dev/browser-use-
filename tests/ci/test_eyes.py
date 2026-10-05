@@ -179,6 +179,10 @@ feed.addEventListener('touchend', e => { if (y0 === null) return;
 """
 
 
+# A playlist player: the same <video> element is given the next source mid-watch.
+SWAP = "<script>setTimeout(() => { const v = document.getElementById('v'); v.src = '/c.webm'; v.play().catch(() => {}) }, 2500)</script>"
+
+
 @pytest.fixture(scope='module')
 def site(media):
 	server = HTTPServer()
@@ -205,6 +209,9 @@ def site(media):
 	)
 	server.expect_request('/stiff-overshoot-feed').respond_with_data(
 		FEED.replace('/*EXTRA*/', STIFF_OVERSHOOT), content_type='text/html'
+	)
+	server.expect_request('/swap').respond_with_data(
+		PLAYER.format(src='/b.webm', attrs='autoplay id=v', extra=SWAP), content_type='text/html'
 	)
 	server.expect_request('/none').respond_with_data('<!doctype html><p>no video here</p>', content_type='text/html')
 	yield server
@@ -300,6 +307,47 @@ async def test_a_muted_video_is_still_heard_and_said_to_be_muted(eyes, session, 
 	assert item.muted is True
 	assert 'tone' in item.hearing.kinds, [hearing.describe_segment(s) for s in item.hearing.segments]
 	assert 'muted for the person watching' in p.text
+
+
+async def test_the_next_source_on_the_same_player_is_still_heard(eyes, session, site):
+	# Changing a media element's source ends the audio track captureStream gave for the old one. Hearing
+	# has to follow onto the new source rather than report silence for the rest of the item.
+	await _open(eyes, session, site.url_for('/swap'))
+	p = await eyes.watch(seconds=6.0, until='time')
+
+	tones = [s for item in p.items for s in item.hearing.segments if s.kind == 'tone' and s.duration >= 0.5]
+	pitches = sorted({round(float(s.detail.split()[0]) / 10) * 10 for s in tones})
+	assert 440 in pitches and 550 in pitches, f'expected the 440 Hz source then the 550 Hz one, heard {pitches}:\n{p.text}'
+	assert 'rewound' not in p.text, f'the new source starting at 0 is a new item, not the old one rewinding:\n{p.text}'
+	assert 'silen' not in p.text, p.text
+
+
+def test_a_capture_track_that_was_not_live_is_unknown_sound_not_silence():
+	from browser_use.eyes.percept import ItemPercept, describe_item
+	from browser_use.eyes.retina import RetinaEvent
+	from browser_use.eyes.service import deaf_spans
+
+	def state(t, track, audio='worklet', vid=1):
+		return RetinaEvent('state', 100 + t, {'vid': vid, 't': t, 'audio': audio, 'track': track, 'paused': False})
+
+	events = [state(0, 'live'), state(1, 'live'), state(2, 'muted'), state(3, 'muted'), state(4, 'live'), state(5, 'ended')]
+	events += [state(6, None, 'no-track'), state(7, 'live', vid=2)]
+	assert deaf_spans(events, 1) == [(2.0, 4.0, 'muted'), (5.0, 6.0, 'ended')]
+	assert deaf_spans(events, 2) == []
+
+	item = ItemPercept(
+		index=1,
+		vid=1,
+		info={'duration': 8},
+		frames=[],
+		hops=[],
+		sight=sight.read([]),
+		hearing=hearing.listen([]),
+		deaf=deaf_spans(events, 1),
+	)
+	text = describe_item(item)
+	assert 'sound unknown 2.0s-4.0s (the capture track was muted)' in text, text
+	assert 'sound unknown 5.0s-6.0s (the capture track ended)' in text, text
 
 
 async def test_keyframes_are_the_videos_own_pixels_not_a_screenshot(eyes, session, site):

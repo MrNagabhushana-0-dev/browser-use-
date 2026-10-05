@@ -169,11 +169,13 @@
 		text: nearbyText(v),
 	});
 
+	const srcOf = (v) => String(v.currentSrc || v.src || '');
+
 	// An *item* is one thing watched: a new element, or the same element given a new source
 	// (virtualized feeds recycle a few <video> elements for every reel).
 	const attend = () => {
 		const v = pick();
-		const src = v ? (isCanvas(v) ? 'canvas' : String(v.currentSrc || v.src || '')) : '';
+		const src = v ? (isCanvas(v) ? 'canvas' : srcOf(v)) : '';
 		if (v === R.attended && src === R.attendedSrc) return;
 		R.attended = v;
 		R.attendedSrc = src;
@@ -264,6 +266,12 @@
 				return;
 			}
 			v.requestVideoFrameCallback(onFrame);
+			// A new source on this element is a new item from its first frame, not from the next attend poll:
+			// stamped with the old id, its restart at 0 reads as a rewind of the old item.
+			if (srcOf(v) !== R.attendedSrc) {
+				attend();
+				if (R.attended !== v) return;
+			}
 			const mt = meta.mediaTime;
 			// A backwards jump is a loop or a seek: always sample it.
 			if (mt >= R.lastSampleT && mt - R.lastSampleT < 1 / opts.fps) return;
@@ -443,6 +451,10 @@ registerProcessor('retina-ear', RetinaEar);
 		node.port.onmessage = (m) => {
 			const v = R.attended;
 			if (!v || !R.running) return;
+			if (!isCanvas(v) && srcOf(v) !== R.attendedSrc) {
+				attend(); // the source changed under this hop: whose sound it is, is not known
+				return;
+			}
 			const a = m.data;
 			// The worklet stamps each hop with audio-context time. Messages can reach this thread
 			// late and in bursts when it is busy; stamping them with the media time *at arrival*
@@ -473,17 +485,27 @@ registerProcessor('retina-ear', RetinaEar);
 		try {
 			const node = await ensureEar();
 			if (R.attended !== v) return;
-			if (!v.__retinaStream) v.__retinaStream = v.captureStream();
-			const tracks = v.__retinaStream.getAudioTracks();
+			if (!v.__retinaStream) {
+				v.__retinaStream = v.captureStream();
+				// A new source on the same element ends the old tracks and adds new ones to this stream:
+				// follow onto them, or the ear sits on a dead track and everything after reads as silence.
+				v.__retinaStream.addEventListener('addtrack', (e) => {
+					if (e.track.kind === 'audio' && R.attended === v) startHearing(v);
+				});
+			}
+			// One track, the newest: given several, createMediaStreamSource takes the one whose id sorts
+			// first, which after a source change is as likely the old, silent one.
+			const tracks = v.__retinaStream.getAudioTracks().filter((t) => t.readyState === 'live');
 			if (!tracks.length) {
 				// Media Source players add their audio track after the first segment; retried
 				// by the heartbeat.
 				R.audioMode = 'no-track';
 				return;
 			}
-			R.audioSource = R.ctx.createMediaStreamSource(new MediaStream(tracks));
+			const track = tracks[tracks.length - 1];
+			R.audioSource = R.ctx.createMediaStreamSource(new MediaStream([track]));
 			R.audioSource.connect(node);
-			R.audioTrack = tracks[0];
+			R.audioTrack = track;
 			R.audioMode = 'worklet';
 		} catch (e) {
 			R.audioMode = 'error: ' + String((e && e.message) || e).slice(0, 120);
@@ -539,7 +561,10 @@ registerProcessor('retina-ear', RetinaEar);
 		const v = R.attended;
 		if (R.ctx && R.ctx.state === 'suspended') R.ctx.resume().catch(() => {});
 		const media = v && !isCanvas(v) ? v : null;
-		if (media && opts.audio && (R.audioMode === 'no-track' || R.audioMode.startsWith('error'))) startHearing(media);
+		const stream = media && media.__retinaStream;
+		const gone = R.audioTrack && (R.audioTrack.readyState === 'ended' || (stream && !stream.getAudioTracks().includes(R.audioTrack)));
+		const deaf = R.audioMode === 'no-track' || R.audioMode.startsWith('error') || gone;
+		if (media && opts.audio && deaf) startHearing(media);
 		if (media && opts.listen && media.muted) media.muted = false;
 		R.events.push({
 			type: 'state',

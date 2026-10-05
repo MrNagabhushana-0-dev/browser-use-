@@ -366,6 +366,7 @@ class Eyes:
 					muted=muted_by_vid.get(vid),
 					tainted=vid in tainted,
 					motion=motion.track(f),
+					deaf=deaf_spans(events, vid),
 				)
 			)
 		page = self.retina.state.get('url', '')
@@ -907,6 +908,31 @@ class Eyes:
 			tmp.replace(self.now_path)
 		except Exception as e:
 			logger.debug(f'eyes: could not write {self.now_path}: {type(e).__name__}: {e}')
+
+
+def deaf_spans(events: list[RetinaEvent], vid: int) -> list[tuple[float, float, str]]:
+	"""(t0, t1, 'muted'/'ended') stretches of item `vid`, in media time, when its capture track delivered no sound.
+
+	A muted or ended track gives the ear silence whatever is playing, so what was "heard" there is unknown,
+	not quiet. Read from the retina's state heartbeat (about once a second), so edges are good to ~1 s.
+	"""
+	spans: list[tuple[float, float, str]] = []
+	open_at: tuple[float, str] | None = None
+	last_t: float | None = None
+	for e in events:
+		if e.type != 'state' or e.data.get('vid') != vid or e.data.get('t') is None:
+			continue
+		t, track = float(e.data['t']), e.data.get('track')
+		bad = track if track in ('muted', 'ended') else None
+		if open_at and open_at[1] != bad:
+			spans.append((open_at[0], t, open_at[1]))
+			open_at = None
+		if bad and not open_at:
+			open_at = (t, bad)
+		last_t = t
+	if open_at and last_t is not None:
+		spans.append((open_at[0], max(open_at[0], last_t), open_at[1]))
+	return spans
 
 
 def _sounds_line(hops: list[AudioHop], sr: Any) -> str | None:

@@ -227,4 +227,7 @@ tests for them skip elsewhere.
 - **Missing codecs:** Chromium builds without H.264 can't play Instagram. Use Google Chrome.
 - **Sound labels:** heuristic speech/music labels are unreliable on music. The optional voice
   model decides speech.
+- **Dead capture track:** when the audio track the retina taps is muted or ended, the percept says
+  "sound unknown t0-t1" for that stretch instead of reporting silence. A player that loads its next
+  source into the same element is followed onto the new track.
 - **Wheel and arrow-key fallbacks** don't move CSS scroll-snap feeds.

@@ -67,6 +67,7 @@ class ItemPercept:
 	muted: bool | None = None
 	tainted: bool = False
 	motion: motion_mod.Motion | None = None
+	deaf: list[tuple[float, float, str]] = field(default_factory=list)  # (t0, t1, 'muted'/'ended'): no sound reached the ear
 
 	@property
 	def t_span(self) -> tuple[float, float]:
@@ -171,6 +172,9 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 			lines.append(
 				'    (speech judged by heuristics only, unreliable with music; install the eyes extra for a speech model)'
 			)
+	for t0, t1, why in item.deaf:
+		# the ear got silence from a dead track: whatever played there is unknown, not quiet
+		lines.append(f'    sound unknown {_fmt(t0)}-{_fmt(t1)} (the capture track {"was muted" if why == "muted" else "ended"})')
 	if h.heard and 0 < len(h.onsets) <= 16 and 'speech' not in h.kinds and 'music' not in h.kinds:
 		# sparse discrete sounds (beeps, clicks, knocks): their number and timing is the information
 		lines.append(f'    distinct sounds: {len(h.onsets)}, at ' + ', '.join(_fmt(t) for t in h.onsets))
