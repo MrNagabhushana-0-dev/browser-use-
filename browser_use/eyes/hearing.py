@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from browser_use.eyes.retina import AudioHop
+from browser_use.eyes.sight import LOOP_JUMP_S, strays
 
 SILENCE_DB = -50.0
 # Half-width of the novelty comparison, and the minimum novelty (band-byte units) for a boundary.
@@ -320,6 +321,8 @@ def listen(hops: list[AudioHop], sample_rate: float | None = None) -> Hearing:
 	hop_s = 1024 / sample_rate if sample_rate else DEFAULT_HOP_S
 	if not hops:
 		return Hearing(hop_s=hop_s)
+	drop = strays([h.t for h in hops], LOOP_JUMP_S)
+	hops = [h for i, h in enumerate(hops) if i not in drop]
 	rms = np.array([h.rms_db for h in hops], dtype=np.float32)
 	flat = np.clip(np.array([h.flatness for h in hops], dtype=np.float64), 0, 1)
 	peak = np.array([h.peak_hz for h in hops], dtype=np.float32)
@@ -328,7 +331,7 @@ def listen(hops: list[AudioHop], sample_rate: float | None = None) -> Hearing:
 	found = onsets(hops, hop_s)
 
 	# Media time restarting (a loop) is a boundary too.
-	loops = [i for i in range(1, len(hops)) if hops[i].t < hops[i - 1].t - 0.4]
+	loops = [i for i in range(1, len(hops)) if hops[i].t < hops[i - 1].t - LOOP_JUMP_S]
 	bounds = sorted(set([0, *change_points(hops, hop_s), *loops, len(hops)]))
 	chunk = max(4, int(round(CHUNK_S / hop_s)))
 

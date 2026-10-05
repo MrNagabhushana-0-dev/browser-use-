@@ -179,8 +179,34 @@ def deltas(matrix: np.ndarray) -> np.ndarray:
 	return np.concatenate([[0.0], d]).astype(np.float32)
 
 
+# A jump back in media time is believed when this many samples after it carry on from where it landed.
+CONFIRM_JUMP = 2
+
+
+def strays(ts: list[float], jump: float) -> set[int]:
+	"""Indices of samples that went back in time alone: the samples after them carry on from before the jump.
+
+	A loop or a seek keeps going from where it landed. A single sample stamped at the wrong moment (one sent
+	during a source change once carried the new source's time 0) does not, and taken at face value it ends the
+	item's sound and pictures where it lands. With nothing after it to confirm, a backward sample is not believed.
+	"""
+	out: set[int] = set()
+	good: float | None = None
+	for i, t in enumerate(ts):
+		if good is not None and t < good - jump:
+			after = ts[i + 1 : i + 1 + CONFIRM_JUMP]
+			if not after or any(u >= good - jump for u in after):
+				out.add(i)
+				continue
+		good = t
+	return out
+
+
 def read(frames: list[FrameSample], duration: float | None = None) -> Sight:
 	"""Segment one item's frames (in arrival order) into shots."""
+	if frames:
+		drop = strays([f.t for f in frames], LOOP_JUMP_S)
+		frames = [f for i, f in enumerate(frames) if i not in drop]
 	matrix = grids(frames)
 	d = deltas(matrix)
 	starts: list[tuple[int, float, bool]] = [(0, 0.0, False)] if frames else []

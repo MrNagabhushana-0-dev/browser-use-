@@ -24,7 +24,7 @@ from pytest_httpserver import HTTPServer
 from werkzeug.wrappers import Response
 
 from browser_use.browser import BrowserProfile, BrowserSession
-from browser_use.eyes import Eyes, FrameSample, asr, estimate_image_tokens, hearing, sight
+from browser_use.eyes import AudioHop, Eyes, FrameSample, asr, estimate_image_tokens, hearing, sight
 from browser_use.human.touch import FLICK_RELEASE, min_jerk, release_speed, stroke
 
 ASSETS = Path(__file__).parent / 'assets'
@@ -565,6 +565,26 @@ async def test_speech_is_located_by_the_voice_model(session, site, tmp_path):
 def _frames(spec: list[tuple[float, int]]) -> list[FrameSample]:
 	"""(media time, flat luma value) -> frames with keyframes everywhere."""
 	return [FrameSample(i + 1, 1, t, float(i), bytes([v]) * 256, (v, v, v), True) for i, (t, v) in enumerate(spec)]
+
+
+def _hops(ts: list[float]) -> list[AudioHop]:
+	"""A steady 440 Hz tone, one hop per media time."""
+	return [AudioHop(1, t, float(i), -21.0, 0.03, 440.0, 0.0, 0.01, 440.0, bytes(24)) for i, t in enumerate(ts)]
+
+
+def test_one_stray_sample_going_back_in_time_is_not_a_loop_or_a_rewind():
+	# A sample stamped at the wrong moment (as a source change once caused) must not end the item's sound
+	# or pictures where it lands. A real loop keeps going from where it jumped to; a stray does not.
+	clock = [round(0.1 * i, 2) for i in range(24)]  # 0.0-2.3 s
+	for ts in (clock + [0.0], clock[:12] + [0.0] + clock[12:]):
+		seen = sight.read(_frames([(t, 100) for t in ts]), duration=6.0)
+		assert seen.loops == [] and seen.rewinds == [], (ts, seen.loops, seen.rewinds)
+		heard = hearing.listen(_hops(ts))
+		assert len(heard.segments) == 1 and heard.segments[0].t0 <= 0.05 and heard.segments[0].t1 >= 2.3, [
+			(hearing.describe_segment(g), g.t0, g.t1) for g in heard.segments
+		]
+	looped = clock + [0.0, 0.1, 0.2]
+	assert sight.read(_frames([(t, 100) for t in looped]), duration=2.4).loops == [2.3]
 
 
 def test_keyframe_selection_covers_every_distinct_shot_before_repeating_one():
