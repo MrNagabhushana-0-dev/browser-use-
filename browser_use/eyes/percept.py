@@ -112,9 +112,15 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	if duration:
 		head += f', {_fmt(duration)} long'
 	head += f', watched {item.watched_s:.1f}s'
+	t0, t1 = item.t_span
+	if item.frames or item.hops:
+		head += f', covering {_fmt(t0)}-{_fmt(t1)}'
 	if item.sight.loops:
 		head += f', looped {len(item.sight.loops)}x (seen in full)'
 	lines.append(head)
+	if (item.frames or item.hops) and t0 > 1.0:
+		# what played before t0 was not held: silence or stillness in this percept says nothing about it
+		lines.append(f'    the first {_fmt(t0)} was not held: sound and pictures before it are unknown, not absent')
 	text = (info.get('text') or '').strip()
 	if text:
 		lines.append(f'    on screen: "{text[:240]}"')
