@@ -1328,3 +1328,43 @@ blocked one.
 6. `find` and `zoom` in Retinat.
 7. Opt-in desktop eyes.
 8. Drop strays from `motion.track` and the "covering" span too.
+
+## Round 27 (unattended loop): the launch race reproduced and fixed, and the archiver backs off
+
+**Items.** Round 26's list: (1) keep `loopwatch` on, done on this round's full run; (2) archiver back-off;
+(3) the cross-process launch race. All three were done.
+
+**The launch race (`bc40ea4`).**
+- Reproduced 3/3 with two real processes starting a browser on one profile at a shared instant. One always failed
+  with "Browser process exited before CDP became available".
+- Mechanism: each process checks the profile's `SingletonLock` before either Chrome has written it, so both
+  launch. The later Chrome finds the lock, hands its URL to the earlier one and exits.
+- The launch retry only matched error text like "singletonlock" or "already in use", which this exit never says.
+- Fix: after a failed launch, the watchdog re-reads the lock. If a live other Chrome now holds the profile, it
+  retries on a temporary profile, exactly as when the profile is held up front. A stale lock from a dead Chrome does
+  not count.
+- The new test races two subprocesses and requires both to start. It failed 2/2 before the fix and passes 4/4 after.
+
+**Archiver back-off (`bc40ea4`).**
+- After a keyframe read times out, `archive_now` leaves the page alone for 30 s (`ARCHIVE_BACKOFF_S`) and logs once.
+  Before, it held another read open in the hung page every 2 s tick.
+- Test: on the 10 s stall page, a second archive pass right after a timeout returns in under 0.3 s (it took 3 s
+  before). Archiving resumes after the back-off.
+
+**Measured.**
+- Browser/session tests: 97 passed, 4 skipped.
+- Full `tests/ci` on `bc40ea4` with the watchdog: **green, 1,578 passed, 30 skipped, 0 failed** (23m10s). Two stalls (1.5 s, 2.0 s) and no `keyframes:` warnings.
+
+**Not measured.**
+- More than two racers. Each loser retries up to 3 times, so a burst of many may still exhaust that.
+- The real-world case: two MCP servers launched by two clients. The test races two plain Python processes, which go
+  through the same launch code.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it, then follow the keyframe probe's diagnosis.
+2. More eyesbench tasks (carousel, live chart peak, spoken instruction, WebGL letter) plus static twins.
+3. Media-borne prompt-injection tests: a video or canvas whose pictures or captions carry instructions, checking
+   that percepts present them as content, not commands.
+4. `find` and `zoom` in Retinat.
+5. Opt-in desktop eyes.
+6. Drop strays from `motion.track` and the "covering" span too.
