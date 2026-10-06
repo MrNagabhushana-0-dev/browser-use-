@@ -550,6 +550,28 @@ registerProcessor('retina-ear', RetinaEar);
 		if (m.attributeName === 'open') return old === null;
 		return true;
 	};
+	// WCAG contrast of an element's text against the nearest opaque background up its ancestors (images and
+	// gradients are not seen: they read as the colour behind them). Under ~1.5:1 a person can barely see the text,
+	// a technique used to hide instructions meant for AI agents.
+	const rgbOf = (c) => (c.match(/[\d.]+/g) || []).map(Number);
+	const luminance = ([r, g, b]) => {
+		const f = (v) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+		return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+	};
+	const contrast = (el) => {
+		const fg = rgbOf(getComputedStyle(el).color);
+		let bg = [255, 255, 255];
+		for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+			const c = rgbOf(getComputedStyle(n).backgroundColor);
+			if (c.length >= 3 && (c.length < 4 || c[3] > 0.5)) {
+				bg = c;
+				break;
+			}
+		}
+		if (fg.length < 3) return 21;
+		const [a, b] = [luminance(fg), luminance(bg)].sort((x, y) => y - x);
+		return (a + 0.05) / (b + 0.05);
+	};
 	const reportText = (el) => {
 		if (!el || el.nodeType !== 1 || !el.isConnected || el.closest('video, script, style, noscript')) return;
 		if (!isShown(el)) return;
@@ -561,7 +583,8 @@ registerProcessor('retina-ear', RetinaEar);
 		if (++textBudget.n > 8) return; // a ticker repainting every frame is not news
 		if (now - (lastText.get(text) || -1e9) < 1000) return;
 		lastText.set(text, now);
-		R.events.push({ type: 'text', wt: now, text, vid: R.attendedId });
+		const faint = contrast(el) < 1.5;
+		R.events.push(Object.assign({ type: 'text', wt: now, text, vid: R.attendedId }, faint ? { faint: true } : {}));
 	};
 	let textReady = false; // false while the page is still being parsed: its own content has not "appeared"
 	const watchText = () => {

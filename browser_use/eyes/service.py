@@ -43,7 +43,15 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from browser_use.eyes import asr, hearing, motion, sight
 from browser_use.eyes.archive import FrameArchive
-from browser_use.eyes.percept import ItemPercept, Keyframe, Percept, assemble, estimate_image_tokens, render_strip
+from browser_use.eyes.percept import (
+	ItemPercept,
+	Keyframe,
+	Percept,
+	assemble,
+	estimate_image_tokens,
+	page_text_note,
+	render_strip,
+)
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
 from browser_use.human.input import HumanInput
 from browser_use.human.touch import HumanTouch
@@ -342,11 +350,19 @@ class Eyes:
 			h = [x for x in hops if x.vid == vid]
 			seen = sight.read(f, (info_by_vid.get(vid) or {}).get('duration'))
 			heard = hearing.listen(h, self.retina.state.get('sr'))
+			untranscribed = None
 			if do_speech and h and any(x.pcm for x in h):
 				regions, said = await asyncio.to_thread(_speech, h)
 				if regions is not None:
 					hearing.apply_speech_regions(heard, regions)
 				heard.transcript = said or []
+			elif transcribe and heard.heard:
+				# Asked for words and none can come: say why, rather than look as if nothing was said.
+				untranscribed = (
+					'the speech extra (faster-whisper) is not installed'
+					if not asr.available()
+					else 'these eyes were opened with speech off, so no raw audio was kept for the speech model'
+				)
 			# Every shot deserves a keyframe if the budget can stretch that far (to twice `k`).
 			first_pass = [sh for sh in seen.shots if not sh.after_loop]
 			selection = sight.select_keyframes(f, min(2 * k, max(k, len(first_pass))))
@@ -374,6 +390,7 @@ class Eyes:
 					tainted=vid in tainted,
 					motion=motion.track(f),
 					deaf=deaf_spans(events, vid),
+					untranscribed=untranscribed,
 				)
 			)
 		page = self.retina.state.get('url', '')
@@ -893,7 +910,7 @@ class Eyes:
 			self._note_sounds_soon(last['vid'])  # leaving an item mid-play: say what it sounded like
 		self._journaled = {**last, **{k: f.get(k) for k in ('url', 'vid', 'sound', 'paused')}}
 		texts, self._pending_text = self._pending_text, []
-		entries += [('text', f'text appeared: "{t[:160]}"') for t in texts]
+		entries += [('text', f'text appeared: "{t}') for t in texts]  # each already closes its quote and carries its note
 		if entries:
 			self._append_journal(entries, vid, t)
 
@@ -910,7 +927,11 @@ class Eyes:
 
 	def _update_now(self, frames: list[FrameSample], hops: list[AudioHop], events: list[RetinaEvent]) -> None:
 		# Text events are kept from every batch: the journal writes about once a second and must not drop them.
-		self._pending_text += [str(e.data.get('text', '')) for e in events if e.type == 'text' and e.data.get('text')]
+		self._pending_text += [
+			str(e.data['text'])[:160] + '"' + page_text_note(str(e.data['text']), bool(e.data.get('faint')))
+			for e in events
+			if e.type == 'text' and e.data.get('text')
+		]
 		now = time.monotonic()
 		if self.now_path is None or now - self._last_now < 1.0:
 			return
@@ -970,13 +991,16 @@ def _sounds_line(hops: list[AudioHop], sr: Any) -> str | None:
 
 def _text_lines(events, since: float, page_since: float, limit: int = 12) -> str:
 	"""Text that appeared on the page (toasts, status lines, captions in the DOM), oldest first."""
-	seen: dict[str, float] = {}
+	seen: dict[str, tuple[float, bool]] = {}
 	for e in events:
 		if e.type == 'text' and e.wall >= since and e.data.get('text'):
-			seen.setdefault(' '.join(str(e.data['text']).split())[:240], e.wall)
+			seen.setdefault(' '.join(str(e.data['text']).split())[:240], (e.wall, bool(e.data.get('faint'))))
 	if not seen:
 		return ''
-	lines = [f'    "{t}" ({w - page_since:.1f}s after the page loaded)' for t, w in list(seen.items())[:limit]]
+	lines = [
+		f'    "{t}" ({w - page_since:.1f}s after the page loaded)' + page_text_note(t, faint)
+		for t, (w, faint) in list(seen.items())[:limit]
+	]
 	more = f'\n    ... {len(seen) - limit} more' if len(seen) > limit else ''
 	return '\n    text that appeared:\n' + '\n'.join(lines) + more
 

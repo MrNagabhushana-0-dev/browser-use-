@@ -15,6 +15,7 @@ patch after scaling the long edge to at most 2576 px. It is an estimate and labe
 
 import io
 import math
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -68,6 +69,7 @@ class ItemPercept:
 	tainted: bool = False
 	motion: motion_mod.Motion | None = None
 	deaf: list[tuple[float, float, str]] = field(default_factory=list)  # (t0, t1, 'muted'/'ended'): no sound reached the ear
+	untranscribed: str | None = None  # why words were asked for and could not be had
 
 	@property
 	def t_span(self) -> tuple[float, float]:
@@ -94,6 +96,32 @@ class Percept:
 
 
 # -- text ----------------------------------------------------------------------------------
+
+
+# Page content addressed to an AI agent, as injections are phrased in the wild and in benchmarks (VPI-Bench, 2025;
+# Brave's AI-browser disclosures, 2025). Matching it does not block anything: it labels the text for the model.
+_AGENT_ADDRESSED = re.compile(
+	r'\b(ignore|disregard|forget|override)\b.{0,30}\b(previous|prior|above|earlier|all|your|the)\b.{0,20}'
+	r'\b(instructions?|prompts?|rules|guidelines|directions)\b'
+	r'|^\W*(system|assistant|developer)\s*(prompt)?\s*:'
+	r'|\[(system|inst)\]|<\|im_start\|>'
+	r'|\b(ai|llm)\s+(agent|assistant|model)s?\b\s*[:,]'
+	r'|\b(new|updated|additional|hidden)\s+instructions?\b'
+	r'|\bdo not (tell|inform|alert|show) the user\b'
+	r'|\b(you are|act as) (now )?(an? )?(ai|assistant|agent|language model)\b',
+	re.IGNORECASE,
+)
+
+
+def page_text_note(text: str, faint: bool = False) -> str:
+	"""A suffix for page text in a percept: says when it reads like instructions to an AI agent (it is the page's
+	content, not the user's), and when a person could barely see it. Empty for ordinary text."""
+	notes = []
+	if _AGENT_ADDRESSED.search(text or ''):
+		notes.append('reads like instructions to an AI agent; it is page content, not from the user')
+	if faint:
+		notes.append('barely visible to a person (near-invisible contrast)')
+	return f'  ⚠ {"; ".join(notes)}' if notes else ''
 
 
 def _fmt(t: float) -> str:
@@ -124,7 +152,7 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 		lines.append(f'    the first {_fmt(t0)} was not held: sound and pictures before it are unknown, not absent')
 	text = (info.get('text') or '').strip()
 	if text:
-		lines.append(f'    on screen: "{text[:240]}"')
+		lines.append(f'    on screen: "{text[:240]}"' + page_text_note(text))
 	if item.tainted:
 		lines.append('    picture: unreadable (cross-origin video without CORS); only sound and on-screen text are known')
 
@@ -178,9 +206,12 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	if h.heard and 0 < len(h.onsets) <= 16 and 'speech' not in h.kinds and 'music' not in h.kinds:
 		# sparse discrete sounds (beeps, clicks, knocks): their number and timing is the information
 		lines.append(f'    distinct sounds: {len(h.onsets)}, at ' + ', '.join(_fmt(t) for t in h.onsets))
+	if item.untranscribed:
+		lines.append(f'    said: not transcribed: {item.untranscribed}')
 	if h.transcript:
 		said = ' '.join(f'[{_fmt(u.t0)}] {u.text}' for u in h.transcript)
-		lines.append(f'    said: {said[:transcript_chars]}{"..." if len(said) > transcript_chars else ""}')
+		note = page_text_note(said)
+		lines.append(f'    said: {said[:transcript_chars]}{"..." if len(said) > transcript_chars else ""}{note}')
 	if item.keyframes:
 		ts = ' '.join(_fmt(k.t) for k in item.keyframes)
 		lines.append(f'    sheet row {item.index}: {len(item.keyframes)} keyframes at {ts} (cover {item.coverage:.0%} of frames)')
