@@ -11,7 +11,12 @@ cannot be answered, however good the model is.
 Modes:
 - `screenshots`: one screenshot every `period` seconds (default 1.5 s, a fast agent step), as the screenshot-loop
   agents see the page.
-- `retina`: `Eyes.watch` for the same span: the video's decoded frames and audio, summarised as one percept.
+- `retina`: `Eyes.watch` for the same span: the video's decoded frames and audio, summarised as one percept. On a
+  page whose answer is text (toast, ticker): the journal of text that appeared, plus one page look at the end.
+
+Tasks: a colour flash, beeps, a toast, bounces on a canvas, and a live value that crosses its alert line for one
+250 ms tick (`ticker`). `ticker-static` holds that value on screen: every mode must read it, so a miss on the live
+page is the sampling, not a blind scorer.
 
 Run `python -m browser_use.eyes.bench` for a table. Media is generated locally with ffmpeg; nothing is fetched.
 """
@@ -50,7 +55,17 @@ class Task:
 
 	@property
 	def answer(self) -> Any:
-		return self.truth[{'flash': 'colour', 'beeps': 'count', 'toast': 'id', 'bounce': 'count'}[self.name]]
+		keys = {'flash': 'colour', 'beeps': 'count', 'toast': 'id', 'bounce': 'count', 'ticker': 'peak', 'ticker-static': 'peak'}
+		return self.truth[keys[self.name]]
+
+	@property
+	def needle(self) -> str | None:
+		"""The text that carries the answer on a page whose answer is text (toast, ticker), else None."""
+		if self.name == 'toast':
+			return str(self.truth['id'])
+		if self.name.startswith('ticker'):
+			return f'{self.truth["peak"]}%'
+		return None
 
 
 def _ffmpeg() -> str:
@@ -140,6 +155,39 @@ def toast_task(seed: int, work: Path) -> Task:
 	at = round(rng.uniform(2.0, 8.0), 2)
 	html = TOAST_PAGE.format(id=order_id, at_ms=int(at * 1000), dur_ms=1500)
 	return Task('toast', seed, 'What order ID was confirmed?', 10.0, b'', {'id': order_id, 'at': at}, html=html)
+
+
+TICKER_ALERT_RGB = (220, 30, 30)
+TICKER_PAGE = """<!doctype html><title>{title}</title><body style="margin:0;font:16px sans-serif;background:#f4f4f4">
+<main style="padding:40px"><h1>Cluster load</h1><p>Live, updated four times a second. Alert at 90%.</p>
+<div id="v" role="status" style="display:inline-block;padding:28px 48px;font:bold 48px sans-serif;border-radius:12px;
+background:#2a7;color:#fff">Load {first}%</div></main>
+<script>const values = {values}; const box = document.getElementById('v'); let i = 0;
+const show = (x) => {{ box.textContent = 'Load ' + x + '%'; box.style.background = x >= 90 ? '#dc1e1e' : '#2a7'; }};
+if (values.length > 1) setInterval(() => {{ i = Math.min(i + 1, values.length - 1); show(values[i]); }}, 250);
+show(values[0]);</script></body>"""
+
+
+def _ticker_values(seed: int) -> tuple[list[int], int, float]:
+	rng = random.Random(seed * 53 + 11)
+	values = [rng.randint(40, 85) for _ in range(40)]  # 10 s at 4 a second, all under the alert line
+	k = rng.randint(8, 36)
+	values[k] = rng.randint(91, 99)  # the one tick over it
+	return values, values[k], k * 0.25
+
+
+def ticker_task(seed: int, work: Path) -> Task:
+	"""A dashboard value that updates every 250 ms and crosses its alert line once, for one tick."""
+	values, peak, at = _ticker_values(seed)
+	html = TICKER_PAGE.format(title='ticker', first=values[0], values=values)
+	return Task('ticker', seed, 'What was the highest load shown?', 10.5, b'', {'peak': peak, 'at': at}, html=html)
+
+
+def ticker_static_task(seed: int, work: Path) -> Task:
+	"""The ticker's twin: the same peak, held on screen. Every mode must read it, or a scorer is blind."""
+	values, peak, at = _ticker_values(seed)
+	html = TICKER_PAGE.format(title='ticker-static', first=peak, values=[peak])
+	return Task('ticker-static', seed, 'What was the highest load shown?', 3.5, b'', {'peak': peak, 'at': 0.0}, html=html)
 
 
 BOUNCE_PAGE = """<!doctype html><title>bounce</title><body style="margin:0;background:#000">
@@ -256,10 +304,20 @@ def _shows_toast(jpeg: bytes) -> bool:
 	return hits >= 40  # the toast is ~3% of the screen; a stray orange pixel is not it
 
 
+def _shows_alert(jpeg: bytes) -> bool:
+	from PIL import Image
+
+	tr, tg, tb = TICKER_ALERT_RGB
+	with Image.open(io.BytesIO(jpeg)) as img:
+		small = img.convert('RGB').resize((160, 90))
+		hits = sum(1 for r, g, b in small.getdata() if abs(r - tr) < 40 and abs(g - tg) < 40 and abs(b - tb) < 40)  # type: ignore[misc]
+	return hits >= 40  # the alert box is a few percent of the screen
+
+
 def score_snapshots(task: Task, snaps: list[str]) -> dict[str, Any]:
-	if task.name == 'toast':
-		seen = any(str(task.truth['id']) in s for s in snaps)
-		return {'captured': seen, 'sent': seen, 'answer': task.truth['id'] if seen else None}
+	if task.needle:
+		seen = any(task.needle in s for s in snaps)
+		return {'captured': seen, 'sent': seen, 'answer': task.answer if seen else None}
 	# A video's or a canvas's pixels and sound are not in the accessibility tree.
 	return {'captured': False, 'sent': False, 'answer': None}
 
@@ -271,6 +329,9 @@ def score_screenshots(task: Task, shots: list[bytes]) -> dict[str, Any]:
 	if task.name == 'toast':  # if a shot caught the toast, assume the model can read its large text
 		seen = any(_shows_toast(s) for s in shots)
 		return {'captured': seen, 'sent': seen, 'answer': task.truth['id'] if seen else None}
+	if task.name.startswith('ticker'):  # likewise: a shot that caught the red alert box shows the peak in 48px text
+		seen = any(_shows_alert(s) for s in shots)
+		return {'captured': seen, 'sent': seen, 'answer': task.answer if seen else None}
 	# Screenshots carry no sound, and a count of bounces is not in any one frame: scored as not captured,
 	# which flatters nothing (a model would have to infer hits from a few ball positions).
 	return {'captured': False, 'sent': False, 'answer': None}
@@ -301,25 +362,36 @@ def score_retina(task: Task, percept) -> dict[str, Any]:
 MODES = ('screenshots', 'snapshots', 'retina')
 
 
-async def _retina_toast(session, task: Task, work: Path) -> tuple[dict[str, Any], int]:
-	"""Retina on a page with no media: what the journal (delivered by the hook each turn) says appeared."""
+async def _retina_text(session, task: Task, work: Path) -> tuple[dict[str, Any], int]:
+	"""Retina on a page with no media: what the journal (delivered by the hook each turn) says appeared, plus one
+	look at the page at the end, as an agent would take. The journal reports text that appears; what was on the page
+	from the start is in the look, not in the journal."""
 	import json
 
 	from browser_use.eyes import Eyes
 
-	now_path = work / f'toast-{task.seed}' / 'now.json'
+	assert task.needle, f'{task.name} has no text answer'
+	now_path = work / f'{task.name}-{task.seed}' / 'now.json'
 	eyes = Eyes(session, speech=False, now_path=now_path, archive=False)
 	await eyes.open()
 	try:
 		await asyncio.sleep(task.seconds)
 		await eyes.retina.wait_for_data(1.5)
-		captured = any(str(task.truth['id']) in str(e.data.get('text', '')) for e in eyes.retina.events if e.type == 'text')
+		captured = any(task.needle in str(e.data.get('text', '')) for e in eyes.retina.events if e.type == 'text')
+		look = await eyes.look()
 	finally:
 		await eyes.close()
 	journal = eyes.journal_path.read_text() if eyes.journal_path and eyes.journal_path.exists() else ''
 	texts = [json.loads(line).get('text', '') for line in journal.splitlines()]
-	sent = any(str(task.truth['id']) in t for t in texts)
-	return {'captured': captured, 'sent': sent, 'answer': task.truth['id'] if sent else None}, sum(len(t) for t in texts) // 4
+	in_look = bool(look.image) and _shows_answer(task, look.image)
+	sent = any(task.needle in t for t in texts) or in_look
+	tokens = sum(len(t) for t in texts) // 4 + look.tokens
+	return {'captured': captured or in_look, 'sent': sent, 'answer': task.answer if sent else None}, tokens
+
+
+def _shows_answer(task: Task, jpeg: bytes) -> bool:
+	"""Whether an image of the page shows the answer, by the same rule the screenshot scorer uses."""
+	return _shows_toast(jpeg) if task.name == 'toast' else _shows_alert(jpeg)
 
 
 async def run(
@@ -348,7 +420,7 @@ async def run(
 			for mode in modes:
 				page_path = f'/{task.name}-{seed}-{mode}'
 				serve(page_path, task.page(media_path), media_path, task.media)
-				if mode == 'retina' and task.name != 'toast':
+				if mode == 'retina' and not task.needle:
 					await eyes.open()  # before the page loads, as retinat_open does: the first moments count
 				await session.navigate_to(base_url + page_path)
 				if mode == 'screenshots':
@@ -359,8 +431,8 @@ async def run(
 					await asyncio.sleep(0.5)
 					snaps, tokens = await snapshot_loop(session, task.seconds, period)
 					score, observations = score_snapshots(task, snaps), len(snaps)
-				elif task.name == 'toast':
-					score, tokens = await _retina_toast(session, task, work)
+				elif task.needle:
+					score, tokens = await _retina_text(session, task, work)
 					observations = 1
 				else:
 					percept = await eyes.watch(seconds=task.seconds, until='time')

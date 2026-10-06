@@ -99,3 +99,30 @@ async def test_the_retina_counts_bounces_drawn_on_a_canvas(server, session, tmp_
 		await eyes.close()
 	print(bench.table(rows))
 	assert all(r['correct'] and r['sent'] for r in rows), bench.table(rows)
+
+
+async def test_a_live_value_that_peaks_for_one_tick_is_read_by_the_retina_and_its_static_twin_by_every_mode(
+	server, session, tmp_path
+):
+	# A dashboard value updates four times a second and crosses its alert line once, for 250 ms. The static twin
+	# holds that peak on screen: every mode must read it there, so a miss on the live page is the sampling, not
+	# a scorer that cannot see.
+	def serve(page_path: str, html: str, media_path: str, media: bytes) -> None:
+		server.expect_request(page_path).respond_with_data(html, content_type='text/html')
+
+	eyes = Eyes(session, speech=False, now_path=False)
+	try:
+		rows = await bench.run(
+			session,
+			eyes,
+			server.url_for('').rstrip('/'),
+			serve,
+			seeds=(1, 2),
+			work=tmp_path,
+			tasks=(bench.ticker_task, bench.ticker_static_task),
+		)
+	finally:
+		await eyes.close()
+	print(bench.table(rows))
+	assert all(r['correct'] for r in rows if r['mode'] == 'retina'), bench.table(rows)
+	assert all(r['correct'] for r in rows if r['task'] == 'ticker-static'), bench.table(rows)
