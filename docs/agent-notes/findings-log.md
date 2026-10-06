@@ -1415,3 +1415,56 @@ the live page attributable to sampling, not to a blind scorer.
 4. `find` and `zoom` in Retinat.
 5. Opt-in desktop eyes.
 6. Drop strays from `motion.track` and the "covering" span too.
+
+## Round 29 (unattended loop): text revealed by a class change, a carousel task, and static twins
+
+**Item.** Round 28's item 2: static twins for flash, toast and bounce, then the carousel, spoken-instruction and
+WebGL-letter tasks. Item 1, the watchdog, ran on this round's full run.
+
+**Twins (`e618bdc`).**
+- `flash-static`: the colour held for the whole video.
+- `toast-static`: the toast shown from load and never removed.
+- Both read correctly by every mode that can see the medium. Snapshots are exempt from the flash twin, because
+  video pixels are in no tree, and the test asserts they capture nothing.
+- No bounce twin: a count of events has no still form. Beeps has none either: sound is in no screenshot or tree.
+
+**Carousel, and the retina gap it exposed.**
+- Five slides sit in the page from load with `display:none`. From a seeded moment they are shown in turn every
+  0.5 s by a class change, and no text is inserted. The question asks for the third slide's code.
+- The retina's text observer watched only inserted nodes and text edits, so it missed every slide: **0/2**. This
+  matters beyond the benchmark: toasts are often built the same way (pre-rendered, hidden, revealed by a class).
+- Fix: the observer also watches `class`, `style`, `hidden`, `aria-hidden` and `open`, and reports an element's
+  text when it goes from hidden to visible. Visibility is remembered per element, so restyling something already
+  on screen is not a reveal.
+- On the first change seen on an element, the attribute's old value decides where it can. A class change cannot be
+  judged that way and is taken as a reveal, at most once per element.
+- Changes on `<html>` and `<body>` are excluded. Without that, a root attribute change during load reported a small
+  page's whole text as having "appeared" (seen in the new test, at 342 ms).
+- Before the fix, the old retina reported nothing on the reveal test page. After it, the reveal is reported and the
+  restyle is not, 3/3.
+
+**Measured (seeds 1-2).**
+
+| Mode | Live carousel, correct | Tokens per run |
+|---|---|---|
+| Retina | 2/2 | ~470 |
+| Screenshots | 0/2 | 7,176 |
+| Snapshots | 1/2 | 265 |
+
+- Carousel twin: 6/6.
+- Eyes + Retinat + eyesbench: 58/58.
+- Full `tests/ci` on `e618bdc` with the watchdog: **green, 1,582 passed, 30 skipped, 0 failed** (26m02s). One stall (1.0 s) and no `keyframes:` warnings.
+
+**Not measured.**
+- How often a real site's first class change on a visible element (a hover state, an "active" tab) is now reported
+  once as "appeared". That is the known cost of not being able to judge a class change.
+- Spoken-instruction and WebGL-letter tasks.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. Spoken-instruction and WebGL-letter eyesbench tasks.
+3. Media-borne prompt-injection tests: a video or canvas whose pictures or captions carry instructions, checking
+   that percepts present them as content, not commands.
+4. `find` and `zoom` in Retinat.
+5. Opt-in desktop eyes.
+6. Drop strays from `motion.track` and the "covering" span too.
