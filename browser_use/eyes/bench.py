@@ -16,7 +16,9 @@ Modes:
 
 Tasks: a colour flash, beeps, a toast, bounces on a canvas, a live value that crosses its alert line for one 250 ms
 tick (`ticker`), and a carousel whose slides are in the page from the start, hidden, and shown in turn by a class
-change (`carousel`). Static twins (`flash-static`, `toast-static`, `ticker-static`, `carousel-static`) hold the
+change (`carousel`), a four-digit code read aloud in a video (`spoken`, recorded digits from the Free Spoken Digit
+Dataset, CC BY-SA 4.0; needs the speech extra), and the flash drawn with WebGL at its default settings (`glflash`).
+Static twins (`flash-static`, `toast-static`, `ticker-static`, `carousel-static`) hold the
 answer on screen: every mode that can see the medium must read them, so a miss on the live page is the sampling, not
 a blind scorer. Beeps and bounce have none: sound is in no screenshot or tree, and a count of events has no still form.
 
@@ -57,7 +59,16 @@ class Task:
 
 	@property
 	def answer(self) -> Any:
-		keys = {'flash': 'colour', 'beeps': 'count', 'toast': 'id', 'bounce': 'count', 'ticker': 'peak', 'carousel': 'code'}
+		keys = {
+			'flash': 'colour',
+			'beeps': 'count',
+			'toast': 'id',
+			'bounce': 'count',
+			'ticker': 'peak',
+			'carousel': 'code',
+			'spoken': 'code',
+			'glflash': 'colour',
+		}
 		return self.truth[keys[self.name.removesuffix('-static')]]
 
 	@property
@@ -140,6 +151,49 @@ def beeps_task(seed: int, work: Path) -> Task:
 		work / f'beeps-{seed}.webm',
 	)
 	return Task('beeps', seed, 'How many beeps are heard (the video is muted)?', 11.5, media, {'count': n, 'times': times})
+
+
+# Recorded digits 0-9 (Free Spoken Digit Dataset, CC BY-SA 4.0; see the README beside them). Test assets, not shipped.
+DIGITS_DIR = Path(__file__).resolve().parents[2] / 'tests' / 'ci' / 'assets' / 'fsdd'
+DIGIT_WORDS = {'zero': '0', 'oh': '0', 'one': '1', 'two': '2', 'to': '2', 'too': '2', 'three': '3', 'four': '4',
+	'for': '4', 'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9'}  # fmt: skip
+
+
+def spoken_task(seed: int, work: Path) -> Task:
+	"""A dark 10 s video whose sound reads out a seeded four-digit code, from a seeded moment, a digit every 0.7 s."""
+	assert DIGITS_DIR.is_dir(), f'spoken digits not found at {DIGITS_DIR}'
+	rng = random.Random(seed * 97 + 13)
+	code = ''.join(str(rng.randint(0, 9)) for _ in range(4))
+	at = round(rng.uniform(1.0, 4.0), 2)
+	inputs: list[str] = []
+	chains: list[str] = []
+	for k, d in enumerate(code):
+		inputs += ['-i', str(DIGITS_DIR / f'{d}_jackson_0.wav')]
+		delay = int((at + 0.7 * k) * 1000)
+		chains.append(f'[{k + 1}:a]aresample=48000,adelay={delay}:all=1[d{k}]')
+	mix = ''.join(f'[d{k}]' for k in range(len(code)))
+	media = _render(
+		[
+			*['-f', 'lavfi', '-i', 'color=c=0x101418:s=360x640:r=30:d=10'],
+			*inputs,
+			*['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=mono:d=10'],
+			*['-filter_complex', ';'.join(chains) + f';{mix}[{len(code) + 1}:a]amix=inputs={len(code) + 1}:normalize=0[a]'],
+			*['-map', '0:v', '-map', '[a]', '-c:v', 'libvpx-vp9', '-b:v', '100k', '-deadline', 'realtime', '-cpu-used', '8'],
+			*['-c:a', 'libopus', '-t', '10'],
+		],
+		work / f'spoken-{seed}.webm',
+	)
+	return Task('spoken', seed, 'What code is spoken?', 9.5, media, {'code': code, 'at': at})
+
+
+def digits_said(text: str) -> str:
+	"""The digits in a transcript, in order, whether written as numerals or words ('four 7 two' -> '472')."""
+	import re
+
+	out = []
+	for token in re.findall(r'[a-z]+|\d', text.lower()):
+		out.append(token if token.isdigit() else DIGIT_WORDS.get(token, ''))
+	return ''.join(out)
 
 
 def media_response(request, data: bytes, content_type: str = 'video/webm'):
@@ -256,6 +310,28 @@ def carousel_static_task(seed: int, work: Path) -> Task:
 	codes, _ = _carousel(seed)
 	html = _carousel_page('carousel-static', codes, 2, False, 0.0)
 	return Task('carousel-static', seed, 'What code was on the third slide?', 3.5, b'', {'code': codes[2], 'at': 0.0}, html=html)
+
+
+GLFLASH_PAGE = """<!doctype html><title>glflash</title><body style="margin:0;background:#000">
+<canvas width="360" height="640" style="height:100vh;display:block;margin:auto"></canvas>
+<script>const gl = document.querySelector('canvas').getContext('webgl');  // default: preserveDrawingBuffer false
+const flash = {rgb}, at = {at}, dark = [16 / 255, 20 / 255, 24 / 255]; let t0 = null;
+const draw = (now) => {{ if (t0 === null) t0 = now; const t = (now - t0) / 1000;
+  const c = t >= at && t < at + 0.4 ? flash : dark; gl.clearColor(c[0], c[1], c[2], 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  requestAnimationFrame(draw); }};
+requestAnimationFrame(draw);</script></body>"""
+
+
+def glflash_task(seed: int, work: Path) -> Task:
+	"""The flash, drawn with WebGL on a <canvas> left at its default (the buffer is cleared once shown)."""
+	rng = random.Random(seed * 41 + 3)
+	colour = rng.choice(sorted(FLASH_COLOURS))
+	at = round(rng.uniform(2.0, 7.0), 2)
+	rgb = [round(v / 255, 3) for v in FLASH_COLOURS[colour]]
+	html = GLFLASH_PAGE.format(rgb=rgb, at=at)
+	return Task(
+		'glflash', seed, 'Which colour flashed, briefly, on the canvas?', 9.0, b'', {'colour': colour, 'at': at}, html=html
+	)
 
 
 BOUNCE_PAGE = """<!doctype html><title>bounce</title><body style="margin:0;background:#000">
@@ -402,7 +478,7 @@ def score_snapshots(task: Task, snaps: list[str]) -> dict[str, Any]:
 
 
 def score_screenshots(task: Task, shots: list[bytes]) -> dict[str, Any]:
-	if task.name.startswith('flash'):
+	if task.name.startswith('flash') or task.name == 'glflash':
 		seen = any(_shows_colour(s, task.truth['colour'], centre_only=True) for s in shots)
 		return {'captured': seen, 'sent': seen, 'answer': task.truth['colour'] if seen else None}
 	if task.name.startswith('toast'):  # if a shot caught the toast, assume the model can read its large text
@@ -420,22 +496,32 @@ def score_screenshots(task: Task, shots: list[bytes]) -> dict[str, Any]:
 
 
 def score_retina(task: Task, percept) -> dict[str, Any]:
+	from browser_use.eyes import sight
+
 	item = percept.items[0] if percept.items else None
 	if item is None:
 		return {'captured': False, 'sent': False, 'answer': None}
-	if task.name.startswith('flash'):
+	if task.name.startswith('flash') or task.name == 'glflash':
 		a, colour = task.truth['at'], task.truth['colour']
 		tr, tg, tb = FLASH_COLOURS[colour]
+		# A video's media time is the page's own clock; a canvas's starts when the retina attends it, so any frame counts.
+		when = (lambda t: a - 0.05 <= t <= a + 0.45) if task.name != 'glflash' else (lambda t: True)
 		captured = any(
-			a - 0.05 <= f.t <= a + 0.45 and abs(f.rgb[0] - tr) < 70 and abs(f.rgb[1] - tg) < 70 and abs(f.rgb[2] - tb) < 70
-			for f in item.frames
+			when(f.t) and abs(f.rgb[0] - tr) < 70 and abs(f.rgb[1] - tg) < 70 and abs(f.rgb[2] - tb) < 70 for f in item.frames
 		)
-		sent = any(k.jpeg and _shows_colour(k.jpeg, colour) for k in item.keyframes) or colour in percept.text
+		# The text may name the colour as people do ('green' for lime): the retina's own name for it counts.
+		named = colour in percept.text or sight.colour_name(FLASH_COLOURS[colour]) in percept.text
+		sent = any(k.jpeg and _shows_colour(k.jpeg, colour) for k in item.keyframes) or named
 		return {'captured': captured, 'sent': sent, 'answer': colour if sent else None}
 	if task.name == 'bounce':
 		hits = item.motion.bottom if item.motion else []
 		count = len(hits)
 		return {'captured': count == task.truth['count'], 'sent': f'the bottom {count} times' in percept.text, 'answer': count}
+	if task.name == 'spoken':
+		heard = digits_said(' '.join(u.text for u in item.hearing.transcript))
+		said_line = next((line for line in percept.text.splitlines() if line.strip().startswith('said:')), '')
+		sent = task.truth['code'] in digits_said(said_line)
+		return {'captured': task.truth['code'] in heard, 'sent': sent, 'answer': task.truth['code'] if sent else heard or None}
 	onsets = [t for t in item.hearing.onsets if 0.5 <= t <= 11.5]
 	count = len(onsets)
 	return {'captured': count == task.truth['count'], 'sent': f'{count} onsets' in percept.text, 'answer': count}
@@ -500,6 +586,8 @@ async def run(
 	for seed in seeds:
 		for make in tasks or (flash_task, beeps_task, toast_task):
 			task = make(seed, work)
+			# Words need the retina's raw audio, which it captures only with speech on: otherwise a miss would be the setup.
+			assert task.name != 'spoken' or 'retina' not in modes or eyes.speech, 'the spoken task needs Eyes(speech=True)'
 			media_path = f'/{task.name}-{seed}.webm'
 			for mode in modes:
 				page_path = f'/{task.name}-{seed}-{mode}'
@@ -519,7 +607,7 @@ async def run(
 					score, tokens = await _retina_text(session, task, work)
 					observations = 1
 				else:
-					percept = await eyes.watch(seconds=task.seconds, until='time')
+					percept = await eyes.watch(seconds=task.seconds, until='time', transcribe=task.name == 'spoken' or None)
 					score = score_retina(task, percept)
 					tokens, observations = percept.tokens, 1
 				rows.append(

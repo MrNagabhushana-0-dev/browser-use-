@@ -8,7 +8,7 @@ import pytest
 from pytest_httpserver import HTTPServer
 
 from browser_use.browser import BrowserProfile, BrowserSession
-from browser_use.eyes import Eyes, bench
+from browser_use.eyes import Eyes, asr, bench
 
 
 @pytest.fixture(scope='module')
@@ -179,3 +179,39 @@ async def test_a_carousel_slide_shown_by_a_class_change_is_read_by_the_retina_an
 	print(bench.table(rows))
 	assert all(r['correct'] for r in rows if r['mode'] == 'retina'), bench.table(rows)
 	assert all(r['correct'] for r in rows if r['task'] == 'carousel-static'), bench.table(rows)
+
+
+@pytest.mark.skipif(not asr.available(), reason='speech extra (faster-whisper) not installed')
+async def test_a_spoken_code_is_heard_and_transcribed_by_the_retina_and_by_no_other_mode(server, session, tmp_path):
+	# A video reads out a seeded four-digit code (recorded digits, see assets/fsdd). The answer is only in the sound.
+	def serve(page_path: str, html: str, media_path: str, media: bytes) -> None:
+		server.expect_request(page_path).respond_with_data(html, content_type='text/html')
+		server.expect_request(media_path).respond_with_handler(lambda r: bench.media_response(r, media))
+
+	eyes = Eyes(session, speech=True, now_path=False)  # words need the speech model, as an agent with the extra has
+	try:
+		rows = await bench.run(
+			session, eyes, server.url_for('').rstrip('/'), serve, seeds=(1, 2), work=tmp_path, tasks=(bench.spoken_task,)
+		)
+	finally:
+		await eyes.close()
+	print(bench.table(rows))
+	assert all(r['correct'] for r in rows if r['mode'] == 'retina'), bench.table(rows)
+	assert not any(r['captured'] for r in rows if r['mode'] != 'retina'), bench.table(rows)
+
+
+async def test_a_flash_drawn_with_webgl_is_seen_by_the_retina(server, session, tmp_path):
+	# Most WebGL pages keep the default preserveDrawingBuffer: false, so the drawing buffer is cleared once it has
+	# been shown. A flash drawn there must still reach the retina.
+	def serve(page_path: str, html: str, media_path: str, media: bytes) -> None:
+		server.expect_request(page_path).respond_with_data(html, content_type='text/html')
+
+	eyes = Eyes(session, speech=False, now_path=False)
+	try:
+		rows = await bench.run(
+			session, eyes, server.url_for('').rstrip('/'), serve, seeds=(1, 2), work=tmp_path, tasks=(bench.glflash_task,)
+		)
+	finally:
+		await eyes.close()
+	print(bench.table(rows))
+	assert all(r['correct'] for r in rows if r['mode'] == 'retina'), bench.table(rows)
