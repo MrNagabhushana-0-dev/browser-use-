@@ -302,7 +302,7 @@ class Eyes:
 		if hold:
 			await self._hold()
 		percept = await self.perceive(
-			since=since, detail=detail, keyframes=keyframes, transcribe=transcribe, text_since=text_since
+			since=since, detail=detail, keyframes=keyframes, transcribe=transcribe, text_since=text_since, watch_start=start
 		)
 		if not percept.items and not self.retina.attended.get('vid'):
 			await self._show_page(percept)
@@ -323,10 +323,19 @@ class Eyes:
 		header: str | None = None,
 		text_since: float | None = None,
 		order: list[int] | None = None,
+		watch_start: float | None = None,
 	) -> Percept:
 		"""Build a percept from everything the retina gathered since `since` (monotonic time), and the page text
 		that appeared since `text_since` (default: `since`). `order` puts these items first, in this order."""
 		frames, hops, events = self._since(since)
+		if watch_start is not None and (frames or hops):
+			# Backfill reaches before the watch, and the page boundary it is clamped to is learnt from a heartbeat that
+			# can lag a navigation: what an earlier page showed then must not come back as this page's. An item id
+			# carries its document (see retina.js nextItem), so samples from another document before the watch are
+			# dropped; ones the watch itself saw (a navigation by the page, mid-watch) stay.
+			latest = max([*frames, *hops], key=lambda x: x.wall).vid // 1000
+			frames = [f for f in frames if f.vid // 1000 == latest or f.wall >= watch_start]
+			hops = [h for h in hops if h.vid // 1000 == latest or h.wall >= watch_start]
 		seen = [vid for vid in dict.fromkeys([f.vid for f in frames] + [h.vid for h in hops]) if vid]
 		# Items in the given order (what was watched, in turn), then anything else seen, in order of first sight.
 		order = [vid for vid in (order or []) if vid in seen] + [vid for vid in seen if vid not in (order or [])]

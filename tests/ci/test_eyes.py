@@ -476,6 +476,18 @@ async def test_page_text_addressed_to_an_ai_agent_is_marked_as_page_content_and_
 	assert (await session.get_current_page_url()) == url
 
 
+async def test_a_watch_right_after_navigating_does_not_report_the_previous_page(eyes, session, site):
+	# The previous page's video kept playing between the last watch and the navigation. What it showed then was
+	# never reported, but it is the old page's: a watch of the new page must not bring it back.
+	await _open(eyes, session, site.url_for('/calib'))
+	await eyes.watch(seconds=1.5, until='time')
+	await asyncio.sleep(1.0)  # the old page plays on, unreported
+	await session.navigate_to(site.url_for('/still'))
+	p = await eyes.watch(seconds=1.5, until='time')
+	srcs = [str((i.info or {}).get('src', '')) for i in p.items]
+	assert srcs and all(s.endswith('/a.webm') for s in srcs), f'{srcs}\n{p.text}'
+
+
 async def test_keyframes_are_the_videos_own_pixels_not_a_screenshot(eyes, session, site):
 	await _open(eyes, session, site.url_for('/calib'))
 	p = await eyes.watch(seconds=4 * SECTION + 0.5, until='time', detail='glance')
