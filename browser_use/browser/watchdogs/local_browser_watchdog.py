@@ -211,8 +211,21 @@ class LocalBrowserWatchdog(BaseWatchdog):
 			except Exception as e:
 				error_str = str(e).lower()
 
+				# Lost a race for the profile: another process launched on it in the same instant, so our Chrome
+				# handed off to that one and exited. The lock says so now, though it did not when we checked.
+				holder = (
+					_profile_holder_pid(profile.user_data_dir) if 'browseruse-tmp-' not in str(profile.user_data_dir) else None
+				)
+				if holder:
+					self.logger.warning(
+						f'Profile {profile.user_data_dir} was taken by another Chrome (pid {holder}) as this one started: '
+						'launching on a fresh temporary profile'
+					)
+
 				# Check if this is a user_data_dir related error
-				if any(err in error_str for err in ['singletonlock', 'user data directory', 'cannot create', 'already in use']):
+				if holder or any(
+					err in error_str for err in ['singletonlock', 'user data directory', 'cannot create', 'already in use']
+				):
 					self.logger.warning(f'Browser launch failed (attempt {attempt + 1}/{max_retries}): {e}')
 
 					if attempt < max_retries - 1:

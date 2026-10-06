@@ -72,6 +72,7 @@ NEXT_CONFIRM_S = 2.0
 SETTLE_S = 0.6
 JOURNAL_MAX_BYTES = 512_000
 ARCHIVE_BACKLOG_LIMIT = 150  # unarchived keyframes; the page's ring holds 240
+ARCHIVE_BACKOFF_S = 30.0  # after the page failed to hand over keyframes, archiving leaves it alone this long
 # Keyframes per item on the sheet, by detail.
 KEYFRAMES = {'glance': 4, 'look': 6, 'study': 8}
 
@@ -121,6 +122,7 @@ class Eyes:
 		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
 		self._archiver: asyncio.Task | None = None
 		self._watching = 0  # watches in progress: the archiver keeps out of their way
+		self._archive_quiet_until = 0.0  # monotonic time before which archiving does not ask the page again
 		self._meaning = None  # MeaningIndex over the archive, made on first search
 		self._last_now = 0.0
 		self._items_seen = 0
@@ -420,12 +422,17 @@ class Eyes:
 
 	async def archive_now(self, limit: int = 40) -> int:
 		"""Copy keyframes not yet on disk from the page's ring to the archive. Returns how many."""
-		if self.archive is None:
+		if self.archive is None or time.monotonic() < self._archive_quiet_until:
 			return 0
 		pending = [f for f in self.retina.frames if f.has_keyframe and not self.archive.has(f.vid, f.seq)][-limit:]
 		if not pending:
 			return 0
-		jpegs = await self.retina.keyframes([f.seq for f in pending])
+		jpegs, trouble = await self.retina.read_keyframes([f.seq for f in pending])
+		if trouble:
+			# A hung page is not asked again every tick, each time holding another read open in it.
+			self._archive_quiet_until = time.monotonic() + ARCHIVE_BACKOFF_S
+			logger.info(f'eyes: archiving paused for {ARCHIVE_BACKOFF_S:.0f}s: {trouble}')
+			return 0
 		stored = 0
 		for f, jpeg in zip(pending, jpegs):
 			if jpeg:

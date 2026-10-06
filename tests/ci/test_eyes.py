@@ -401,6 +401,21 @@ async def test_a_page_that_stops_answering_costs_the_pictures_not_the_watch(eyes
 	await asyncio.sleep(6.0)  # let the page finish its stall before the next test
 
 
+async def test_the_archiver_stops_asking_a_page_that_did_not_answer(eyes, session, site):
+	# Archiving can wait; a hung page should not be asked again every tick, each time holding a read open.
+	await _open(eyes, session, site.url_for('/stall'))
+	eyes.retina.keyframes_timeout = 1.0
+	await asyncio.sleep(2.0)  # inside the page's 10 s stall, with keyframes in the ring from before it
+	loop = asyncio.get_event_loop()
+	assert await eyes.archive_now() == 0
+	t0 = loop.time()
+	assert await eyes.archive_now() == 0
+	assert loop.time() - t0 < 0.3, 'a second pass right after a timeout does not wait on the page again'
+	await asyncio.sleep(9.0)  # the stall ends
+	eyes._archive_quiet_until = 0.0
+	assert await eyes.archive_now() > 0, 'once the back-off is over, archiving resumes'
+
+
 async def test_keyframes_are_the_videos_own_pixels_not_a_screenshot(eyes, session, site):
 	await _open(eyes, session, site.url_for('/calib'))
 	p = await eyes.watch(seconds=4 * SECTION + 0.5, until='time', detail='glance')
