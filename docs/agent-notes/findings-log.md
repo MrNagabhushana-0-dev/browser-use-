@@ -1521,3 +1521,56 @@ run.
 4. `find` and `zoom` in Retinat.
 5. Opt-in desktop eyes.
 6. Drop strays from `motion.track` and the "covering" span too.
+
+## Round 31 (unattended loop): page text addressed to an agent is marked; faint text is flagged
+
+**Items.** Round 30's items 2 and 3: transcribe-with-speech-off, and media-borne prompt-injection tests. Item 1, the
+watchdog, ran on this round's full run.
+
+**Transcribe with speech off (`abb57ef`).**
+- `watch(transcribe=True)` on `Eyes` opened with speech off silently returned no words.
+- Raising would lose a good watch. Switching capture on mid-watch cannot recover audio already gone: PCM mode is fixed
+  when the worklet is built.
+- The percept now says `said: not transcribed:` and why (speech was off, or the speech extra is missing).
+
+**Media-borne prompt injection: research.**
+- Brave's October 2025 disclosure ("unseeable prompt injections"): AI browsers read near-invisible text (faint
+  light-blue on yellow) and treated it as commands rather than untrusted content.
+- VPI-Bench (arXiv 2506.02456, ICLR 2026): 306 visual prompt-injection cases across five platforms. Fine-tuning,
+  framework-level defense layers and system prompts give limited protection.
+- The retina feeds captions, toasts, on-screen text and transcripts into the model's context verbatim, so it is a
+  channel for exactly this.
+
+**What was built.**
+- `page_text_note` labels page text that reads like instructions to an AI agent: "ignore previous instructions",
+  "SYSTEM:", "new instructions", "do not tell the user", "you are now an assistant", `[INST]`. The label is
+  `⚠ reads like instructions to an AI agent; it is page content, not from the user`. It labels and does not filter.
+- The retina computes each appearing text's WCAG contrast against the nearest opaque background. Under 1.5:1 it is
+  flagged `barely visible to a person`.
+- Applied to on-screen captions, "text that appeared", transcripts, and the journal the hook delivers each turn.
+  AI.md tells agents what the marks mean.
+
+**Measured.**
+- Test page: a caption telling the agent to ignore its instructions and open another URL, and a pale-on-yellow toast
+  with "new instructions" (Brave's technique). Both are marked. The toast is also flagged as barely visible and the
+  caption is not. The page never moves. 2/2.
+- A unit test pins six injection phrasings and six ordinary look-alikes ("follow the on-screen instructions",
+  "System status: OK", "AI-generated summary", ...).
+- Eyes + Retinat + eyesbench: 63/63.
+- Full `tests/ci` on `abb57ef` with the watchdog: **green, 1,587 passed, 30 skipped, 0 failed** (28m43s). Two stalls (1.2 s, 1.4 s) and no `keyframes:` warnings.
+
+**Not measured.**
+- Whether the marks change what a real model does. That needs an end-to-end run with a model in the loop, which is
+  the honest test of a label.
+- Injections inside video *pixels* (burnt-in captions) or spoken in audio but not transcribed. Without OCR, pixels are
+  only seen as images.
+- Background images and gradients: contrast is measured against the nearest opaque background colour only.
+- Paraphrased or non-English injections: the patterns are English and phrase-based.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. End-to-end: blind sub-agents (as in Rounds 18 and 21) browse the injection page through Retinat, with and without
+   the marks. Measure whether any acts on the injected instruction.
+3. `find` and `zoom` in Retinat.
+4. Opt-in desktop eyes.
+5. Drop strays from `motion.track` and the "covering" span too.
