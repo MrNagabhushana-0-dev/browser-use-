@@ -1468,3 +1468,56 @@ WebGL-letter tasks. Item 1, the watchdog, ran on this round's full run.
 4. `find` and `zoom` in Retinat.
 5. Opt-in desktop eyes.
 6. Drop strays from `motion.track` and the "covering" span too.
+
+## Round 30 (unattended loop): a spoken code and a WebGL flash in eyesbench
+
+**Item.** Round 29's item 2, the spoken-instruction and WebGL tasks. Item 1, the watchdog, ran on this round's full
+run.
+
+**`spoken` (`f25fc9d`).**
+- No offline text-to-speech was available: no espeak, flite, piper or pyttsx3, and no flite filter in the bundled
+  ffmpeg. Pulling in a TTS engine plus a model download would break the bench's "nothing is fetched" rule.
+- Instead, ten recordings of the digits 0-9 (one speaker, "jackson") come from the **Free Spoken Digit Dataset**,
+  CC BY-SA 4.0, committed unmodified with attribution under `tests/ci/assets/fsdd/` (104 KB, not shipped).
+- A dark 10 s video reads out a seeded four-digit code, from a seeded moment, a digit every 0.7 s. The truth comes
+  from the generator, and the retina has to recover it with the local speech model (faster-whisper).
+- `digits_said` turns a transcript into digits, numerals or words.
+- Seeds 1-2: the retina got **2/2** (`'693 6'`, `'8932'`) for 224-429 tokens. Screenshots and snapshots captured
+  nothing (8,372 and 38 tokens).
+
+**A setup trap found on the way.**
+- `watch(transcribe=True)` on an `Eyes(speech=False)` silently transcribes nothing: the retina captures raw PCM only
+  when speech is on at construction, and 0 of 404 hops had PCM.
+- The bench now refuses to score `spoken` against a speech-off retina, instead of reporting a miss that is really the
+  setup.
+- The API itself still accepts the combination silently. Making `transcribe=True` raise or warn there is on the
+  list.
+
+**`glflash`.**
+- The flash is drawn on a WebGL canvas at the default `preserveDrawingBuffer: false`, which is how most real WebGL
+  pages run. The retina's notes said canvas sampling needs 2D or a preserved buffer.
+- Measured: the retina captured the flash in both seeds. It samples right after the page draws, inside the same
+  animation frame, so the cleared buffer is not a problem.
+- Scorer fix: the percept names (0,255,0) "green", while the scorer only accepted "lime". So "sent" depended on which
+  keyframe got picked (seed 2 failed once, passed on rerun). The retina's own colour name now counts too.
+- Capture for a canvas accepts any frame, since a canvas's clock starts at attend, not at the page's flash time.
+- Retina 2/2 on both of two runs. Screenshots 0/2.
+
+**Measured.**
+- Eyes + Retinat + eyesbench: 60/60.
+- Full `tests/ci` on `f25fc9d` with the watchdog: **green, 1,584 passed, 30 skipped, 0 failed** (28m17s). Two stalls (1.1 s, 1.6 s) and no `keyframes:` warnings.
+
+**Not measured.**
+- More speakers or noise under the spoken code. One clean voice is the easy case.
+- A WebGL letter or shape: only colour is scorable without OCR.
+- WebGL with `desynchronized` or `OffscreenCanvas` rendering in a worker.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. `Eyes.watch(transcribe=True)` with speech off: raise or say so in the percept, instead of silently transcribing
+   nothing.
+3. Media-borne prompt-injection tests: a video or canvas whose pictures or captions carry instructions, checking
+   that percepts present them as content, not commands.
+4. `find` and `zoom` in Retinat.
+5. Opt-in desktop eyes.
+6. Drop strays from `motion.track` and the "covering" span too.
