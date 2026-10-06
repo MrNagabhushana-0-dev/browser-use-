@@ -1368,3 +1368,50 @@ blocked one.
 4. `find` and `zoom` in Retinat.
 5. Opt-in desktop eyes.
 6. Drop strays from `motion.track` and the "covering" span too.
+
+## Round 28 (unattended loop): eyesbench gets a live-value task and its first static twin
+
+**Item.** More eyesbench tasks plus static twins (item 2 of Round 27's list; item 1, the watchdog, ran on this
+round's full run).
+
+**`ticker` (`e0e931b`).** A dashboard value updates every 250 ms and crosses its 90% alert line once, for one
+tick, at a seeded moment. The question is "what was the highest load shown?". The value is plain text in the DOM
+and 48 px on screen, so every mode can see it in principle.
+
+**`ticker-static`, the first twin.** It holds the peak on screen, and every mode must read it. That makes a miss on
+the live page attributable to sampling, not to a blind scorer.
+
+**The twin caught a real gap in retina mode.**
+- On text pages, retina mode scored from the journal, which reports only text that appears after load. A value on
+  screen from the start was never mentioned: 0/2 on the twin.
+- An agent using Retinat would also take one look at the page. Retina text mode now adds a page look at the end,
+  scored by the same image rule as screenshots, with its tokens counted (about 485 per look).
+
+**Measured (seeds 1-2).**
+
+| Mode | Live ticker, correct | Tokens per run |
+|---|---|---|
+| Retina | 2/2 | ~730 |
+| Screenshots | 1/2 | 8,372 |
+| Snapshots | 1/2 | 504 |
+
+- The twin was read in all 6 mode-seed pairs.
+- The existing tasks are unchanged in outcome. Toast's retina cost rose to 384 tokens with the look.
+- Bench file: 4/4.
+- Full `tests/ci` on `e0e931b` with the watchdog: **green, 1,579 passed, 30 skipped, 0 failed** (24m32s). Three stalls (1.0-1.8 s) and no `keyframes:` warnings.
+
+**Not measured.**
+- Twins for flash, beeps, toast and bounce.
+- Carousel, spoken instruction and WebGL letter tasks.
+- Two seeds is too few to state a rate for the loop modes. Their 1/2 is luck of phase: seed 2's peak landed on a
+  sampling instant.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. Static twins for flash, toast and bounce (beeps has none: sound is never in a screenshot or tree). Then the
+   carousel, spoken-instruction and WebGL-letter tasks.
+3. Media-borne prompt-injection tests: a video or canvas whose pictures or captions carry instructions, checking
+   that percepts present them as content, not commands.
+4. `find` and `zoom` in Retinat.
+5. Opt-in desktop eyes.
+6. Drop strays from `motion.track` and the "covering" span too.
