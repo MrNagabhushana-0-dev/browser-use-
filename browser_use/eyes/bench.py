@@ -14,9 +14,11 @@ Modes:
 - `retina`: `Eyes.watch` for the same span: the video's decoded frames and audio, summarised as one percept. On a
   page whose answer is text (toast, ticker): the journal of text that appeared, plus one page look at the end.
 
-Tasks: a colour flash, beeps, a toast, bounces on a canvas, and a live value that crosses its alert line for one
-250 ms tick (`ticker`). `ticker-static` holds that value on screen: every mode must read it, so a miss on the live
-page is the sampling, not a blind scorer.
+Tasks: a colour flash, beeps, a toast, bounces on a canvas, a live value that crosses its alert line for one 250 ms
+tick (`ticker`), and a carousel whose slides are in the page from the start, hidden, and shown in turn by a class
+change (`carousel`). Static twins (`flash-static`, `toast-static`, `ticker-static`, `carousel-static`) hold the
+answer on screen: every mode that can see the medium must read them, so a miss on the live page is the sampling, not
+a blind scorer. Beeps and bounce have none: sound is in no screenshot or tree, and a count of events has no still form.
 
 Run `python -m browser_use.eyes.bench` for a table. Media is generated locally with ffmpeg; nothing is fetched.
 """
@@ -55,16 +57,18 @@ class Task:
 
 	@property
 	def answer(self) -> Any:
-		keys = {'flash': 'colour', 'beeps': 'count', 'toast': 'id', 'bounce': 'count', 'ticker': 'peak', 'ticker-static': 'peak'}
-		return self.truth[keys[self.name]]
+		keys = {'flash': 'colour', 'beeps': 'count', 'toast': 'id', 'bounce': 'count', 'ticker': 'peak', 'carousel': 'code'}
+		return self.truth[keys[self.name.removesuffix('-static')]]
 
 	@property
 	def needle(self) -> str | None:
 		"""The text that carries the answer on a page whose answer is text (toast, ticker), else None."""
-		if self.name == 'toast':
+		if self.name.startswith('toast'):
 			return str(self.truth['id'])
 		if self.name.startswith('ticker'):
 			return f'{self.truth["peak"]}%'
+		if self.name.startswith('carousel'):
+			return self.truth['code']
 		return None
 
 
@@ -97,6 +101,22 @@ def flash_task(seed: int, work: Path) -> Task:
 		work / f'flash-{seed}.webm',
 	)
 	return Task('flash', seed, 'Which colour flashed, briefly, during the video?', 14.0, media, {'colour': colour, 'at': at})
+
+
+def flash_static_task(seed: int, work: Path) -> Task:
+	"""The flash's twin: the same colour held for the whole video. Every mode that sees video pixels must read it."""
+	colour = random.Random(seed).choice(sorted(FLASH_COLOURS))
+	r, g, b = FLASH_COLOURS[colour]
+	media = _render(
+		[
+			*['-f', 'lavfi', '-i', f'color=c=0x{r:02x}{g:02x}{b:02x}:s=360x640:r=30:d=6'],
+			*['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=mono:d=6'],
+			*['-map', '0:v', '-map', '1:a', '-c:v', 'libvpx-vp9', '-b:v', '200k', '-deadline', 'realtime'],
+			*['-cpu-used', '8', '-c:a', 'libopus', '-shortest'],
+		],
+		work / f'flash-static-{seed}.webm',
+	)
+	return Task('flash-static', seed, 'Which colour is the video?', 4.0, media, {'colour': colour, 'at': 0.0})
 
 
 def beeps_task(seed: int, work: Path) -> Task:
@@ -188,6 +208,54 @@ def ticker_static_task(seed: int, work: Path) -> Task:
 	values, peak, at = _ticker_values(seed)
 	html = TICKER_PAGE.format(title='ticker-static', first=peak, values=[peak])
 	return Task('ticker-static', seed, 'What was the highest load shown?', 3.5, b'', {'peak': peak, 'at': 0.0}, html=html)
+
+
+def toast_static_task(seed: int, work: Path) -> Task:
+	"""The toast's twin: the same order ID, shown from load and never removed."""
+	order_id = toast_task(seed, work).truth['id']
+	html = TOAST_PAGE.format(id=order_id, at_ms=0, dur_ms=10**9)
+	return Task('toast-static', seed, 'What order ID was confirmed?', 3.5, b'', {'id': order_id, 'at': 0.0}, html=html)
+
+
+CAROUSEL_COLOURS = ('#22aa77', '#3366cc', '#cc33aa', '#ee8800', '#555555')  # the third is the one asked about
+CAROUSEL_PAGE = """<!doctype html><title>{title}</title><body style="margin:0;font:16px sans-serif;background:#f4f4f4">
+<main style="padding:40px"><h1>Today's offers</h1>
+<style>.slide{{display:none;width:640px;height:300px;border-radius:16px;color:#fff;font:bold 44px sans-serif;
+align-items:center;justify-content:center}} .slide.on{{display:flex}}</style>
+{slides}</main>
+<script>const s = document.querySelectorAll('.slide'); let i = {first};
+const show = (k) => s.forEach((el, j) => el.classList.toggle('on', j === k)); show(i);
+if ({advance}) setTimeout(() => {{ const t = setInterval(() => {{ show(++i); if (i === s.length - 1) clearInterval(t); }}, 500); }}, {start_ms});
+</script></body>"""
+
+
+def _carousel(seed: int) -> tuple[list[str], float]:
+	rng = random.Random(seed * 71 + 5)
+	codes = [f'SAVE-{rng.randint(1000, 9999)}' for _ in CAROUSEL_COLOURS]
+	return codes, round(rng.uniform(2.0, 6.0), 2)
+
+
+def _carousel_page(title: str, codes: list[str], first: int, advance: bool, start: float) -> str:
+	slides = '\n'.join(f'<div class="slide" style="background:{c}">Code {code}</div>' for c, code in zip(CAROUSEL_COLOURS, codes))
+	return CAROUSEL_PAGE.format(
+		title=title, slides=slides, first=first, advance='true' if advance else 'false', start_ms=int(start * 1000)
+	)
+
+
+def carousel_task(seed: int, work: Path) -> Task:
+	"""Five slides, hidden in the page from the start, shown in turn by a class change every 0.5 s from a seeded
+	moment. The third slide's code is asked: it is up for half a second, and no text is ever inserted."""
+	codes, start = _carousel(seed)
+	html = _carousel_page('carousel', codes, 0, True, start)
+	truth = {'code': codes[2], 'at': start + 1.0}
+	return Task('carousel', seed, 'What code was on the third slide?', 9.0, b'', truth, html=html)
+
+
+def carousel_static_task(seed: int, work: Path) -> Task:
+	"""The carousel's twin: the third slide, held on screen."""
+	codes, _ = _carousel(seed)
+	html = _carousel_page('carousel-static', codes, 2, False, 0.0)
+	return Task('carousel-static', seed, 'What code was on the third slide?', 3.5, b'', {'code': codes[2], 'at': 0.0}, html=html)
 
 
 BOUNCE_PAGE = """<!doctype html><title>bounce</title><body style="margin:0;background:#000">
@@ -314,6 +382,17 @@ def _shows_alert(jpeg: bytes) -> bool:
 	return hits >= 40  # the alert box is a few percent of the screen
 
 
+def _shows_slide(jpeg: bytes) -> bool:
+	from PIL import Image
+
+	h = CAROUSEL_COLOURS[2].lstrip('#')
+	tr, tg, tb = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+	with Image.open(io.BytesIO(jpeg)) as img:
+		small = img.convert('RGB').resize((160, 90))
+		hits = sum(1 for r, g, b in small.getdata() if abs(r - tr) < 40 and abs(g - tg) < 40 and abs(b - tb) < 40)  # type: ignore[misc]
+	return hits >= 40
+
+
 def score_snapshots(task: Task, snaps: list[str]) -> dict[str, Any]:
 	if task.needle:
 		seen = any(task.needle in s for s in snaps)
@@ -323,12 +402,15 @@ def score_snapshots(task: Task, snaps: list[str]) -> dict[str, Any]:
 
 
 def score_screenshots(task: Task, shots: list[bytes]) -> dict[str, Any]:
-	if task.name == 'flash':
+	if task.name.startswith('flash'):
 		seen = any(_shows_colour(s, task.truth['colour'], centre_only=True) for s in shots)
 		return {'captured': seen, 'sent': seen, 'answer': task.truth['colour'] if seen else None}
-	if task.name == 'toast':  # if a shot caught the toast, assume the model can read its large text
+	if task.name.startswith('toast'):  # if a shot caught the toast, assume the model can read its large text
 		seen = any(_shows_toast(s) for s in shots)
 		return {'captured': seen, 'sent': seen, 'answer': task.truth['id'] if seen else None}
+	if task.name.startswith('carousel'):  # likewise: a shot that caught the third slide's colour shows its code
+		seen = any(_shows_slide(s) for s in shots)
+		return {'captured': seen, 'sent': seen, 'answer': task.answer if seen else None}
 	if task.name.startswith('ticker'):  # likewise: a shot that caught the red alert box shows the peak in 48px text
 		seen = any(_shows_alert(s) for s in shots)
 		return {'captured': seen, 'sent': seen, 'answer': task.answer if seen else None}
@@ -341,7 +423,7 @@ def score_retina(task: Task, percept) -> dict[str, Any]:
 	item = percept.items[0] if percept.items else None
 	if item is None:
 		return {'captured': False, 'sent': False, 'answer': None}
-	if task.name == 'flash':
+	if task.name.startswith('flash'):
 		a, colour = task.truth['at'], task.truth['colour']
 		tr, tg, tb = FLASH_COLOURS[colour]
 		captured = any(
@@ -391,7 +473,9 @@ async def _retina_text(session, task: Task, work: Path) -> tuple[dict[str, Any],
 
 def _shows_answer(task: Task, jpeg: bytes) -> bool:
 	"""Whether an image of the page shows the answer, by the same rule the screenshot scorer uses."""
-	return _shows_toast(jpeg) if task.name == 'toast' else _shows_alert(jpeg)
+	if task.name.startswith('toast'):
+		return _shows_toast(jpeg)
+	return _shows_slide(jpeg) if task.name.startswith('carousel') else _shows_alert(jpeg)
 
 
 async def run(

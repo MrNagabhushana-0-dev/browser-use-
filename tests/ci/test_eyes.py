@@ -213,6 +213,14 @@ load('b'); setTimeout(() => load('c'), 2500);
 STALL = '<script>setTimeout(() => { const t = performance.now(); while (performance.now() - t < 10000) {} }, 1500)</script>'
 
 
+# A toast built hidden and revealed by a class change, and a label already on screen that is only restyled.
+REVEAL = """<!doctype html><style>.hidden{display:none}</style><body>
+<div id="t" class="hidden" style="padding:20px;background:#ff7a00">Saved draft 4821</div>
+<p id="p" style="color:red">Steady label</p>
+<script>setTimeout(() => document.getElementById('t').classList.remove('hidden'), 1200);
+setTimeout(() => document.getElementById('p').style.color = 'blue', 1500);</script></body>"""
+
+
 @pytest.fixture(scope='module')
 def site(media):
 	server = HTTPServer()
@@ -249,6 +257,7 @@ def site(media):
 	server.expect_request('/stall').respond_with_data(
 		PLAYER.format(src='/calib.webm', attrs='autoplay', extra=STALL), content_type='text/html'
 	)
+	server.expect_request('/reveal').respond_with_data(REVEAL, content_type='text/html')
 	server.expect_request('/none').respond_with_data('<!doctype html><p>no video here</p>', content_type='text/html')
 	yield server
 	server.stop()
@@ -414,6 +423,17 @@ async def test_the_archiver_stops_asking_a_page_that_did_not_answer(eyes, sessio
 	await asyncio.sleep(9.0)  # the stall ends
 	eyes._archive_quiet_until = 0.0
 	assert await eyes.archive_now() > 0, 'once the back-off is over, archiving resumes'
+
+
+async def test_text_revealed_by_a_class_change_is_seen_appearing_and_a_restyle_is_not(eyes, session, site):
+	# Toasts and carousel slides are often in the page from the start, hidden, and shown by a class change: no
+	# text is inserted. A label that only changes colour has not appeared.
+	await _open(eyes, session, site.url_for('/reveal'))
+	await asyncio.sleep(2.2)
+	await eyes.retina.wait_for_data(1.0)
+	texts = [e.data.get('text', '') for e in eyes.retina.events if e.type == 'text']
+	assert any('Saved draft 4821' in t for t in texts), texts
+	assert not any('Steady label' in t for t in texts), texts
 
 
 async def test_keyframes_are_the_videos_own_pixels_not_a_screenshot(eyes, session, site):

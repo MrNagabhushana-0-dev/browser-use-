@@ -520,12 +520,39 @@ registerProcessor('retina-ear', RetinaEar);
 	let textObserver = null;
 	let textBudget = { second: 0, n: 0 };
 	const lastText = new Map(); // text -> last time reported, to skip repeats within a second
+	const isShown = (el) => {
+		const style = getComputedStyle(el);
+		if (style.display === 'none' || style.visibility === 'hidden' || +style.opacity === 0) return false;
+		const rect = el.getBoundingClientRect();
+		return rect.width >= 2 && rect.height >= 2;
+	};
+	// Pages often build a toast or a carousel slide hidden and reveal it with a class or style change: no text is
+	// inserted, so only the attribute change says it appeared. Visibility last seen per element, to tell a reveal
+	// from a restyle of something already on screen.
+	const shownBefore = new WeakMap();
+	const REVEALING = ['class', 'style', 'hidden', 'aria-hidden', 'open'];
+	const revealed = (m) => {
+		const el = m.target;
+		if (el.nodeType !== 1 || !el.isConnected) return false;
+		// The root changing class (a theme, a 'loaded' flag) is the page setting state, not something appearing.
+		if (el === document.documentElement || el === document.body) return false;
+		const now = isShown(el);
+		const before = shownBefore.get(el);
+		shownBefore.set(el, now);
+		if (!now || before === true) return false;
+		if (before === false) return true;
+		// First change seen on this element: judge what it was from the old value where it says; a class change
+		// cannot be judged, and is taken as a reveal (at most once per element).
+		const old = m.oldValue;
+		if (m.attributeName === 'style') return /display:\s*none|visibility:\s*hidden|opacity:\s*0(?![.\d])/.test(old || '');
+		if (m.attributeName === 'hidden') return old !== null;
+		if (m.attributeName === 'aria-hidden') return old === 'true';
+		if (m.attributeName === 'open') return old === null;
+		return true;
+	};
 	const reportText = (el) => {
 		if (!el || el.nodeType !== 1 || !el.isConnected || el.closest('video, script, style, noscript')) return;
-		const style = getComputedStyle(el);
-		if (style.display === 'none' || style.visibility === 'hidden' || +style.opacity === 0) return;
-		const rect = el.getBoundingClientRect();
-		if (rect.width < 2 || rect.height < 2) return;
+		if (!isShown(el)) return;
 		const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
 		if (!text || text.length > 240) return;
 		const now = performance.now();
@@ -547,15 +574,27 @@ registerProcessor('retina-ear', RetinaEar);
 		textObserver = new MutationObserver((mutations) => {
 			if (!textReady) return;
 			const touched = new Set();
+			const restyled = [];
 			for (const m of mutations) {
 				if (m.type === 'characterData') touched.add(m.target.parentElement);
+				else if (m.type === 'attributes') restyled.push(m);
 				for (const n of m.addedNodes) touched.add(n.nodeType === 1 ? n : n.parentElement);
 			}
 			// Read styles just after the mutation settles. Not requestAnimationFrame: it never fires in a hidden or
 			// background tab, which is exactly where an agent's page often is.
-			setTimeout(() => touched.forEach(reportText), 0);
+			setTimeout(() => {
+				for (const m of restyled) if (revealed(m)) touched.add(m.target);
+				touched.forEach(reportText);
+			}, 0);
 		});
-		textObserver.observe(document, { childList: true, subtree: true, characterData: true });
+		textObserver.observe(document, {
+			childList: true,
+			subtree: true,
+			characterData: true,
+			attributes: true,
+			attributeFilter: REVEALING,
+			attributeOldValue: true,
+		});
 	};
 
 	const heartbeat = () => {

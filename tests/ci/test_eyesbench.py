@@ -126,3 +126,56 @@ async def test_a_live_value_that_peaks_for_one_tick_is_read_by_the_retina_and_it
 	print(bench.table(rows))
 	assert all(r['correct'] for r in rows if r['mode'] == 'retina'), bench.table(rows)
 	assert all(r['correct'] for r in rows if r['task'] == 'ticker-static'), bench.table(rows)
+
+
+async def test_the_flash_and_toast_twins_are_read_by_every_mode_that_can_see_them(server, session, tmp_path):
+	# Static twins of the flash (the colour held for the whole video) and the toast (shown from load, never
+	# removed). Snapshots are exempt from the flash twin by nature: a video's pixels are not in the tree.
+	def serve(page_path: str, html: str, media_path: str, media: bytes) -> None:
+		server.expect_request(page_path).respond_with_data(html, content_type='text/html')
+		if media:
+			server.expect_request(media_path).respond_with_handler(lambda r: bench.media_response(r, media))
+
+	eyes = Eyes(session, speech=False, now_path=False)
+	try:
+		rows = await bench.run(
+			session,
+			eyes,
+			server.url_for('').rstrip('/'),
+			serve,
+			seeds=(1,),
+			work=tmp_path,
+			tasks=(bench.flash_static_task, bench.toast_static_task),
+		)
+	finally:
+		await eyes.close()
+	print(bench.table(rows))
+	blind = {('flash-static', 'snapshots')}
+	assert all(r['correct'] for r in rows if (r['task'], r['mode']) not in blind), bench.table(rows)
+	assert not any(r['captured'] for r in rows if (r['task'], r['mode']) in blind), bench.table(rows)
+
+
+async def test_a_carousel_slide_shown_by_a_class_change_is_read_by_the_retina_and_its_twin_by_every_mode(
+	server, session, tmp_path
+):
+	# Slides are in the page from the start, hidden, and shown in turn by a class change: no text is inserted.
+	# The question is about the third slide, up for 0.5 s at a seeded moment.
+	def serve(page_path: str, html: str, media_path: str, media: bytes) -> None:
+		server.expect_request(page_path).respond_with_data(html, content_type='text/html')
+
+	eyes = Eyes(session, speech=False, now_path=False)
+	try:
+		rows = await bench.run(
+			session,
+			eyes,
+			server.url_for('').rstrip('/'),
+			serve,
+			seeds=(1, 2),
+			work=tmp_path,
+			tasks=(bench.carousel_task, bench.carousel_static_task),
+		)
+	finally:
+		await eyes.close()
+	print(bench.table(rows))
+	assert all(r['correct'] for r in rows if r['mode'] == 'retina'), bench.table(rows)
+	assert all(r['correct'] for r in rows if r['task'] == 'carousel-static'), bench.table(rows)
