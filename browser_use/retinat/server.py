@@ -113,6 +113,41 @@ def _tools() -> list['types.Tool']:
 			},
 		),
 		types.Tool(
+			name='retinat_find',
+			description=(
+				'Find visible text on the page: where each match is (its centre in viewport CSS px, ready for '
+				'retinat_click/tap), whether it is in view or how far to scroll, and a magnified crop around the first '
+				'match in view. Cheaper than a look when you know what you are after.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'text': {'type': 'string'},
+					'limit': {'type': 'integer', 'default': 5, 'minimum': 1, 'maximum': 20},
+				},
+				'required': ['text'],
+			},
+			annotations=ro,
+		),
+		types.Tool(
+			name='retinat_zoom',
+			description=(
+				'A region of the viewport (CSS px, as on the look images) captured fresh at up to 4x: small print and '
+				'fine detail redrawn at that size, not upscaled from the look frame.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'x': {'type': 'number'},
+					'y': {'type': 'number'},
+					'width': {'type': 'number', 'minimum': 4},
+					'height': {'type': 'number', 'minimum': 4},
+				},
+				'required': ['x', 'y', 'width', 'height'],
+			},
+			annotations=ro,
+		),
+		types.Tool(
 			name='retinat_tap',
 			description='Tap at viewport coordinates (CSS px, as on the look/scan images) with a real touch event.',
 			input_schema={
@@ -372,6 +407,10 @@ class RetinatServer(BrowserUseServer):
 				else f'The feed did not move (tried {", ".join(moved.tries)})'
 			)
 			return f'{head}{"; " + moved.note if moved.note else ""}. {eyes.now_line()}'
+		if name == 'retinat_find':
+			return self._content(await eyes.find(str(args['text']), limit=int(args.get('limit', 5))))
+		if name == 'retinat_zoom':
+			return self._content(await eyes.zoom(float(args['x']), float(args['y']), float(args['width']), float(args['height'])))
 		if name == 'retinat_tap':
 			await eyes.tap(float(args['x']), float(args['y']))
 			return f'Tapped ({args["x"]}, {args["y"]}). {eyes.now_line()}'

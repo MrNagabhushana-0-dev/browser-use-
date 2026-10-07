@@ -12,6 +12,12 @@ TOAST = (
 	"const t = document.createElement('div'); t.textContent = 'Saved #4242'; document.body.appendChild(t);"
 	'setTimeout(() => t.remove(), 1200) }, 600)</script></body>'
 )
+FIND = (
+	'<!doctype html><title>Shop</title><body style="margin:0;font:16px sans-serif">'
+	'<button id="go" style="position:absolute;left:80px;top:180px;width:140px;height:44px">Checkout</button>'
+	'<p style="position:absolute;left:600px;top:400px;margin:0;font:6px sans-serif">Coupon code ZX-4417</p>'
+	'<div style="position:absolute;top:3200px">Terms of service</div></body>'
+)
 WALL = '<!doctype html><title>Just a moment...</title><body>Checking your browser before accessing the site.</body>'
 
 
@@ -21,6 +27,7 @@ def site():
 	server.start()
 	server.expect_request('/').respond_with_data(PAGE, content_type='text/html')
 	server.expect_request('/wall').respond_with_data(WALL, content_type='text/html')
+	server.expect_request('/find').respond_with_data(FIND, content_type='text/html')
 	server.expect_request('/toast').respond_with_data(TOAST, content_type='text/html')
 	yield server
 	server.stop()
@@ -76,6 +83,8 @@ async def test_it_is_its_own_server_with_only_vision_first_tools():
 		'retinat_recall',
 		'retinat_search',
 		'retinat_changes',
+		'retinat_find',
+		'retinat_zoom',
 	}
 	assert all(n.startswith('retinat_') for n in names), 'no DOM tools here: that is the browser-use server'
 
@@ -177,3 +186,32 @@ async def test_beeps_asked_about_long_after_the_video_ended_are_still_counted(re
 	assert f'{beeps.truth["count"]} distinct sounds' in changes, changes
 	watched = _text(await _call(retinat, 'retinat_watch', {'seconds': 2, 'until': 'time'}))
 	assert f'distinct sounds: {beeps.truth["count"]}' in watched, watched
+
+
+async def test_find_says_where_text_is_and_zoom_magnifies_small_print(retinat, site):
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/find')})
+
+	found = await _call(retinat, 'retinat_find', {'text': 'checkout'})
+	text = _text(found)
+	assert any(isinstance(b, types.ImageContent) for b in found.content), 'a crop around the match comes back'
+	import re
+
+	m = re.search(r'at \((\d+), (\d+)\)', text)
+	assert m, text
+	x, y = int(m.group(1)), int(m.group(2))
+	assert abs(x - (80 + 70)) <= 4 and abs(y - (180 + 22)) <= 4, f'the centre of the button, to click: {text}'
+
+	below = _text(await _call(retinat, 'retinat_find', {'text': 'terms of service'}))
+	assert 'below' in below and 'scroll' in below, below
+	assert 'not found' in _text(await _call(retinat, 'retinat_find', {'text': 'no such words here'}))
+
+	zoomed = await _call(retinat, 'retinat_zoom', {'x': 590, 'y': 392, 'width': 120, 'height': 24})
+	images = [b for b in zoomed.content if isinstance(b, types.ImageContent)]
+	assert images, _text(zoomed)
+	import base64
+	import io
+
+	from PIL import Image
+
+	with Image.open(io.BytesIO(base64.b64decode(images[0].data))) as img:
+		assert img.width >= 3 * 120, f'magnified from a fresh capture, not the 640 px frame: {img.size}'

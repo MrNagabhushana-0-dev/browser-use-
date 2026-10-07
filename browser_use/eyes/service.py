@@ -32,6 +32,7 @@ keyboard if the feed did not move.
 """
 
 import asyncio
+import base64
 import io
 import json
 import logging
@@ -422,6 +423,75 @@ class Eyes:
 			size = img.size
 		percept.image, percept.image_size, percept.image_tokens = jpeg, size, estimate_image_tokens(*size)
 		percept.text += f'\n    (no video: the page as drawn now, {size[0]}x{size[1]} ~{percept.image_tokens} tokens)'
+
+	async def zoom(self, x: float, y: float, width: float, height: float, max_width: int = 1200) -> Percept:
+		"""A region of the viewport (CSS px, as on the look images and for clicks) captured fresh at up to 4x, so small
+		print is redrawn at that size, not upscaled from the ~640 px frame a look sends."""
+		assert width > 0 and height > 0, 'the region needs a size'
+		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		metrics = await cdp.cdp_client.send.Page.getLayoutMetrics(session_id=cdp.session_id)
+		vp = metrics['cssLayoutViewport']
+		x, y = max(0.0, x), max(0.0, y)
+		width, height = min(width, vp['clientWidth'] - x), min(height, vp['clientHeight'] - y)
+		assert width > 0 and height > 0, 'the region is outside the viewport'
+		scale = max(1.0, min(4.0, max_width / width))
+		clip = {'x': vp['pageX'] + x, 'y': vp['pageY'] + y, 'width': width, 'height': height, 'scale': scale}
+		shot = await cdp.cdp_client.send.Page.captureScreenshot(
+			params={'format': 'jpeg', 'quality': 85, 'clip': clip},  # type: ignore[typeddict-item]
+			session_id=cdp.session_id,
+		)
+		jpeg = base64.b64decode(shot['data'])
+		from PIL import Image
+
+		with Image.open(io.BytesIO(jpeg)) as img:
+			size = img.size
+		tokens = estimate_image_tokens(*size)
+		text = (
+			f'🔍 zoomed on ({x:.0f}, {y:.0f}) {width:.0f}x{height:.0f} px of the viewport at {scale:.1f}x '
+			f'(redrawn, not upscaled); ~{tokens} tokens'
+		)
+		return Percept([], text, jpeg, size, tokens, len(text) // 4)
+
+	async def find(self, text: str, limit: int = 5) -> Percept:
+		"""Where visible text is on the page: each match's centre in viewport CSS px (to click), whether it is in view
+		or how far to scroll, and a zoomed crop around the first match in view."""
+		assert text.strip(), 'say what to find'
+		if not self.retina.running:
+			await self.open()
+		found = await self.retina.evaluate(f'({_FIND_JS})({json.dumps(text.strip())}, {int(limit) * 4})') or {}
+		matches, vw, vh = found.get('matches') or [], found.get('vw') or 1, found.get('vh') or 1
+		if not matches:
+			return Percept(
+				[], f'🔎 "{text}": not found in the visible text of the page (text inside images or canvas is not searched)', None
+			)
+		lines = [
+			f'🔎 "{text}": {len(matches)} match(es) in the page text' + (f', the first {limit}' if len(matches) > limit else '')
+		]
+		in_view = None
+		for i, m in enumerate(matches[:limit], 1):
+			cx, cy = m['x'] + m['w'] / 2, m['y'] + m['h'] / 2
+			if cy < 0:
+				where = f'above the visible area: scroll up about {(-cy) / vh:.1f} screens'
+			elif cy > vh:
+				where = f'below the visible area: scroll down about {(cy - vh) / vh + 0.5:.1f} screens'
+			elif cx < 0 or cx > vw:
+				where = 'beside the visible area: scroll sideways'
+			else:
+				where = 'in view'
+				in_view = in_view or m
+			context = str(m.get('context', ''))
+			lines.append(
+				f'  {i}. at ({cx:.0f}, {cy:.0f}), {m["w"]:.0f}x{m["h"]:.0f} px, {where}: "{context}"' + page_text_note(context)
+			)
+		if in_view is None:
+			return Percept([], '\n'.join(lines), None)
+		# A crop around the first match in view, with room for its surroundings, magnified like zoom().
+		w, h = max(240.0, in_view['w'] + 160), max(80.0, in_view['h'] + 60)
+		x0 = min(max(0.0, in_view['x'] + in_view['w'] / 2 - w / 2), max(0.0, vw - w))
+		y0 = min(max(0.0, in_view['y'] + in_view['h'] / 2 - h / 2), max(0.0, vh - h))
+		crop = await self.zoom(x0, y0, w, h, max_width=720)
+		crop.text = '\n'.join(lines) + '\n' + crop.text
+		return crop
 
 	async def look(self, detail: Detail = 'look', seconds: float = 2.0) -> Percept:
 		"""What is on screen now. A playing video is watched briefly; otherwise the page itself is
@@ -998,6 +1068,27 @@ def _sounds_line(hops: list[AudioHop], sr: Any) -> str | None:
 	if voiced_s >= VOICED_VETO_S and voiced_s > heard_s / 2:
 		return None
 	return f'heard {len(h.onsets)} distinct sounds (at ' + ', '.join(sight.fmt_t(t) for t in h.onsets) + ')'
+
+
+# Visible text matches, measured with a Range. Text split across elements is not matched (one node at a time).
+_FIND_JS = """(q, cap) => {
+	const needle = q.toLowerCase(), out = [];
+	const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+	for (let n = walker.nextNode(); n && out.length < cap; n = walker.nextNode()) {
+		const at = n.data.toLowerCase().indexOf(needle);
+		const el = n.parentElement;
+		if (at < 0 || !el || el.closest('script, style, noscript, template')) continue;
+		const style = getComputedStyle(el);
+		if (style.display === 'none' || style.visibility === 'hidden' || +style.opacity === 0) continue;
+		const r = document.createRange();
+		r.setStart(n, at);
+		r.setEnd(n, at + needle.length);
+		const b = r.getBoundingClientRect();
+		if (b.width < 1 || b.height < 1) continue;
+		out.push({ x: b.left, y: b.top, w: b.width, h: b.height, context: n.data.replace(/\\s+/g, ' ').trim().slice(0, 120) });
+	}
+	return { matches: out, vw: innerWidth, vh: innerHeight };
+}"""
 
 
 def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_from: float | None = None) -> str:

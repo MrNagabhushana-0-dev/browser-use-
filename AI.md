@@ -70,6 +70,8 @@ continuous stream on disk rather than in your context.
 | Go to the next or previous feed item | `retinat_next` | text only |
 | Tap, swipe, click, type, press a key | `retinat_tap`, `retinat_swipe`, `retinat_click`, `retinat_type`, `retinat_key` | text only |
 | Find a moment by what it looked like, across everything archived ("a slide full of code") | `retinat_search` with `query` | 1 strip of up to 8 frames; first use downloads a ~300 MB open model |
+| Read small print or fine detail in part of the screen | `retinat_zoom` with the region in viewport px | 1 crop, redrawn at up to 4x (about 70-400 tokens) |
+| Find text on the page: where to click it, or how far to scroll to it | `retinat_find` with the text | a line per match plus a magnified crop of the first in view |
 | Look again at one moment of a video you already watched (by media time) | `retinat_recall` with `t0`, `t1` | 1 strip of up to 8 frames (about 300-900 tokens) |
 | Know what's playing without an image | `retinat_now` | about 30 tokens |
 | What appeared, played or flashed since you last asked (toasts, sounds, cuts), for clients without the hook | `retinat_changes` | text only, a line per change |

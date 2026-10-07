@@ -25,7 +25,10 @@ user's own Chrome.
      frames from that window, from what the eyes kept. It never replays the video.
    - To find a moment by what it looked like, across everything archived (hours, earlier sessions),
      call `retinat_search(query)`, then `retinat_recall` around the time it returns.
-3. **Act like a person:** `retinat_tap` / `retinat_click` at coordinates read off the image,
+   - To read small print or fine detail, `retinat_zoom(x, y, width, height)` recaptures that region at up to 4x
+     (a look frame is ~640 px wide). To locate text, `retinat_find(text)` returns where each match is, whether it
+     is in view or how far to scroll, and a magnified crop.
+3. **Act like a person:** `retinat_tap` / `retinat_click` at coordinates read off the image (or from `retinat_find`),
    `retinat_type` into the focused field, `retinat_key` for Enter, Tab or Escape, and
    `retinat_swipe`. For feeds, use `retinat_next` or `retinat_browse(items=N)`.
 4. **Check the result by looking again**, not by assuming it worked.
