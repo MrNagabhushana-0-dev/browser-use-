@@ -367,3 +367,28 @@ async def test_the_ai_pauses_while_the_person_uses_a_shared_tab_and_resumes_afte
 		assert 'result' in await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 5, 'y': 5}, sid)
 	finally:
 		await http.close()
+
+
+async def test_an_idle_extension_stays_connected_past_the_service_worker_timeout(display, tmp_path):
+	"""MV3 stops an idle service worker after 30 s; the relay's pings must keep it (and its connection) alive.
+
+	Its own browser with nothing shared: an attached debugger session would also keep the worker alive and hide this.
+	"""
+	relay = await BridgeRelay(port=0).start()
+	ext = write_extension(tmp_path / 'ext', relay=f'ws://127.0.0.1:{relay.port}/extension')
+	chrome = LocalBrowserWatchdog._find_installed_browser_path()
+	assert chrome
+	args = [chrome, f'--user-data-dir={tmp_path / "profile"}', f'--load-extension={ext}', f'--disable-extensions-except={ext}']
+	args += ['--no-first-run', '--no-default-browser-check', 'about:blank']
+	if os.geteuid() == 0:
+		args.insert(1, '--no-sandbox')
+	proc = _launch(args, display)
+	try:
+		await relay.wait_for_extension(timeout=30)
+		first = relay._ext
+		await asyncio.sleep(40)
+		assert relay._ext is first and first is not None and not first.closed, 'the idle extension dropped its connection'
+	finally:
+		await relay.stop()
+		proc.terminate()
+		proc.wait(timeout=10)

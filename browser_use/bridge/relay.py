@@ -27,6 +27,9 @@ DEFAULT_PORT = 9333
 EXTENSION_ID = 'lcdhfliibkimhbimdfhogcmjedlkoemg'
 LOCAL_HOSTS = ('127.0.0.1', 'localhost', '[::1]')
 MAX_MESSAGE = 200 * 1024 * 1024
+# An MV3 service worker is stopped after 30 s without extension events; a message its own JS handles resets that
+# (Chrome 116+), protocol-level pings do not. Measured: without this, an idle worker dropped off at 30 s.
+KEEPALIVE_S = 20.0
 BROWSER_TARGET = {'targetId': 'browser', 'type': 'browser', 'title': '', 'url': '', 'attached': True, 'canAccessOpener': False}
 
 
@@ -173,11 +176,13 @@ class BridgeRelay:
 		if self._ext is not None:
 			await self._ext.close()  # the newest connection wins, e.g. after the service worker restarted
 		self._ext = ws
+		keepalive = asyncio.create_task(self._keep_alive(ws))
 		try:
 			async for msg in ws:
 				if msg.type == WSMsgType.TEXT:
 					self._on_extension(json.loads(msg.data))
 		finally:
+			keepalive.cancel()
 			if self._ext is ws:
 				self._ext = None
 				self._ext_ready.clear()
@@ -188,6 +193,14 @@ class BridgeRelay:
 						fut.set_exception(BridgeError('the browser extension disconnected'))
 				self._pending.clear()
 		return ws
+
+	async def _keep_alive(self, ws: web.WebSocketResponse) -> None:
+		while not ws.closed:
+			await asyncio.sleep(KEEPALIVE_S)
+			try:
+				await self._ext_call('ping')
+			except (BridgeError, TimeoutError):
+				pass  # a dead connection is noticed by the read loop
 
 	def _on_extension(self, msg: dict[str, Any]) -> None:
 		if 'id' in msg:

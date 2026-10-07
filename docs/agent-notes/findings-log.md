@@ -1905,6 +1905,16 @@ steps, which is the gap the browser retina already fills for pages.
   - The bridge suite, now 9 tests, passed 3/3.
 - **Limit:** a person's click within 600 ms of the AI's own input in the same tab is read as the AI's.
 
+**A defect found by probing, fixed:** an idle extension dropped off the relay at 30 s.
+- **Cause:** MV3 stops a service worker after 30 s without extension events. aiohttp's protocol-level WebSocket pings
+  don't count; only messages the worker's own JS handles do (Chrome 116+).
+- **Measured:** with nothing shared, the connection dropped at 30 s and came back only on the 1-minute alarm, twice
+  in 75 s.
+- **Fix:** the relay now sends an application-level `ping` every 20 s. After it, 0 drops in 75 s.
+- **Test:** a separate browser with nothing shared is idle for 40 s. It needs its own browser because an attached
+  debugger session also keeps the worker alive, which would hide the bug. With the ping interval set to 2,000 s the
+  test fails; with the fix the bridge suite is 10/10.
+
 **Next, in order:**
 1. Run the bridge suite against branded Chrome or Edge with Load unpacked, and record what differs.
 2. Keep `loopwatch` on for full runs until a red one is caught with it.
