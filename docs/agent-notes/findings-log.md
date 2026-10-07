@@ -2008,7 +2008,8 @@ times. A real loop or rewind is kept: the following samples confirm it.
 - The new test fails on the old code (phantom top) and passes now. With a stray, the motion matches the clean run
   exactly and the span is (5.0, 7.0), not (0.0, 7.0).
 - All eyes, Retinat, eyesbench, desktop-eyes and video-watcher tests: 91 passed.
-- Full `tests/ci` on `1e01482` with `loopwatch`: in progress when this was written; the result follows below.
+- **Full `tests/ci` on `1e01482` with `loopwatch`: green, 1,609 passed, 30 skipped, 0 failed** (29m43s). One stall
+  (1.9 s, in the CLIP search test, which loads the model) and no `keyframes:` warnings.
 
 **Not measured.** How often strays reach `motion.track` on real pages. The canvas path has no source swaps, so it is
 mostly the video fallback.
