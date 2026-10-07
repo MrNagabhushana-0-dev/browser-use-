@@ -1974,6 +1974,7 @@ steps, which is the gap the browser retina already fills for pages.
 
 - The Chrome 155 run used three invocations: the idle test and the Cancel test start their own browser on the same
   extension folder.
+- **Full `tests/ci` on `93a3bd1`: green, 1,608 passed, 30 skipped, 0 failed** (29m01s).
 
 **Not measured.**
 - Brave, Opera, Vivaldi and Arc.
