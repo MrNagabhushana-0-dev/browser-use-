@@ -404,7 +404,9 @@ class Eyes:
 			)
 		page = self.retina.state.get('url', '')
 		head = header or f'👁 {len(items)} item(s) watched on {page[:120]} · stopped: {{REASON}}'
-		head += _text_lines(self.retina.events, since if text_since is None else text_since, self.retina.page_since)
+		head += _text_lines(
+			self.retina.events, since if text_since is None else text_since, self.retina.page_since, fresh_from=watch_start
+		)
 		if trouble:
 			head += f'\n    no keyframe images: {trouble}'
 		return assemble(items, head, detail)
@@ -998,10 +1000,19 @@ def _sounds_line(hops: list[AudioHop], sr: Any) -> str | None:
 	return f'heard {len(h.onsets)} distinct sounds (at ' + ', '.join(sight.fmt_t(t) for t in h.onsets) + ')'
 
 
-def _text_lines(events, since: float, page_since: float, limit: int = 12) -> str:
-	"""Text that appeared on the page (toasts, status lines, captions in the DOM), oldest first."""
+def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_from: float | None = None) -> str:
+	"""Text that appeared on the page (toasts, status lines, captions in the DOM), oldest first.
+
+	Text from another document than the current one is the page just left: dropped, unless it arrived after
+	`fresh_from` (a watch that itself saw the page navigate). The document comes from the retina's own tag,
+	which does not lag a navigation as `page_since` can."""
+	docs = [e.data['doc'] for e in events if e.type == 'state' and e.data.get('doc')]
+	current = docs[-1] if docs else None
 	seen: dict[str, tuple[float, bool]] = {}
 	for e in events:
+		doc = e.data.get('doc')
+		if current and doc and doc != current and (fresh_from is None or e.wall < fresh_from):
+			continue
 		if e.type == 'text' and e.wall >= since and e.data.get('text'):
 			seen.setdefault(' '.join(str(e.data['text']).split())[:240], (e.wall, bool(e.data.get('faint'))))
 	if not seen:

@@ -37,6 +37,8 @@
 	const GRID = 16;
 	const BANDS = 24;
 
+	// This document, as the prefix of its item ids and on its text and state events: a page boundary that never lags.
+	const DOC = Math.floor(performance.timeOrigin) % 1e7;
 	const R = {
 		version: VERSION,
 		opts,
@@ -44,7 +46,7 @@
 		ids: new WeakMap(),
 		nextId: 1,
 		// Unique across documents, so a reload never reuses the previous page's item numbers.
-		nextItem: (Math.floor(performance.timeOrigin) % 1e7) * 1000 + 1,
+		nextItem: DOC * 1000 + 1,
 		attended: null,
 		attendedSrc: '',
 		items: new Map(),
@@ -584,7 +586,7 @@ registerProcessor('retina-ear', RetinaEar);
 		if (now - (lastText.get(text) || -1e9) < 1000) return;
 		lastText.set(text, now);
 		const faint = contrast(el) < 1.5;
-		R.events.push(Object.assign({ type: 'text', wt: now, text, vid: R.attendedId }, faint ? { faint: true } : {}));
+		R.events.push(Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}));
 	};
 	let textReady = false; // false while the page is still being parsed: its own content has not "appeared"
 	const watchText = () => {
@@ -633,6 +635,7 @@ registerProcessor('retina-ear', RetinaEar);
 		R.events.push({
 			type: 'state',
 			wt: performance.now(),
+			doc: DOC,
 			vid: R.attendedId,
 			t: media ? media.currentTime : v ? Math.max(0, R.lastSampleT) : null,
 			paused: media ? media.paused : v ? false : null,

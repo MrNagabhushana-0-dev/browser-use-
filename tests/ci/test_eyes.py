@@ -488,6 +488,16 @@ async def test_a_watch_right_after_navigating_does_not_report_the_previous_page(
 	assert srcs and all(s.endswith('/a.webm') for s in srcs), f'{srcs}\n{p.text}'
 
 
+async def test_text_from_the_page_just_left_is_not_reported_as_the_new_pages(eyes, session, site):
+	# The toast appeared on the old page after the last watch. It was never reported, but it is not the new page's.
+	await _open(eyes, session, site.url_for('/reveal'))
+	await eyes.watch(seconds=0.5, until='time', min_seconds=0.5)
+	await asyncio.sleep(1.5)  # the toast appears now, unreported
+	await session.navigate_to(site.url_for('/none'))
+	p = await eyes.watch(seconds=1.0, until='time')
+	assert 'Saved draft 4821' not in p.text, p.text
+
+
 async def test_keyframes_are_the_videos_own_pixels_not_a_screenshot(eyes, session, site):
 	await _open(eyes, session, site.url_for('/calib'))
 	p = await eyes.watch(seconds=4 * SECTION + 0.5, until='time', detail='glance')
