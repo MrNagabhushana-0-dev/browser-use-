@@ -1986,3 +1986,35 @@ steps, which is the gap the browser retina already fills for pages.
 2. Drop strays from `motion.track` and the "covering" span too.
 3. A blind-agent check that `find` and `zoom` get used, and what they save.
 4. Brave and Vivaldi through the same Load-unpacked path, if their Linux packages download.
+
+## Round 38 (unattended loop): stray samples out of the motion track and the covering span
+
+**Item.** Round 37's Next list, item 2. Item 1 (`loopwatch` on for full runs) is a standing practice, applied to this
+round's full run.
+
+**The defect.** Round 25 taught `sight.read` and `hearing.listen` to drop a lone sample stamped at the wrong moment
+(`sight.strays`): a backward jump that the following samples don't confirm. Two other readers still took every sample
+at face value.
+- **`motion.track` sorts frames by media time.** A stray stamped 0.0 but showing the ball near the bottom was slotted
+  in at the start. On a synthetic fall-and-rise with one bottom turn, that added a phantom "reached the top at
+  0.125 s". The new test reproduces this on the old code.
+- **`ItemPercept.t_span` took the min/max over all samples.** A stray stamped 0.0 made the percept say "covering
+  0.0s-...", claiming the start was held, and suppressed the "the first Ns was not held" warning.
+
+**Fix (`1e01482`).** Both now drop strays (in arrival order, separately for frames and hops) before using the
+times. A real loop or rewind is kept: the following samples confirm it.
+
+**Measured.**
+- The new test fails on the old code (phantom top) and passes now. With a stray, the motion matches the clean run
+  exactly and the span is (5.0, 7.0), not (0.0, 7.0).
+- All eyes, Retinat, eyesbench, desktop-eyes and video-watcher tests: 91 passed.
+- Full `tests/ci` on `1e01482` with `loopwatch`: in progress when this was written; the result follows below.
+
+**Not measured.** How often strays reach `motion.track` on real pages. The canvas path has no source swaps, so it is
+mostly the video fallback.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. A blind-agent check that `find` and `zoom` get used, and what they save.
+3. Brave and Vivaldi through the bridge's Load-unpacked path (both Linux packages are reachable).
+4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
