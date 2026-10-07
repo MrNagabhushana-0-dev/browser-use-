@@ -188,7 +188,12 @@ class LocalBrowserWatchdog(BaseWatchdog):
 				process = psutil.Process(subprocess.pid)
 
 				# Wait for CDP to be ready and get the URL
-				cdp_url = await self._wait_for_cdp_url(debug_port, process=process)
+				try:
+					cdp_url = await self._wait_for_cdp_url(debug_port, process=process)
+				except RuntimeError as e:
+					# Chrome said why it exited on stderr: without it the error says only that it did.
+					said = await self._stderr_tail(subprocess)
+					raise RuntimeError(f'{e} Chrome said: {said}' if said else str(e)) from e
 
 				# Success! Clean up only the temp dirs we created but didn't use
 				currently_used_dir = str(profile.user_data_dir)
@@ -447,6 +452,17 @@ class LocalBrowserWatchdog(BaseWatchdog):
 			s.listen(1)
 			port = s.getsockname()[1]
 		return port
+
+	@staticmethod
+	async def _stderr_tail(subprocess: asyncio.subprocess.Process, limit: int = 600) -> str:
+		"""The last lines Chrome wrote to stderr before exiting, or '' if there is nothing to read."""
+		if subprocess.stderr is None:
+			return ''
+		try:
+			data = await asyncio.wait_for(subprocess.stderr.read(), timeout=2.0)
+		except (TimeoutError, OSError):
+			return ''
+		return ' '.join(data.decode(errors='replace').split())[-limit:]
 
 	@staticmethod
 	async def _wait_for_cdp_url(port: int, timeout: float = 30, process: psutil.Process | None = None) -> str:

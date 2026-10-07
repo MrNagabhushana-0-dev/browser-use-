@@ -54,3 +54,16 @@ async def test_a_headful_request_with_no_display_falls_back_to_headless_and_laun
 		assert session.browser_profile.headless is True
 	finally:
 		await session.kill()
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='only Linux runs without a display server')
+def test_the_display_check_follows_the_environment_as_it_changes(monkeypatch):
+	# It was cached: once a display had been seen (a virtual one started by a test), a later headful launch with
+	# no display skipped the headless fallback and Chrome died with "Missing X server or $DISPLAY".
+	from browser_use.browser.profile import _no_display_server
+
+	monkeypatch.delenv('WAYLAND_DISPLAY', raising=False)
+	monkeypatch.setenv('DISPLAY', ':91')
+	assert _no_display_server() is False
+	monkeypatch.delenv('DISPLAY')
+	assert _no_display_server() is True
