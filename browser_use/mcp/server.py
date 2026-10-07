@@ -36,10 +36,13 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from browser_use.llm import ChatAWSBedrock
+
+if TYPE_CHECKING:
+	from browser_use.bridge import BridgeRelay
 
 # Configure logging for MCP mode - redirect to stderr but preserve critical diagnostics
 logging.basicConfig(
@@ -215,6 +218,8 @@ class BrowserUseServer:
 		self.network = network or NetworkRouter.from_env()
 		# Set by servers that attach to a Chrome the person runs; its proxy isn't ours to change.
 		self.cdp_url: str | None = None
+		# The person's own browser through the bridge extension (BROWSER_USE_BRIDGE or retinat --bridge).
+		self.bridge: 'BridgeRelay | None' = None
 
 		# Session management
 		self.active_sessions: dict[str, dict[str, Any]] = {}  # session_id -> session info
@@ -886,6 +891,11 @@ class BrowserUseServer:
 		if allowed_domains is not None:
 			profile_data['allowed_domains'] = allowed_domains
 
+		if self.bridge is not None and 'cdp_url' not in kwargs:
+			from browser_use.bridge import bridge_session_kwargs
+
+			kwargs = {**bridge_session_kwargs(self.bridge.cdp_url), **kwargs}
+
 		# Merge any additional kwargs that are valid BrowserProfile fields
 		for key, value in kwargs.items():
 			profile_data[key] = value
@@ -1258,6 +1268,12 @@ class BrowserUseServer:
 			return f'Element with index {index} not found'
 
 		from browser_use.browser.events import TypeTextEvent
+
+		if self.bridge is not None and _is_secret_field(element.attributes or {}):
+			return (
+				"Refused: that is a password, card or one-time-code field in the person's own browser, and they enter "
+				'those themselves. Ask them to fill it in, then carry on.'
+			)
 
 		# Conservative heuristic to detect potentially sensitive data
 		# Only flag very obvious patterns to minimize false positives
@@ -1807,12 +1823,26 @@ class BrowserUseServer:
 				logger.warning('MCP client disconnected while writing to stdio; shutting down server cleanly.')
 
 
+def _is_secret_field(attributes: dict[str, str]) -> bool:
+	"""Password, card-number, card-code and one-time-code inputs: the person fills these in themselves."""
+	autocomplete = attributes.get('autocomplete', '')
+	return attributes.get('type') == 'password' or any(
+		token in autocomplete for token in ('password', 'cc-number', 'cc-csc', 'one-time-code')
+	)
+
+
 async def main(session_timeout_minutes: int = 10):
 	if not MCP_AVAILABLE:
 		print('MCP SDK is required. Install with: pip install mcp', file=sys.stderr)
 		sys.exit(1)
 
 	server = BrowserUseServer(session_timeout_minutes=session_timeout_minutes)
+	if os.environ.get('BROWSER_USE_BRIDGE'):
+		from browser_use.bridge import EXTENSION_DIR, BridgeRelay
+
+		server.bridge = await BridgeRelay(port=int(os.environ['BROWSER_USE_BRIDGE'])).start()
+		server.cdp_url = server.bridge.cdp_url
+		print(f'Bridge on {server.cdp_url}; load the extension from {EXTENSION_DIR} and share a tab.', file=sys.stderr)
 	server._telemetry.capture(
 		MCPServerTelemetryEvent(
 			version=get_browser_use_version(),

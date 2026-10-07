@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+	:root { color-scheme: light dark; --ok: #1a7f37; --warn: #b26a00; --mute: #6e7781; }
+	body { font: 13px/1.4 system-ui, sans-serif; margin: 0; width: 260px; }
+	main { padding: 12px; display: grid; gap: 10px; }
+	h1 { font-size: 13px; margin: 0; display: flex; align-items: center; gap: 6px; }
+	.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mute); }
+	.dot.on { background: var(--ok); }
+	button { font: inherit; padding: 7px 10px; border-radius: 6px; border: 1px solid #8884; cursor: pointer; background: transparent; color: inherit; }
+	button.primary { background: var(--ok); border-color: var(--ok); color: white; }
+	button.hold { background: var(--warn); border-color: var(--warn); color: white; }
+	small { color: var(--mute); }
+	details input { width: 100%; box-sizing: border-box; font: inherit; padding: 4px; }
+</style>
+</head>
+<body>
+<main>
+	<h1><span id="dot" class="dot"></span><span id="conn">Not connected</span></h1>
+	<button id="share" class="primary">Share this tab with the AI</button>
+	<button id="hold">Take the wheel</button>
+	<small id="note"></small>
+	<details>
+		<summary><small>Relay address</small></summary>
+		<input id="relay" spellcheck="false">
+	</details>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>

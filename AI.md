@@ -36,11 +36,26 @@ args = ["run", "--directory", "/path/to/browser-use-", "python", "-m", "browser_
 {"mcpServers": {"retinat": {"command": "uv", "args": ["run", "--directory", "/path/to/browser-use-", "python", "-m", "browser_use.retinat"]}}}
 ```
 
-**Attaching to your own Chrome.** Start Chrome yourself, then pass its debugging address. This gives you the person's profile, logins and home connection:
+**Using the person's own browser (the bridge).** The best way, and the only one that keeps their real
+profile and logins. They load a small extension once; you get the tabs they share, in the browser they already use:
 ```bash
-google-chrome --remote-debugging-port=9222 --user-data-dir=$HOME/.config/chrome-retinat
-uv run python -m browser_use.retinat --cdp-url http://127.0.0.1:9222
+uv run python -m browser_use.retinat --bridge          # MCP server + relay on 127.0.0.1:9333
 ```
+They then:
+1. open `chrome://extensions` (or `edge://`, `brave://`, `opera://` or `vivaldi://extensions`);
+2. turn on Developer mode and choose **Load unpacked**, picking `browser_use/bridge/extension`;
+3. on any tab, press the extension's button (or Alt+Shift+A) and choose **Share this tab with the AI**.
+
+Then:
+- You see and act only in shared tabs. Tabs you open yourself go to a separate window of theirs.
+- Alt+Shift+Z hands the wheel to the person: input and navigation are refused until they hand it back.
+- Their browser shows "Retinat bridge started debugging this browser" while a tab is shared. **Cancel** on that bar
+  unshares everything.
+- Python code uses `BridgeRelay` plus `bridge_session_kwargs(relay.cdp_url)`; see `python -m browser_use.bridge`.
+
+The older route, `--cdp-url http://127.0.0.1:9222` against a Chrome started with `--remote-debugging-port`, still
+works but needs a separate `--user-data-dir`. Chrome 136 and later ignore the port on the default profile, so it
+can't reach their everyday logins.
 
 Install the extras for full hearing, which adds local speech detection and transcription:
 ```bash
@@ -102,7 +117,7 @@ Coordinates for `retinat_tap` and `retinat_click` are viewport CSS pixels. Read 
 3. **Never try to get past a bot wall or CAPTCHA.** Retinat reports walls such as Google's
    "unusual traffic" page, YouTube's "confirm you're not a bot", and Cloudflare challenges as
    `BLOCKED: ...`. Tell the person. The way through is their own browser and connection
-   (`--cdp-url`, or `python -m browser_use.cobrowse`), with them completing any challenge
+   (`--bridge`, `--cdp-url` or `python -m browser_use.cobrowse`), with them completing any challenge
    themselves.
 4. **Never automate a login.** The person signs in, once, in the visible browser, and the profile
    keeps the session.
@@ -191,7 +206,7 @@ How a country is chosen, and why it is built this way:
 - **It does not get past bot detection, and it will not try.** Tor exit addresses are on public
   block lists, so Google, YouTube and Cloudflare-fronted sites challenge them *more*. A wall is
   classified `walled`, reported as `BLOCKED`, never retried through Tor, and never solved.
-  For YouTube, use the person's own Chrome (`--cdp-url`) or an alternative front end (Invidious, Piped).
+  For YouTube, use the person's own browser (`--bridge`) or an alternative front end (Invidious, Piped).
 - **Never log in or enter credentials over Tor.** Exits can read and tamper with traffic, and a
   signed-in session defeats the point. The route tools say so to the model; it is not enforced in code yet.
 - **Be a good guest.** Tor is run by volunteers. Don't use it for bulk downloads, video or scraping
@@ -241,3 +256,24 @@ tests for them skip elsewhere.
   "sound unknown t0-t1" for that stretch instead of reporting silence. A player that loads its next
   source into the same element is followed onto the new track.
 - **Wheel and arrow-key fallbacks** don't move CSS scroll-snap feeds.
+- **The bridge (`--bridge`)** gives the AI what the person has in a tab, nothing more:
+  - **Refused, with a reason:**
+    - spoofing identity or location (user agent, geolocation, timezone, locale, viewport, touch emulation);
+    - rewriting traffic (`Fetch`, extra headers);
+    - writing or clearing cookies directly;
+    - switching off protections (bypassing CSP, ignoring certificate errors);
+    - anything browser-wide (`Browser.*`, browser contexts).
+  - **Password, card and one-time-code fields** are left to the person.
+  - **Browser shortcuts** (Ctrl+T, Ctrl+W, Ctrl+L) don't fire from AI keys; open, close and switch tabs with the tab tools.
+  - **Hidden tabs:** a hidden shared tab is brought to the front of its own window before any click or key, as a
+    person would.
+  - **Browsers:**
+    - **Works:** Chromium-family browsers (Chrome, Edge, Brave, Opera, Vivaldi, Arc). Edge and Opera document
+      `chrome.debugger`; the others are Chromium and expected to work, but the vendors don't say so.
+    - **Version floor:** MV3 needs Chromium 88+. Pages inside cross-site iframes need 125+ (flat debugger sessions);
+      116+ keeps the connection from dropping while idle.
+    - **Older Chromium:** `python -m browser_use.bridge extension DIR --mv2` writes a Manifest V2 build. Chrome 139+
+      no longer runs MV2.
+    - **No support:** Firefox and Safari have no `chrome.debugger`, so they are not supported.
+  - **Managed browsers:** where enterprise policy blocks the debugger, Chrome 155+ refuses with "Host access is
+    restricted by policy", and that is reported as is.

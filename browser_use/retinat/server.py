@@ -29,10 +29,13 @@ import base64
 import json
 import os
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from browser_use.mcp.server import MCP_AVAILABLE, BrowserUseServer, types
 from browser_use.net import NetworkMode, NetworkRouter
+
+if TYPE_CHECKING:
+	from browser_use.bridge import BridgeRelay
 
 TOOL_PREFIX = 'retinat_'
 
@@ -300,7 +303,11 @@ class RetinatServer(BrowserUseServer):
 	"""browser-use's MCP session handling, with a vision-first tool surface."""
 
 	def __init__(
-		self, cdp_url: str | None = None, session_timeout_minutes: int = 30, network: NetworkRouter | None = None
+		self,
+		cdp_url: str | None = None,
+		session_timeout_minutes: int = 30,
+		network: NetworkRouter | None = None,
+		bridge: 'BridgeRelay | None' = None,
 	) -> None:
 		# Agents get `auto` unless told otherwise: direct first, Tor only after a network failure or a
 		# geo-block, never for a bot wall. `--network off` (or RETINAT/BROWSER_USE env) turns it off.
@@ -312,7 +319,8 @@ class RetinatServer(BrowserUseServer):
 
 		from browser_use.utils import get_browser_use_version
 
-		self.cdp_url = cdp_url
+		self.bridge = bridge
+		self.cdp_url = bridge.cdp_url if bridge else cdp_url
 		self.server = Server('retinat', version=get_browser_use_version())
 		self._setup_retinat_handlers()
 
@@ -343,7 +351,16 @@ class RetinatServer(BrowserUseServer):
 
 	async def _ensure_session(self) -> None:
 		if not self.browser_session:
-			if self.cdp_url:
+			if self.bridge:
+				try:
+					await self.bridge.wait_for_extension(timeout=5)
+				except TimeoutError:
+					raise RuntimeError(
+						"The person's browser is not connected. Ask them to open it with the Retinat bridge extension "
+						'loaded and share a tab (extension button, or Alt+Shift+A).'
+					) from None
+				await self._init_browser_session(allowed_domains=None)
+			elif self.cdp_url:
 				await self._init_browser_session(allowed_domains=None, cdp_url=self.cdp_url)
 			else:
 				await self._init_browser_session()
@@ -466,6 +483,11 @@ class RetinatServer(BrowserUseServer):
 			info = await eyes.swipe(args.get('direction', 'up'), float(args.get('fraction', 0.55)))
 			return f'Swiped {args.get("direction", "up")} {info["distance_px"]:.0f}px in {info["duration_ms"]:.0f}ms. {eyes.now_line()}'
 		if name == 'retinat_type':
+			if self.bridge and await self._secret_field_focused():
+				raise ValueError(
+					"Refusing to type into a password, card or one-time-code field in the person's own browser: "
+					'they enter those themselves. Ask them to fill it in, then carry on.'
+				)
 			if self.network.uses_tor and await self._secret_field_focused():
 				raise ValueError(
 					'Refusing to type into a password or payment field while routed through Tor: the exit relay is '
@@ -505,12 +527,22 @@ class RetinatServer(BrowserUseServer):
 		raise ValueError(f'Unknown tool: {name}')
 
 
-async def main(cdp_url: str | None = None, network: NetworkRouter | None = None) -> None:
+async def main(cdp_url: str | None = None, network: NetworkRouter | None = None, bridge_port: int | None = None) -> None:
 	if not MCP_AVAILABLE:
 		print('MCP SDK is required: pip install mcp', file=sys.stderr)
 		sys.exit(1)
-	server = RetinatServer(cdp_url=cdp_url, network=network)
-	await server.run()
+	bridge = None
+	if bridge_port is not None:
+		from browser_use.bridge import EXTENSION_DIR, BridgeRelay
+
+		bridge = await BridgeRelay(port=bridge_port).start()
+		print(f'Retinat bridge on {bridge.cdp_url}; load the extension from {EXTENSION_DIR} and share a tab.', file=sys.stderr)
+	server = RetinatServer(cdp_url=cdp_url, network=network, bridge=bridge)
+	try:
+		await server.run()
+	finally:
+		if bridge:
+			await bridge.stop()
 
 
 def cli() -> None:
@@ -529,12 +561,21 @@ def cli() -> None:
 	parser.add_argument(
 		'--exit-country', default=None, help='two-letter Tor exit country, e.g. de (env BROWSER_USE_EXIT_COUNTRY)'
 	)
+	parser.add_argument(
+		'--bridge',
+		nargs='?',
+		type=int,
+		const=9333,
+		default=int(os.environ['RETINAT_BRIDGE']) if os.environ.get('RETINAT_BRIDGE') else None,
+		metavar='PORT',
+		help="use the person's own browser through the Retinat bridge extension (relay port, default 9333; env RETINAT_BRIDGE)",
+	)
 	args = parser.parse_args()
 	network = None
 	if args.network or args.exit_country:
 		base = NetworkRouter.from_env(default=NetworkMode.AUTO)
 		network = NetworkRouter(args.network or base.mode, args.exit_country or base.exit_country)
-	asyncio.run(main(args.cdp_url, network))
+	asyncio.run(main(args.cdp_url, network, args.bridge))
 
 
 if __name__ == '__main__':

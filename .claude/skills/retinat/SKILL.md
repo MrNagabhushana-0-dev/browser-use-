@@ -7,8 +7,8 @@ description: See and operate a real browser through the Retinat MCP server (brow
 
 Retinat's MCP tools are prefixed `mcp__retinat__retinat_*`. If they aren't connected, the repository's
 `.mcp.json` registers them. You can also start the server by hand with
-`uv run python -m browser_use.retinat`, adding `--cdp-url http://127.0.0.1:9222` to attach to the
-user's own Chrome.
+`uv run python -m browser_use.retinat`. Add `--bridge` to use the user's own browser, with their profile and
+logins, in the tabs they share through the bridge extension (setup in `AI.md`).
 
 ## Workflow
 

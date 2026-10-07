@@ -190,6 +190,7 @@ include = [
     "browser_use/dom/**/*.js",
     "browser_use/eyes/*.js",
     "browser_use/explore/*.js",
+    "browser_use/bridge/extension/*",
     "!tests/**/*.py",
     "!debug/*",
 ]
