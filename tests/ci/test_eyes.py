@@ -1033,6 +1033,25 @@ async def test_search_finds_the_moment_by_what_it_looks_like(eyes, session, site
 		assert lo - 0.3 <= top_t <= hi + 0.3, (query, top_t, found.text)
 
 
+def test_the_start_of_a_beat_split_off_as_sound_is_folded_back_into_the_beats():
+	# A change point can land inside a click track, leaving its first second labelled 'sound': too few onsets there
+	# to show a rhythm on its own. On the neighbouring beats' grid, it is the same beats. Off the grid, it is not.
+	from browser_use.eyes.hearing import Segment, absorb_beat_edges
+
+	clicks = [5.02 + 0.5 * k for k in range(5)]  # 120 bpm from 5.02 s
+	segs = [
+		Segment(2.5, 5.0, 'tone', -20.0, '441 Hz'),
+		Segment(5.0, 6.0, 'sound', -20.0),
+		Segment(6.0, 7.5, 'beats', -20.0, '~120 bpm'),
+	]
+	out = absorb_beat_edges(segs, clicks)
+	assert [(s.kind, s.t0, s.t1) for s in out] == [('tone', 2.5, 5.0), ('beats', 5.0, 7.5)], out
+
+	off = [5.21, 5.77] + clicks[2:]  # onsets in the sound piece that do not fall on the beat
+	segs = [Segment(5.0, 6.0, 'sound', -20.0), Segment(6.0, 7.5, 'beats', -20.0, '~120 bpm')]
+	assert [s.kind for s in absorb_beat_edges(segs, off)] == ['sound', 'beats']
+
+
 def test_text_addressed_to_an_agent_is_told_apart_from_ordinary_page_text():
 	from browser_use.eyes.percept import page_text_note
 

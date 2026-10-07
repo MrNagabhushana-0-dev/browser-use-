@@ -291,6 +291,43 @@ def _regular(times: list[float]) -> float | None:
 	return med if float(np.std(ioi) / med) < 0.15 else None
 
 
+def absorb_beat_edges(segments: list[Segment], onsets: list[float], tolerance: float = 0.15) -> list[Segment]:
+	"""Fold a 'sound' segment into the 'beats' segment it touches when its onsets fall on that beat's grid.
+
+	A change point can land inside a click track and leave its first or last second on its own: too few onsets
+	there to show a rhythm, so it is labelled plain 'sound'. Every onset of it within `tolerance` of a period of
+	the neighbour's beat makes it the same beats. A piece with no onsets, or any off the grid, stays as it is.
+	"""
+	out = list(segments)
+	i = 0
+	while i < len(out):
+		seg = out[i]
+		mine = [t for t in onsets if seg.t0 <= t < seg.t1]
+		if seg.kind != 'sound' or not mine:
+			i += 1
+			continue
+		for j in (i + 1, i - 1):
+			if not 0 <= j < len(out) or out[j].kind != 'beats':
+				continue
+			nb = out[j]
+			if abs((nb.t0 if j > i else nb.t1) - (seg.t1 if j > i else seg.t0)) > 0.1:
+				continue  # not touching
+			theirs = [t for t in onsets if nb.t0 <= t <= nb.t1]
+			# Judged together: the sound piece's onsets continue the beat when the joined run is still even.
+			period = _regular(sorted(theirs + mine))
+			if period is None or not theirs:
+				continue
+			anchor = theirs[0]
+			if all(abs((t - anchor) / period - round((t - anchor) / period)) <= tolerance for t in mine):
+				nb.t0, nb.t1 = min(nb.t0, seg.t0), max(nb.t1, seg.t1)
+				nb.loud_db = max(nb.loud_db, seg.loud_db)
+				del out[i]
+				break
+		else:
+			i += 1
+	return out
+
+
 def _smooth(segments: list[Segment]) -> list[Segment]:
 	"""Fold short unlabelled slivers into a neighbour: a change point lands a hop or two off,
 	and the piece it leaves behind is a mix of both sides that deserves no label of its own."""
@@ -364,7 +401,7 @@ def listen(hops: list[AudioHop], sample_rate: float | None = None) -> Hearing:
 			else:
 				segments.append(Segment(t0, t1, kind, loud, detail))
 
-	segments = _smooth(segments)
+	segments = absorb_beat_edges(_smooth(segments), found)
 	for s in segments:  # a merged run of beats gets one tempo, from all of its onsets
 		if s.kind in ('beats', 'music'):
 			period = _regular([t for t in found if s.t0 - 0.05 <= t <= s.t1])

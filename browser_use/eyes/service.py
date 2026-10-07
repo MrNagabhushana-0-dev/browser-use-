@@ -462,7 +462,9 @@ class Eyes:
 		matches, vw, vh = found.get('matches') or [], found.get('vw') or 1, found.get('vh') or 1
 		if not matches:
 			return Percept(
-				[], f'🔎 "{text}": not found in the visible text of the page (text inside images or canvas is not searched)', None
+				[],
+				f'🔎 "{text}": not found in the visible text of the page (text inside images, canvas, iframes and closed shadow roots is not searched)',
+				None,
 			)
 		lines = [
 			f'🔎 "{text}": {len(matches)} match(es) in the page text' + (f', the first {limit}' if len(matches) > limit else '')
@@ -1070,22 +1072,87 @@ def _sounds_line(hops: list[AudioHop], sr: Any) -> str | None:
 	return f'heard {len(h.onsets)} distinct sounds (at ' + ', '.join(sight.fmt_t(t) for t in h.onsets) + ')'
 
 
-# Visible text matches, measured with a Range. Text split across elements is not matched (one node at a time).
+# Visible text matches across the composed tree: open shadow roots are entered and slots followed to what they show,
+# so slotted text counts once. The text is flattened with whitespace collapsed (inline neighbours join, as
+# "Check<b>out</b>"; a block boundary is a space), every character remembering its node and offset. A match is measured
+# node by node and the rectangles merged: one Range cannot cross a shadow boundary.
 _FIND_JS = """(q, cap) => {
-	const needle = q.toLowerCase(), out = [];
-	const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
-	for (let n = walker.nextNode(); n && out.length < cap; n = walker.nextNode()) {
-		const at = n.data.toLowerCase().indexOf(needle);
-		const el = n.parentElement;
-		if (at < 0 || !el || el.closest('script, style, noscript, template')) continue;
-		const style = getComputedStyle(el);
-		if (style.display === 'none' || style.visibility === 'hidden' || +style.opacity === 0) continue;
-		const r = document.createRange();
-		r.setStart(n, at);
-		r.setEnd(n, at + needle.length);
-		const b = r.getBoundingClientRect();
-		if (b.width < 1 || b.height < 1) continue;
-		out.push({ x: b.left, y: b.top, w: b.width, h: b.height, context: n.data.replace(/\\s+/g, ' ').trim().slice(0, 120) });
+	const needle = q.replace(/\\s+/g, ' ').trim().toLowerCase();
+	const nodes = [];
+	const walk = (n) => {
+		if (n.nodeType === 3) return void nodes.push(n);
+		if (n.nodeType === 1) {
+			if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|HEAD)$/.test(n.tagName)) return;
+			if (n.tagName === 'SLOT') {
+				const shown = n.assignedNodes({ flatten: true });
+				return void (shown.length ? shown : Array.from(n.childNodes)).forEach(walk);
+			}
+			if (n.shadowRoot) return void walk(n.shadowRoot);
+		} else if (n.nodeType !== 11 && n.nodeType !== 9) return;
+		for (const c of n.childNodes) walk(c);
+	};
+	walk(document.documentElement);
+	// Between two text nodes there is a break when any element left or entered on the way (up to their common
+	// ancestor) is not inline: "Check<b>out</b>" joins, "<p>a</p><p>b</p>" does not.
+	const up = (n) => n.parentElement || (n.parentNode && n.parentNode.host) || null;
+	const breaks = (a, b) => {
+		const seen = new Set();
+		for (let e = up(a); e; e = up(e)) seen.add(e);
+		let common = null;
+		const entered = [];
+		for (let e = up(b); e; e = up(e)) {
+			if (seen.has(e)) { common = e; break; }
+			entered.push(e);
+		}
+		const left = [];
+		for (let e = up(a); e && e !== common; e = up(e)) left.push(e);
+		return [...left, ...entered].some((e) => !getComputedStyle(e).display.startsWith('inline'));
+	};
+	let flat = '', shown = '';
+	const from = [];
+	let space = true;
+	for (let k = 0; k < nodes.length; k++) {
+		const n = nodes[k];
+		if (k && !space && breaks(nodes[k - 1], n)) {
+			flat += ' '; shown += ' '; from.push(null); space = true;
+		}
+		const d = n.data;
+		for (let i = 0; i < d.length; i++) {
+			const white = /\\s/.test(d[i]);
+			if (white && space) continue;
+			flat += white ? ' ' : d[i].toLowerCase();
+			shown += white ? ' ' : d[i];
+			from.push([k, i]);
+			space = white;
+		}
+	}
+	const out = [];
+	for (let at = flat.indexOf(needle); at >= 0 && needle && out.length < cap; at = flat.indexOf(needle, at + 1)) {
+		const spans = new Map();
+		for (let c = at; c < at + needle.length; c++) {
+			const f = from[c];
+			if (!f) continue;
+			const s = spans.get(f[0]);
+			spans.set(f[0], s ? [s[0], f[1] + 1] : [f[1], f[1] + 1]);
+		}
+		let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+		for (const [k, [a, b]] of spans) {
+			const el = nodes[k].parentElement;
+			if (el) {
+				const st = getComputedStyle(el);
+				if (st.visibility === 'hidden' || +st.opacity === 0) continue;
+			}
+			const r = document.createRange();
+			r.setStart(nodes[k], a);
+			r.setEnd(nodes[k], b);
+			const box = r.getBoundingClientRect();
+			if (box.width < 1 || box.height < 1) continue;
+			x0 = Math.min(x0, box.left); y0 = Math.min(y0, box.top);
+			x1 = Math.max(x1, box.right); y1 = Math.max(y1, box.bottom);
+		}
+		if (x1 <= x0 || y1 <= y0) continue;
+		const context = shown.slice(Math.max(0, at - 40), at + needle.length + 40).trim();
+		out.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, context });
 	}
 	return { matches: out, vw: innerWidth, vh: innerHeight };
 }"""

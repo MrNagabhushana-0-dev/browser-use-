@@ -18,6 +18,13 @@ FIND = (
 	'<p style="position:absolute;left:600px;top:400px;margin:0;font:6px sans-serif">Coupon code ZX-4417</p>'
 	'<div style="position:absolute;top:3200px">Terms of service</div></body>'
 )
+FIND_DEEP = (
+	'<!doctype html><title>Deep</title><body style="margin:0;font:16px sans-serif">'
+	'<button style="position:absolute;left:300px;top:100px;width:160px;height:44px">Check<b>out</b> now</button>'
+	'<ship-box style="position:absolute;left:300px;top:240px;display:block"><span>Ships from Lisbon</span></ship-box>'
+	"<script>customElements.define('ship-box', class extends HTMLElement { constructor() { super();"
+	"this.attachShadow({mode: 'open'}).innerHTML = '<p>Shipping estimate 3 days</p><slot></slot>'; } });</script></body>"
+)
 WALL = '<!doctype html><title>Just a moment...</title><body>Checking your browser before accessing the site.</body>'
 
 
@@ -28,6 +35,7 @@ def site():
 	server.expect_request('/').respond_with_data(PAGE, content_type='text/html')
 	server.expect_request('/wall').respond_with_data(WALL, content_type='text/html')
 	server.expect_request('/find').respond_with_data(FIND, content_type='text/html')
+	server.expect_request('/find-deep').respond_with_data(FIND_DEEP, content_type='text/html')
 	server.expect_request('/toast').respond_with_data(TOAST, content_type='text/html')
 	yield server
 	server.stop()
@@ -215,3 +223,16 @@ async def test_find_says_where_text_is_and_zoom_magnifies_small_print(retinat, s
 
 	with Image.open(io.BytesIO(base64.b64decode(images[0].data))) as img:
 		assert img.width >= 3 * 120, f'magnified from a fresh capture, not the 640 px frame: {img.size}'
+
+
+async def test_find_matches_text_split_across_elements_and_inside_shadow_roots(retinat, site):
+	import re
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/find-deep')})
+	split = _text(await _call(retinat, 'retinat_find', {'text': 'checkout now'}))
+	m = re.search(r'at \((\d+), (\d+)\)', split)
+	assert m and 300 <= int(m.group(1)) <= 460 and 100 <= int(m.group(2)) <= 144, f'inside the button: {split}'
+	shadow = _text(await _call(retinat, 'retinat_find', {'text': 'shipping estimate'}))
+	assert 'in view' in shadow and 'not found' not in shadow, shadow
+	slotted = _text(await _call(retinat, 'retinat_find', {'text': 'ships from lisbon'}))
+	assert slotted.count('. at (') == 1, f'slotted light-DOM text is found once, not twice: {slotted}'
