@@ -137,7 +137,8 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	lines: list[str] = []
 	size = f'{info.get("w")}x{info.get("h")}' if info.get('w') else 'size unknown'
 	duration = info.get('duration')
-	head = f'[{item.index}] {"canvas" if info.get("kind") == "canvas" else "video"} {size}'
+	label = {'canvas': 'canvas', 'desktop': 'screen'}.get(info.get('kind', ''), 'video')
+	head = f'[{item.index}] {label} {size}'
 	if duration:
 		head += f', {_fmt(duration)} long'
 	head += f', watched {item.watched_s:.1f}s'
@@ -183,7 +184,7 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	if item.motion:
 		lines.append('    ' + motion_mod.describe(item.motion, _fmt))
 	h = item.hearing
-	if info.get('kind') == 'canvas' and not h.heard:
+	if info.get('kind') in ('canvas', 'desktop') and not h.heard:
 		pass  # a canvas has no sound of its own: nothing to say
 	elif not h.heard:
 		lines.append('    sound: none captured (no audio track, or it had not started)')

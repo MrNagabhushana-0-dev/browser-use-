@@ -708,6 +708,16 @@ def test_one_stray_sample_going_back_in_time_is_not_a_loop_or_a_rewind():
 	assert sight.read(_frames([(t, 100) for t in looped]), duration=2.4).loops == [2.3]
 
 
+def test_a_cut_between_two_shots_of_the_same_brightness_is_found_by_colour():
+	# Red to blue at the same luma: brightness alone sees nothing change.
+	red, blue = bytes([208, 16, 16]) * 16, bytes([16, 48, 208]) * 16
+	frames = [
+		FrameSample(i + 1, 1, 0.1 * i, 0.1 * i, bytes([70]) * 256, (0, 0, 0), True, red if i < 20 else blue) for i in range(40)
+	]
+	cuts = sight.read(frames).cuts
+	assert len(cuts) == 1 and abs(cuts[0] - 2.0) <= 0.11, cuts
+
+
 def test_keyframe_selection_covers_every_distinct_shot_before_repeating_one():
 	# Eight seconds of one shot and one second each of three others.
 	spec = [(i / 10, 40) for i in range(80)] + [(8 + i / 10, 120) for i in range(10)]

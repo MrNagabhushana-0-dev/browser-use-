@@ -45,6 +45,42 @@ _DETAIL = {
 
 
 def _tools() -> list['types.Tool']:
+	return _browser_tools() + (_desktop_tools() if _desktop_allowed() else [])
+
+
+def _desktop_allowed() -> bool:
+	"""Desktop eyes see the whole screen: their tools exist only when the server was started with them on."""
+	from browser_use.eyes.desktop import OPT_IN_ENV
+
+	return os.environ.get(OPT_IN_ENV, '').lower() in ('1', 'true', 'yes')
+
+
+def _desktop_tools() -> list['types.Tool']:
+	ro = types.ToolAnnotations(read_only_hint=True)
+	return [
+		types.Tool(
+			name='retinat_desktop_look',
+			description='The whole screen (the X display) now, as one image. Present only when desktop eyes were turned on.',
+			input_schema={'type': 'object', 'properties': {}},
+			annotations=ro,
+		),
+		types.Tool(
+			name='retinat_desktop_watch',
+			description=(
+				'Watch the whole screen for a while and return one sheet: what changed (cuts), what moved, keyframes. '
+				'Sees what a screenshot per step misses: a dialog that came and went, a progress bar that moved. '
+				'Present only when desktop eyes were turned on.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {'seconds': {'type': 'number', 'default': 8, 'minimum': 1, 'maximum': 60}},
+			},
+			annotations=ro,
+		),
+	]
+
+
+def _browser_tools() -> list['types.Tool']:
 	ro = types.ToolAnnotations(read_only_hint=True)
 	return [
 		types.Tool(
@@ -355,6 +391,15 @@ class RetinatServer(BrowserUseServer):
 			return await self._network_set(args)
 		if name == 'retinat_network_status':
 			return await self.network.status()
+		if name in ('retinat_desktop_look', 'retinat_desktop_watch'):
+			from browser_use.eyes.desktop import DesktopEyes
+
+			if not _desktop_allowed():
+				raise ValueError('Desktop eyes are off on this server (start it with BROWSER_USE_DESKTOP_EYES=1).')
+			desktop = DesktopEyes(enabled=True)
+			if name == 'retinat_desktop_look':
+				return self._content(await desktop.look())
+			return self._content(await desktop.watch(seconds=float(args.get('seconds', 8))))
 		await self._ensure_session()
 		assert self.browser_session is not None
 		if name == 'retinat_open':

@@ -171,12 +171,26 @@ def grids(frames: list[FrameSample]) -> np.ndarray:
 	return np.frombuffer(b''.join(f.luma for f in frames), dtype=np.uint8).reshape(len(frames), -1).astype(np.float32)
 
 
-def deltas(matrix: np.ndarray) -> np.ndarray:
-	"""Mean absolute difference of each frame from the one before (0 for the first)."""
+def deltas(matrix: np.ndarray, colours: np.ndarray | None = None) -> np.ndarray:
+	"""Mean absolute difference of each frame from the one before (0 for the first).
+
+	Luma alone misses a cut between two shots of the same brightness (red to blue is about 73 to 56 in luma). With
+	`colours` (the frames' 4x4 RGB grids), the larger of the luma and colour differences counts, as content-based
+	scene detectors score hue and saturation as well as brightness.
+	"""
 	if len(matrix) < 2:
 		return np.zeros(len(matrix), dtype=np.float32)
 	d = np.abs(np.diff(matrix, axis=0)).mean(axis=1)
+	if colours is not None and len(colours) == len(matrix):
+		d = np.maximum(d, np.abs(np.diff(colours, axis=0)).mean(axis=1))
 	return np.concatenate([[0.0], d]).astype(np.float32)
+
+
+def colour_grids(frames: list[FrameSample]) -> np.ndarray | None:
+	"""(n, 48) float32 4x4 RGB grids, or None unless every frame has one."""
+	if not frames or any(len(f.colours) != 48 for f in frames):
+		return None
+	return np.frombuffer(b''.join(f.colours for f in frames), dtype=np.uint8).reshape(len(frames), 48).astype(np.float32)
 
 
 # A jump back in media time is believed when this many samples after it carry on from where it landed.
@@ -208,7 +222,7 @@ def read(frames: list[FrameSample], duration: float | None = None) -> Sight:
 		drop = strays([f.t for f in frames], LOOP_JUMP_S)
 		frames = [f for i, f in enumerate(frames) if i not in drop]
 	matrix = grids(frames)
-	d = deltas(matrix)
+	d = deltas(matrix, colour_grids(frames))
 	starts: list[tuple[int, float, bool]] = [(0, 0.0, False)] if frames else []
 	loops: list[float] = []
 	rewinds: list[float] = []

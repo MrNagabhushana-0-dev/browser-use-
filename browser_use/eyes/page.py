@@ -158,7 +158,7 @@ class PageWatcher:
 		selection = sight.select_keyframes(samples, keyframes)
 		# Where the picture changed while the page was not being scrolled: things moving on their own.
 		moving: list[float] = []
-		deltas = sight.deltas(sight.grids(samples))
+		deltas = sight.deltas(sight.grids(samples), sight.colour_grids(samples))
 		for i in range(1, len(captured)):
 			a, b = captured[i - 1], captured[i]
 			if a.scroll_y == b.scroll_y and deltas[i] > 6 and (not moving or abs(moving[-1] - a.scroll_y) > h * 0.5):
