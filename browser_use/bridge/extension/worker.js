@@ -20,6 +20,7 @@ const state = {
 	targets: new Map(), // tab id -> DevTools target id
 	holder: 'agent', // who drives shared tabs: 'agent' or 'human'
 	autoHeld: false, // the person took the wheel just by using a shared tab (resumes on its own)
+	stopped: false, // the person pressed Cancel on the debugging bar: nothing until they share a tab again
 	personAt: 0, // when the person last used a shared tab
 	aiInputAt: new Map(), // tab id -> when the AI last sent input there
 	aiWindow: null,
@@ -51,8 +52,10 @@ function emit(msg) {
 }
 
 async function save() {
-	await call(store, 'set', { shared: [...state.shared], holder: state.holder, aiWindow: state.aiWindow });
+	await call(store, 'set', { shared: [...state.shared], holder: state.holder, aiWindow: state.aiWindow, stopped: state.stopped });
 }
+
+const STOPPED = 'the person pressed Cancel on the debugging bar, which stops the AI; ask them to share a tab again';
 
 async function targetInfo(tabId) {
 	const targets = await call(C.debugger, 'getTargets');
@@ -83,6 +86,12 @@ async function badge(tabId) {
 }
 
 async function share(tabId, why) {
+	const resuming = state.stopped && why === 'shared by the person'; // sharing again is the person's go-ahead
+	if (state.stopped && !resuming) throw new Error(STOPPED);
+	if (resuming) {
+		state.stopped = false;
+		await setHolder('agent', 'the person shared a tab again');
+	}
 	if (state.shared.has(tabId)) return;
 	state.shared.add(tabId);
 	await save();
@@ -149,6 +158,7 @@ function needShared(tabId) {
 }
 
 async function handle(msg) {
+	if (state.stopped && msg.op !== 'ping' && msg.op !== 'tabs') throw new Error(STOPPED);
 	switch (msg.op) {
 		case 'ping':
 			return {};
@@ -205,7 +215,14 @@ function connect() {
 	ws.onopen = async () => {
 		state.backoff = 500;
 		const m = C.runtime.getManifest();
-		emit({ event: 'hello', userAgent: navigator.userAgent, extension: m.version, manifest: m.manifest_version, holder: state.holder });
+		emit({
+			event: 'hello',
+			userAgent: navigator.userAgent,
+			extension: m.version,
+			manifest: m.manifest_version,
+			holder: state.holder,
+			stopped: state.stopped,
+		});
 		for (const tabId of state.shared) {
 			targetInfo(tabId)
 				.then((tab) => emit({ event: 'shared', why: 'already shared', tab }))
@@ -252,7 +269,7 @@ async function onPersonInput(tabId, type) {
 }
 
 async function resumeWhenQuiet() {
-	if (!state.autoHeld) return; // the person took or gave the wheel explicitly since
+	if (!state.autoHeld || state.stopped) return; // the person took or gave the wheel explicitly since
 	const quiet = Date.now() - state.personAt;
 	if (quiet >= state.settings.resumeAfterMs) await setHolder('agent', 'the person has been idle');
 	else setTimeout(resumeWhenQuiet, state.settings.resumeAfterMs - quiet);
@@ -265,6 +282,7 @@ async function activeTab() {
 
 async function status(tabId) {
 	return {
+		stopped: state.stopped,
 		connected: !!(state.ws && state.ws.readyState === 1),
 		relay: state.settings.relay,
 		holder: state.holder,
@@ -282,13 +300,14 @@ async function boot() {
 	}
 	const local = await call(C.storage.local, 'get', 'settings');
 	Object.assign(state.settings, local.settings || {});
-	const kept = await call(store, 'get', ['shared', 'holder', 'aiWindow']);
+	const kept = await call(store, 'get', ['shared', 'holder', 'aiWindow', 'stopped']);
 	state.holder = kept.holder || 'agent';
+	state.stopped = !!kept.stopped;
 	state.aiWindow = kept.aiWindow ?? null;
 	const tabs = await call(C.tabs, 'query', {});
 	const live = new Set(tabs.map((t) => t.id));
 	for (const id of kept.shared || []) if (live.has(id)) state.shared.add(id);
-	for (const t of tabs) if (alwaysShared(t.url)) state.shared.add(t.id);
+	if (!state.stopped) for (const t of tabs) if (alwaysShared(t.url)) state.shared.add(t.id);
 	await save();
 	for (const id of state.shared) badge(id);
 	connect();
@@ -301,7 +320,19 @@ C.debugger.onEvent.addListener((source, method, params) => {
 C.debugger.onDetach.addListener(async (source, reason) => {
 	const tabId = source.tabId;
 	state.attached.delete(tabId);
-	if (reason === 'canceled_by_user') return unshare(tabId, 'the person pressed Cancel on the debugging bar');
+	if (reason === 'canceled_by_user') {
+		// Cancel is the person's stop button, not just "this tab": unshare everything and open nothing new.
+		if (state.stopped) return; // Chrome detaches every tab at once; the first one does the work
+		state.stopped = true;
+		state.autoHeld = false;
+		for (const id of [...state.shared]) await unshare(id, 'the person pressed Cancel on the debugging bar');
+		await save();
+		state.holder = 'human';
+		await save();
+		emit({ event: 'control', holder: 'human', stopped: true, why: 'the person pressed Cancel on the debugging bar' });
+		for (const id of state.shared) badge(id);
+		return;
+	}
 	if (state.shared.has(tabId) && reason !== 'target_closed') {
 		// e.g. DevTools opened on the tab: tell the relay so clients re-attach and re-enable their domains
 		state.shared.delete(tabId);

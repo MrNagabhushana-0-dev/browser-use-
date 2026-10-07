@@ -72,6 +72,7 @@ class BridgeRelay:
 		self.command_timeout = command_timeout
 		self.hello: dict[str, Any] = {}
 		self.holder: str = 'agent'
+		self.stopped = False  # the person pressed Cancel on the debugging bar; cleared when they share again
 		self.tabs: dict[int, dict[str, Any]] = {}  # tab id -> CDP TargetInfo
 		self._token = secrets.token_hex(16)
 		self._children: dict[str, int] = {}  # child (OOPIF/worker) session id -> tab id
@@ -222,10 +223,12 @@ class BridgeRelay:
 			self._on_changed(msg['tab'])
 		elif event == 'control':
 			self.set_holder(msg['holder'])
+			self.stopped = bool(msg.get('stopped'))
 			self._log_control(msg)
 		elif event == 'hello':
 			self.hello = msg
 			self.holder = msg.get('holder', 'agent')
+			self.stopped = bool(msg.get('stopped'))
 			self._ext_ready.set()
 			self._log_extension(msg)
 
@@ -394,7 +397,7 @@ class BridgeRelay:
 		raise BridgeError(f"'{method}' wasn't found (not available through the extension bridge)")
 
 	def _check(self, method: str) -> None:
-		why = refusal(method, self.human_driving)
+		why = refusal(method, self.human_driving, self.stopped)
 		if why:
 			raise BridgeError(why)
 

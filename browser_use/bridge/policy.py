@@ -18,6 +18,8 @@ HOLDING = (
 	' (Alt+Shift+Z)'
 )
 
+STOPPED = 'the person pressed Cancel on the debugging bar, which stops the AI; ask them to share a tab again'
+
 REFUSED: dict[str, str] = {
 	**dict.fromkeys(
 		(
@@ -62,10 +64,10 @@ ACTING = re.compile(
 )
 
 
-def refusal(method: str, human_driving: bool = False) -> str | None:
+def refusal(method: str, human_driving: bool = False, stopped: bool = False) -> str | None:
 	"""Why `method` is refused through the bridge, or None when it is allowed."""
 	assert '.' in method, f'not a CDP method: {method!r}'
 	why = REFUSED.get(method) or REFUSED_DOMAINS.get(method.split('.', 1)[0])
-	if why is None and human_driving and ACTING.match(method):
-		why = HOLDING
+	if why is None and (human_driving or stopped) and ACTING.match(method):
+		why = STOPPED if stopped else HOLDING
 	return f'{method} is refused through the extension bridge: {why}' if why else None

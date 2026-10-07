@@ -52,7 +52,10 @@ Then:
   message saying so. You carry on 8 s after their last input. Alt+Shift+Z takes or hands back the wheel explicitly,
   and an explicit hold lasts until they hand it back.
 - Their browser shows "Retinat bridge started debugging this browser" while a tab is shared. **Cancel** on that bar
-  unshares everything.
+  (or closing it) is their stop button. Every tab is unshared, and you may not open a tab of your own either, until they
+  share a tab again. If your calls come back with "pressed Cancel", stop and ask them.
+- After the extension's files change (an update of this repository), they press the reload arrow on its card at
+  `chrome://extensions`. Chrome keeps running the old service worker until then.
 - Python code uses `BridgeRelay` plus `bridge_session_kwargs(relay.cdp_url)`; see `python -m browser_use.bridge`.
 
 The older route, `--cdp-url http://127.0.0.1:9222` against a Chrome started with `--remote-debugging-port`, still
@@ -270,8 +273,10 @@ tests for them skip elsewhere.
   - **Hidden tabs:** a hidden shared tab is brought to the front of its own window before any click or key, as a
     person would.
   - **Browsers:**
-    - **Works:** Chromium-family browsers (Chrome, Edge, Brave, Opera, Vivaldi, Arc). Edge and Opera document
-      `chrome.debugger`; the others are Chromium and expected to work, but the vendors don't say so.
+    - **Tested:** Google Chrome 155, with the extension added through Load unpacked in its own UI; Microsoft Edge 154;
+      Chromium 141. The whole bridge suite passed on each.
+    - **Expected to work, untested:** Brave, Opera, Vivaldi and Arc. Opera documents `chrome.debugger`; the others are
+      Chromium, but their vendors don't say so.
     - **Version floor:** MV3 needs Chromium 88+. Pages inside cross-site iframes need 125+ (flat debugger sessions);
       116+ keeps the connection from dropping while idle.
     - **Older Chromium:** `python -m browser_use.bridge extension DIR --mv2` writes a Manifest V2 build. Chrome 139+

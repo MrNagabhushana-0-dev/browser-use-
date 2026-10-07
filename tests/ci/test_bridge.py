@@ -9,6 +9,7 @@ import asyncio
 import ctypes
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -41,9 +42,8 @@ LOGIN = (
 )
 
 
-@pytest.fixture(scope='module')
-def display():
-	for n in range(91, 99):
+def _xvfb():
+	for n in range(91, 120):
 		if not os.path.exists(f'/tmp/.X11-unix/X{n}') and not os.path.exists(f'/tmp/.X{n}-lock'):
 			break
 	proc = subprocess.Popen(
@@ -56,6 +56,17 @@ def display():
 	yield f':{n}'
 	proc.terminate()
 	proc.wait(timeout=10)
+
+
+@pytest.fixture(scope='module')
+def display():
+	yield from _xvfb()
+
+
+@pytest.fixture
+def own_display():
+	"""A screen with nothing else on it, for tests that click the browser's own UI."""
+	yield from _xvfb()
 
 
 @pytest.fixture(scope='module')
@@ -76,27 +87,14 @@ def site():
 async def bridge(display, site, tmp_path_factory):
 	"""A relay plus a person's browser that shares /shared* (by the always-share setting) and not /private."""
 	relay = await BridgeRelay(port=0).start()
-	ext = write_extension(
-		tmp_path_factory.mktemp('ext') / 'retinat-bridge',
-		relay=f'ws://127.0.0.1:{relay.port}/extension',
+	proc = _person_browser(
+		tmp_path_factory.mktemp('person'),
+		relay,
+		display,
+		[site.url_for('/private'), site.url_for('/shared')],
 		always_share=[site.url_for('/shared') + '*'],
 		resume_after_ms=1500,
 	)
-	chrome = LocalBrowserWatchdog._find_installed_browser_path()
-	assert chrome, 'no Chromium found'
-	args = [
-		chrome,
-		f'--user-data-dir={tmp_path_factory.mktemp("profile")}',
-		f'--load-extension={ext}',
-		f'--disable-extensions-except={ext}',
-		'--no-first-run',
-		'--no-default-browser-check',
-		site.url_for('/private'),
-		site.url_for('/shared'),
-	]
-	if os.geteuid() == 0:
-		args.insert(1, '--no-sandbox')  # Chromium refuses to run as root otherwise; a person's browser does not run as root
-	proc = _launch(args, display)
 	try:
 		await relay.wait_for_extension(timeout=30)
 		await relay.wait_for_tab(timeout=30)
@@ -130,6 +128,33 @@ def x_click(display: str, x: int, y: int) -> None:
 	xtst.XTestFakeButtonEvent(dpy, 1, 0, 0)
 	xlib.XFlush(dpy)
 	xlib.XCloseDisplay(dpy)
+
+
+def _person_browser(tmp: Path, relay: BridgeRelay, display: str, urls: list[str], **settings) -> subprocess.Popen:
+	"""Start a browser the way a person does, with the bridge extension in it and nothing else added.
+
+	By default this is the Chromium found here, with the extension added by --load-extension (standing in for Load
+	unpacked). BRIDGE_TEST_BROWSER picks another binary, e.g. Edge. Branded Chrome 137+ ignores --load-extension:
+	for it, set BRIDGE_TEST_PROFILE to a profile where the extension was added with Load unpacked from the folder
+	BRIDGE_TEST_EXTENSION. That folder's settings are rewritten for this run and the profile is copied, so run the
+	idle test (its own browser) in a separate pytest invocation then.
+	"""
+	relay_url = f'ws://127.0.0.1:{relay.port}/extension'
+	binary = os.environ.get('BRIDGE_TEST_BROWSER') or LocalBrowserWatchdog._find_installed_browser_path()
+	assert binary, 'no Chromium found'
+	if preloaded := os.environ.get('BRIDGE_TEST_PROFILE'):
+		write_extension(Path(os.environ['BRIDGE_TEST_EXTENSION']), relay=relay_url, **settings)
+		profile = shutil.copytree(preloaded, tmp / 'profile', ignore=shutil.ignore_patterns('Singleton*'))
+		args = [binary, f'--user-data-dir={profile}']
+	else:
+		ext = write_extension(tmp / 'ext', relay=relay_url, **settings)
+		args = [binary, f'--user-data-dir={tmp / "profile"}', f'--load-extension={ext}', f'--disable-extensions-except={ext}']
+	args += ['--no-first-run', '--no-default-browser-check', *urls]
+	if os.geteuid() == 0:
+		# Chromium refuses to run as root without --no-sandbox (a person's browser doesn't run as root); --test-type
+		# drops the warning bar that flag adds, which would otherwise queue the debugging bar behind it.
+		args[1:1] = ['--no-sandbox', '--test-type']
+	return _launch(args, display)
 
 
 def _launch(args: list[str], display: str) -> subprocess.Popen:
@@ -177,7 +202,8 @@ async def test_only_shared_tabs_are_visible(bridge, site):
 	listed = (await get(relay, '/json/list')).json()
 	assert [t['url'] for t in listed] == [site.url_for('/shared')]
 	version = (await get(relay, '/json/version')).json()
-	assert version['Browser'].startswith('Chrome/') and version['webSocketDebuggerUrl'].startswith('ws://127.0.0.1:')
+	assert re.match(r'^(Chrome|Edge|Opera|Vivaldi)/\d+\.', version['Browser']), version['Browser']
+	assert version['webSocketDebuggerUrl'].startswith('ws://127.0.0.1:')
 
 	http, cdp = await raw_cdp(relay)
 	try:
@@ -375,20 +401,71 @@ async def test_an_idle_extension_stays_connected_past_the_service_worker_timeout
 	Its own browser with nothing shared: an attached debugger session would also keep the worker alive and hide this.
 	"""
 	relay = await BridgeRelay(port=0).start()
-	ext = write_extension(tmp_path / 'ext', relay=f'ws://127.0.0.1:{relay.port}/extension')
-	chrome = LocalBrowserWatchdog._find_installed_browser_path()
-	assert chrome
-	args = [chrome, f'--user-data-dir={tmp_path / "profile"}', f'--load-extension={ext}', f'--disable-extensions-except={ext}']
-	args += ['--no-first-run', '--no-default-browser-check', 'about:blank']
-	if os.geteuid() == 0:
-		args.insert(1, '--no-sandbox')
-	proc = _launch(args, display)
+	proc = _person_browser(tmp_path, relay, display, ['about:blank'])
 	try:
 		await relay.wait_for_extension(timeout=30)
 		first = relay._ext
 		await asyncio.sleep(40)
 		assert relay._ext is first and first is not None and not first.closed, 'the idle extension dropped its connection'
 	finally:
+		await relay.stop()
+		proc.terminate()
+		proc.wait(timeout=10)
+
+
+def _find_cancel(display: str, geometry: list[int]) -> tuple[int, int]:
+	"""Where the debugging bar's Cancel button is: the longest solid run of colour in the bar just above the page.
+
+	Chrome draws it blue and Edge near-black. The bar's text is ink too, but it breaks into short runs letter by
+	letter, and the close (x) at the right end is left out.
+	"""
+	from PIL import ImageGrab
+
+	sx, sy, chrome_w, chrome_h, w, _ = geometry
+	left, top = sx + chrome_w // 2, sy + chrome_h
+	shot = ImageGrab.grab(xdisplay=display).convert('RGB')
+	best = (0, 0, 0)  # run length, x at its middle, y
+	for y in range(top - 48, top - 4):
+		run = 0
+		for x in range(left, left + w - 60):
+			r, g, b = shot.getpixel((x, y))  # type: ignore[misc]  # an RGB image gives a 3-tuple
+			run = run + 1 if max(r, g, b) < 120 or b - r > 80 else 0
+			if run > best[0]:
+				best = (run, x - run // 2, y)
+	assert best[0] >= 30, f'no Cancel button in the bar above the page (longest run {best[0]} px)'
+	return best[1], best[2]
+
+
+async def test_cancel_on_the_debugging_bar_stops_the_ai_until_the_person_shares_again(own_display, tmp_path, site):
+	"""Cancel is the person's stop button: everything is unshared and the AI may not open a tab of its own instead."""
+	relay = await BridgeRelay(port=0).start()
+	display = own_display
+	proc = _person_browser(tmp_path, relay, display, [site.url_for('/shared')], always_share=[site.url_for('/shared') + '*'])
+	http = None
+	try:
+		await relay.wait_for_tab(timeout=30)
+		http, cdp = await raw_cdp(relay)
+		target = (await cdp.call('Target.getTargets'))['result']['targetInfos'][0]['targetId']
+		sid = (await cdp.call('Target.attachToTarget', {'targetId': target, 'flatten': True}))['result']['sessionId']
+		assert 'result' in await cdp.call('Runtime.evaluate', {'expression': '1'}, sid)  # attaches: the bar appears
+		await asyncio.sleep(1)
+		geometry = (
+			'JSON.stringify([screenX, screenY, outerWidth - innerWidth, outerHeight - innerHeight, innerWidth, innerHeight])'
+		)
+		r = await cdp.call('Runtime.evaluate', {'expression': geometry, 'returnByValue': True}, sid)
+		x_click(display, *_find_cancel(display, json.loads(r['result']['result']['value'])))
+
+		async def stopped():
+			return relay.stopped and not relay.tabs
+
+		await until(stopped, timeout=5)
+		refused = await cdp.call('Target.createTarget', {'url': site.url_for('/shared/next')})
+		assert 'pressed Cancel' in refused['error']['message']
+		await asyncio.sleep(1.5)
+		assert not relay.tabs, 'the AI opened a tab of its own after the person pressed Cancel'
+	finally:
+		if http:
+			await http.close()
 		await relay.stop()
 		proc.terminate()
 		proc.wait(timeout=10)

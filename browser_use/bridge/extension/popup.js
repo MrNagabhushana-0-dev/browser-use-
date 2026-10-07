@@ -18,6 +18,8 @@ function render(s) {
 	hold.className = s.holder === 'human' ? 'hold' : '';
 	document.getElementById('note').textContent = s.error
 		? s.error
+		: s.stopped
+		? 'Stopped: you pressed Cancel on the debugging bar. Share a tab to let the AI work again.'
 		: `${s.count} tab${s.count === 1 ? '' : 's'} shared. The AI sees and acts only in shared tabs, with the same clicks and keys you use.`;
 	document.getElementById('relay').value = s.relay || '';
 	window.__status = s;
