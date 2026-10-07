@@ -1923,3 +1923,65 @@ steps, which is the gap the browser retina already fills for pages.
 2. Keep `loopwatch` on for full runs until a red one is caught with it.
 3. Drop strays from `motion.track` and the "covering" span too.
 4. A blind-agent check that `find` and `zoom` get used, and what they save.
+
+## Round 37 (unattended loop): the bridge on branded Chrome and Edge, and a Cancel that didn't stop
+
+**Item.** Round 36's top Next item: run the bridge suite against branded Chrome or Edge with Load unpacked.
+
+**Setup.**
+- Downloaded through the network policy: Google Chrome 155.0.8059.39 and Microsoft Edge 154.0.4258.62. Each `.deb` was
+  unpacked into the scratchpad, not installed.
+- **Edge 154 still honours `--load-extension`.** Chrome 155 ignores it, even with
+  `--disable-features=DisableLoadExtensionCommandLineSwitch`, as the 2025 PSA said.
+- **For Chrome, the extension went in the way a person adds it,** driven by XTest on Xvfb and checked by looking at
+  screenshots:
+  1. typed `chrome://extensions` into the address bar (a `chrome://` URL on the command line is ignored);
+  2. Load unpacked;
+  3. Ctrl+L and the folder path in the GTK chooser, then Open.
+  - Result: "Extension loaded", with the pinned ID `lcdhfliibkimhbimdfhogcmjedlkoemg`.
+- `tests/ci/test_bridge.py` now takes `BRIDGE_TEST_BROWSER`, plus `BRIDGE_TEST_PROFILE` and `BRIDGE_TEST_EXTENSION` for
+  such a profile. The profile is copied per run.
+
+**Found.**
+1. **Cancel didn't stop the AI (fixed).** Pressing Cancel on the debugging bar in Chrome 155 detached and unshared the
+   tab, reason `canceled_by_user`.
+   - **The problem:** `BrowserSession`, left with no tab, called `Target.createTarget`, and the extension opened a new AI
+     window. The stop button moved the AI instead of stopping it.
+   - **The fix:** Cancel (closing the bar does the same) now puts the extension in a stopped state. No commands, no new
+     tabs and no always-share until the person shares a tab again, which also hands the wheel back. The relay refuses
+     with "the person pressed Cancel...".
+   - **The test:** a new test finds the Cancel button on screen in any brand (the longest solid run of colour in the
+     bar above the page: Chrome's is blue, Edge's near-black) and clicks it with XTest. It fails with the stop disabled.
+2. **Chrome keeps running an unpacked extension's old service worker after its files change,** until the reload arrow
+   on its card is pressed. The first branded runs used the pre-fix worker for that reason. AI.md now tells people to
+   reload after updating.
+3. **The debugging bar is real and visible on branded Chrome 155:** `"Retinat bridge" started debugging this browser
+   [Cancel]`.
+   - At first it looked absent. Chrome queues infobars, and the `--no-sandbox` warning (needed only because the
+     container runs as root) was in front of it.
+   - Tests running as root now add `--test-type`, which drops that warning.
+4. **Not a bug:** the relay reports Edge as `Edge/154...`. The test had assumed `Chrome/`.
+5. **UX wrinkle, not fixed:** while the AI isn't running, each reconnect attempt adds a red "connection refused" entry
+   on the extension's Errors page. The back-off caps it at one every 10 s.
+
+**Measured** (bridge suite, 11 tests, final code):
+
+| Browser | How the extension was added | Result |
+|---|---|---|
+| Chromium 141 (Playwright build) | `--load-extension` | 11/11, three runs in a row |
+| Microsoft Edge 154 | `--load-extension` | 11/11 |
+| Google Chrome 155 | Load unpacked in its own UI | 11/11 |
+
+- The Chrome 155 run used three invocations: the idle test and the Cancel test start their own browser on the same
+  extension folder.
+
+**Not measured.**
+- Brave, Opera, Vivaldi and Arc.
+- Windows and macOS: only Linux on Xvfb here.
+- Chromium below 125, and the MV2 build in a real old browser.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. Drop strays from `motion.track` and the "covering" span too.
+3. A blind-agent check that `find` and `zoom` get used, and what they save.
+4. Brave and Vivaldi through the same Load-unpacked path, if their Linux packages download.
