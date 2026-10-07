@@ -2019,3 +2019,57 @@ mostly the video fallback.
 2. A blind-agent check that `find` and `zoom` get used, and what they save.
 3. Brave and Vivaldi through the bridge's Load-unpacked path (both Linux packages are reachable).
 4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+
+## Round 39 (unattended loop): do blind agents use `find` and `zoom`, and what do they buy?
+
+**Item.** Round 38's Next list, item 2. Item 1 (`loopwatch`) applies to full runs; no library code changed this
+round, so the last full run (`1e01482`) stands.
+
+**Method** (`docs/agent-notes/e2e/host3.py`, results in `results-fine-print-2026-10-07.json`):
+- **The task:** a long page with a six-character coupon code in 6 px grey type at the bottom.
+  - `dom` variant: the code is page text.
+  - `canvas` variant: it is drawn on a canvas under a readable label, so only pixels carry it.
+- **Codes:** drawn with `secrets` at host start (the host source says nothing about them). The truth stayed outside
+  the repository until the runs were over.
+- **The agents:** fresh `retinat-browser` sub-agents, run one at a time on the one Retinat browser. Each was told
+  only the URL and the question, and was asked to say UNKNOWN rather than guess.
+- **Two tool sets:**
+  - look-only: open, look, key, swipe, scan;
+  - with `find` and `zoom`: the same plus `retinat_find` and `retinat_zoom`.
+- **Scale:** 3 seeds × 2 variants × 2 conditions = 12 runs.
+- **Scoring rule, fixed first:** the exact code.
+- **Host log:** page requests came from Chrome only, apart from one operator `curl`.
+
+**Results.**
+
+| Fine print | Look-only | With `find` + `zoom` |
+|---|---|---|
+| DOM text | 3/3, ~19.2k sub-agent tokens, 26.7 s | 3/3, ~18.1k tokens, 16.3 s |
+| Canvas pixels | **0/3** (all said UNKNOWN; none guessed) | **3/3**, ~21.0k tokens, 35.9 s |
+
+- **Used unprompted:** every agent that had the tools used them. `find` 6/6; `zoom` 3/3 on canvas and 0/3 on
+  DOM, where `find` was enough.
+- **On DOM text, `find` buys speed, not correctness.** Look-only agents also got the code, through `retinat_scan`.
+  `find` saved about 6% of tokens and 39% of wall time.
+- **On pixels, `zoom` is the difference.** Without it the code was unreadable in every run, at about the same token
+  cost.
+- **The look-only agents' answers were honest:** 3 of 3 said UNKNOWN instead of guessing.
+
+**Found on the way.**
+- **`zoom` can't add detail a canvas doesn't have.** At 4× it redraws text and vector content sharply, but a canvas
+  is a bitmap at its own resolution, so the canvas code came out blurry-readable. All three agents read it
+  correctly anyway, but at smaller sizes it would fail.
+- **The match context `find` prints runs across block boundaries.** Searching the label gave "two, pick the larger.
+  Terms apply...", the end of the previous paragraph joined to the footer. Matching is right (Round 34); only the
+  context snippet merges blocks.
+- **The operator sanity check** opened the `canvas-43` page through the same Retinat server before the runs. The
+  agent for that URL opened it fresh; no recall or search tools were allowed.
+
+**Not measured.** Larger seeds; other models; real pages; DOM text that `scan` can't read (for example
+off-screen text in a scrollable panel).
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. Make `find`'s context snippet stop at block boundaries, as matching already does.
+3. Brave and Vivaldi through the bridge's Load-unpacked path (both Linux packages are reachable).
+4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
