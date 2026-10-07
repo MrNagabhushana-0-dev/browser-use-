@@ -1641,3 +1641,55 @@ watchdog, ran on this round's full run.
 3. `find` and `zoom` in Retinat.
 4. Opt-in desktop eyes.
 5. Drop strays from `motion.track` and the "covering" span too.
+
+## Round 33 (unattended loop): page-tagged text, and `find` and `zoom` in Retinat
+
+**Items.** Round 32's item 2 (text events from the page just left) and item 3 (`find` and `zoom`). Item 1, the
+watchdog, ran on this round's full run.
+
+**Text from the page just left (`3f4b7ad`).**
+- Same lag as Round 32's frames. A toast from the old page came back in the new page's watch with a *negative* time,
+  "(-1.3s after the page loaded)", in 2 of 3 runs.
+- The retina now tags its text and state events with its document: the `timeOrigin` prefix its item ids already use,
+  now a named `DOC` constant.
+- `_text_lines` drops text from another document than the current one, unless it arrived during the watch.
+- 4/4 after the fix.
+
+**`find` and `zoom` (`9603e27`): research.**
+- Anthropic's `computer_20251124` tool added a `zoom` action: a region `[x1, y1, x2, y2]` returned from a fresh
+  full-resolution capture, not an upscale of the downscaled screenshot (see langchain-anthropic's
+  `Computer20251124Options` reference).
+- Retinat's `look` sends a frame about 640 px wide of a 1920 px viewport, so small print is lost.
+
+**`find` and `zoom`: what was built.**
+- `retinat_zoom(x, y, width, height)`: a viewport region in CSS px, the same space as look images and clicks. It is
+  translated to page coordinates and captured with CDP `captureScreenshot` at a clip scale of up to 4x, which makes
+  Chrome redraw the region at that size.
+- `retinat_find(text)`: visible text matches, found in the retina's isolated world and measured with a `Range`. Each
+  match has its centre (ready for `retinat_click`), whether it is in view or how many screens to scroll, and its
+  context with the page-text injection note. A magnified crop of the first match in view comes back too.
+- The agent, skill and AI.md docs list both, and the retinat-browser agent's tool allow-list includes them (without
+  that, the agent could not call them).
+
+**Measured.**
+- A coupon code set in 6 px type is an unreadable grey smudge in the look frame. `retinat_zoom` returns it crisp and
+  readable at 4x, for about 72 tokens. Both images were checked by eye.
+- MCP-level test, 3 of 3 cases right:
+  - `find('checkout')` gives the button's centre within 4 px of its real bounding box, plus a crop;
+  - `find('terms of service')` says it is below the visible area and to scroll;
+  - a missing phrase says "not found".
+- Eyes + Retinat + eyesbench: 66/66, rerun after a container restart killed the first run.
+- Full `tests/ci` on `9603e27` with the watchdog: **green, 1,590 passed, 30 skipped, 0 failed** (28m18s). No stalls over 1 s and no `keyframes:` warnings.
+
+**Not measured, or not done.**
+- `find` does not match text split across elements (one text node at a time), text in shadow roots, or text inside
+  images or canvas. The not-found reply mentions images and canvas only, not shadow roots.
+- Zooming beyond the viewport, which would need scrolling first.
+- Whether agents actually prefer `find` and `zoom` over `look`, and the tokens that saves in practice.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. `find` across shadow roots and across split text nodes, and say so when nothing is found.
+3. Opt-in desktop eyes.
+4. Drop strays from `motion.track` and the "covering" span too.
+5. A blind-agent check that `find` and `zoom` get used, and what they save, against look-only on a small-print task.
