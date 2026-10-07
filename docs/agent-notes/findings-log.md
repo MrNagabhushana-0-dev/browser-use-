@@ -1693,3 +1693,57 @@ watchdog, ran on this round's full run.
 3. Opt-in desktop eyes.
 4. Drop strays from `motion.track` and the "covering" span too.
 5. A blind-agent check that `find` and `zoom` get used, and what they save, against look-only on a small-print task.
+
+## Round 34 (unattended loop): `find` through split text and shadow roots; "beats heard as sound" caught and fixed
+
+**Item.** Round 33's item 2: `find` across shadow roots and split text nodes. Item 1, the watchdog, ran on this
+round's full run.
+
+**`find` (`499fea7`).**
+- Failing test first. A button labelled "Check<b>out</b> now", and a web component whose open shadow root holds
+  "Shipping estimate 3 days" next to a slotted light-DOM "Ships from Lisbon". The old matcher found neither the split
+  label nor the shadow text.
+- The matcher now walks the composed tree. It enters open shadow roots and follows each `<slot>` to its assigned
+  nodes, so slotted text counts once.
+- The text is flattened with whitespace collapsed, each character remembering its node and offset.
+- Neighbouring nodes join when every element left or entered between them is inline; a block boundary becomes a
+  space.
+  - A first attempt compared the two parents' display instead. It inserted a space inside the button, because an
+    absolutely positioned button computes to `display: block`. The flattened text was dumped to see this.
+- A match is measured node by node and the boxes merged, because one `Range` cannot cross a shadow boundary.
+- The not-found reply now names everything not searched: images, canvas, iframes, closed shadow roots.
+- Result: the split label's centre lands inside the button, the shadow text is found, and the slotted text is found
+  exactly once.
+
+**"Beats heard as sound" (the old click-train failure), caught with its log.**
+- `test_cuts_and_sounds` failed in this round's first affected-file run with
+  `['silence', 'tone', 'sound', 'beats', 'noise']`. That is the failure seen intermittently since Round 8.
+- Cause: a change point inside the 120 bpm click section left its first second or more as a separate piece. Too few
+  onsets there to show a rhythm alone, so it was labelled plain "sound", and at 1 s or more it is not a sliver for
+  `_smooth` to fold.
+- Fix: `hearing.absorb_beat_edges` folds a "sound" segment into the "beats" segment it touches when the joined
+  onsets are regular and its own sit on that grid (within 15% of a period). Off-grid sound stays as it is.
+- A unit test pins both cases. The first version judged the beats neighbour alone and missed: 3 clicks are too few
+  for `_regular`'s 4-onset minimum. Judging the joined run fixed it.
+
+**Measured.**
+- Eyes + Retinat + eyesbench: 68/68.
+- Full `tests/ci` on `499fea7` with the watchdog: **green, 1,592 passed, 30 skipped, 0 failed** (27m32s). One stall (1.1 s) and no `keyframes:` warnings.
+
+**Not measured.**
+- How often the beat-edge failure happened before, so there is no before/after rate. It was seen about 3 times
+  across Rounds 8-33. The fix targets the observed mechanism and is pinned by a unit test, not by a measured drop.
+- `find` in closed shadow roots and iframes (not reachable from the page's own world), and text drawn in images or
+  canvas.
+
+**Desktop eyes: groundwork checked, not built.** Xvfb is installed, and Pillow here grabs an X screen
+(`ImageGrab.grab(xdisplay=...)`, with XCB support). A desktop retina can be tested on a virtual display without new
+dependencies.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. Opt-in desktop eyes. Sample an X display with Pillow into the same `FrameSample` pipeline (cuts, motion,
+   keyframes, sheets). Off unless explicitly enabled. Tested on Xvfb with a headful browser window as the moving
+   content.
+3. Drop strays from `motion.track` and the "covering" span too.
+4. A blind-agent check that `find` and `zoom` get used, and what they save, against look-only on a small-print task.
