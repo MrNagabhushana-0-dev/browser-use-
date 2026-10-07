@@ -209,6 +209,7 @@ class BridgeRelay:
 			self._on_changed(msg['tab'])
 		elif event == 'control':
 			self.set_holder(msg['holder'])
+			self._log_control(msg)
 		elif event == 'hello':
 			self.hello = msg
 			self.holder = msg.get('holder', 'agent')
@@ -421,6 +422,10 @@ class BridgeRelay:
 
 	def _log_listening(self) -> None:
 		logger.info(f'🔗 Bridge relay listening on {self.cdp_url} (extension connects to ws://127.0.0.1:{self.port}/extension)')
+
+	def _log_control(self, msg: dict[str, Any]) -> None:
+		who = 'the person' if msg['holder'] == 'human' else 'the AI'
+		logger.info(f'🔗 Wheel to {who}: {msg.get("why", "")}')
 
 	def _log_extension(self, hello: dict[str, Any]) -> None:
 		logger.info(f'🔗 Bridge extension connected from {_product(hello.get("userAgent", ""))} (MV{hello.get("manifest")})')

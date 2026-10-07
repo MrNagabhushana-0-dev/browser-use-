@@ -48,7 +48,9 @@ They then:
 
 Then:
 - You see and act only in shared tabs. Tabs you open yourself go to a separate window of theirs.
-- Alt+Shift+Z hands the wheel to the person: input and navigation are refused until they hand it back.
+- When the person clicks, types or scrolls in a shared tab, you are paused: input and navigation are refused, with a
+  message saying so. You carry on 8 s after their last input. Alt+Shift+Z takes or hands back the wheel explicitly,
+  and an explicit hold lasts until they hand it back.
 - Their browser shows "Retinat bridge started debugging this browser" while a tab is shared. **Cancel** on that bar
   unshares everything.
 - Python code uses `BridgeRelay` plus `bridge_session_kwargs(relay.cdp_url)`; see `python -m browser_use.bridge`.

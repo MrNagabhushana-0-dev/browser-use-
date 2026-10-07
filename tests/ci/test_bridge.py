@@ -6,6 +6,7 @@ The browser here is started the way a person starts theirs - headful, no --remot
 """
 
 import asyncio
+import ctypes
 import json
 import os
 import shutil
@@ -79,6 +80,7 @@ async def bridge(display, site, tmp_path_factory):
 		tmp_path_factory.mktemp('ext') / 'retinat-bridge',
 		relay=f'ws://127.0.0.1:{relay.port}/extension',
 		always_share=[site.url_for('/shared') + '*'],
+		resume_after_ms=1500,
 	)
 	chrome = LocalBrowserWatchdog._find_installed_browser_path()
 	assert chrome, 'no Chromium found'
@@ -111,6 +113,23 @@ async def bridge(display, site, tmp_path_factory):
 async def get(relay: BridgeRelay, path: str, **headers: str) -> httpx.Response:
 	async with httpx.AsyncClient(trust_env=False) as http:
 		return await http.get(relay.cdp_url + path, headers=headers)
+
+
+def x_click(display: str, x: int, y: int) -> None:
+	"""A real pointer click on the X display, as the person's mouse makes it (XTest), not through CDP."""
+	xlib, xtst = ctypes.CDLL('libX11.so.6'), ctypes.CDLL('libXtst.so.6')
+	xlib.XOpenDisplay.restype = ctypes.c_void_p
+	xlib.XOpenDisplay.argtypes = [ctypes.c_char_p]
+	xlib.XFlush.argtypes = xlib.XCloseDisplay.argtypes = [ctypes.c_void_p]
+	xtst.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ulong]
+	xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+	dpy = xlib.XOpenDisplay(display.encode())
+	assert dpy, f'cannot open {display}'
+	xtst.XTestFakeMotionEvent(dpy, -1, x, y, 0)
+	xtst.XTestFakeButtonEvent(dpy, 1, 1, 0)
+	xtst.XTestFakeButtonEvent(dpy, 1, 0, 0)
+	xlib.XFlush(dpy)
+	xlib.XCloseDisplay(dpy)
 
 
 def _launch(args: list[str], display: str) -> subprocess.Popen:
@@ -202,6 +221,8 @@ async def test_browser_session_drives_the_shared_tab_like_a_person(bridge, site)
 		assert await js('navigator.webdriver') is False
 		await HumanInput(session, seed=1).click(150, 85)
 		assert await js('clicks') == [True]  # trusted, exactly like a person's click
+		await asyncio.sleep(0.8)
+		assert relay.holder == 'agent', "the AI's own click must not read as the person taking over"
 
 		await cdp.cdp_client.send.Page.navigate(params={'url': site.url_for('/shared/next')}, session_id=cdp.session_id)
 
@@ -235,7 +256,7 @@ async def test_relay_refuses_what_a_person_cannot_do(bridge):
 
 		relay.set_holder('human')
 		held = await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 5, 'y': 5}, sid)
-		assert 'the person is driving' in held['error']['message']
+		assert 'the person is using the browser' in held['error']['message']
 		looked = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, sid)
 		assert 'result' in looked, 'looking stays allowed while the person drives'
 	finally:
@@ -313,3 +334,36 @@ async def test_browser_use_mcp_works_in_the_persons_browser_too(bridge, site):
 	finally:
 		await server._close_all_sessions()
 	assert proc.poll() is None
+
+
+async def test_the_ai_pauses_while_the_person_uses_a_shared_tab_and_resumes_after(bridge, display):
+	relay, _ = bridge
+	http, cdp = await raw_cdp(relay)
+	try:
+		target = (await cdp.call('Target.getTargets'))['result']['targetInfos'][0]['targetId']
+		sid = (await cdp.call('Target.attachToTarget', {'targetId': target, 'flatten': True}))['result']['sessionId']
+		await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 1, 'y': 1}, sid)  # brings the tab forward
+		await asyncio.sleep(0.8)  # past the window in which input counts as the AI's own
+		assert relay.holder == 'agent'
+
+		geometry = (
+			'JSON.stringify([screenX, screenY, outerWidth - innerWidth, outerHeight - innerHeight, innerWidth, innerHeight])'
+		)
+		r = await cdp.call('Runtime.evaluate', {'expression': geometry, 'returnByValue': True}, sid)
+		sx, sy, chrome_w, chrome_h, w, h = json.loads(r['result']['result']['value'])
+		x_click(display, sx + chrome_w // 2 + w // 2, sy + chrome_h + h // 2)
+
+		async def paused():
+			return relay.holder == 'human'
+
+		await until(paused, timeout=5)
+		held = await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 5, 'y': 5}, sid)
+		assert 'the person is using the browser' in held['error']['message']
+
+		async def resumed():
+			return relay.holder == 'agent'
+
+		await until(resumed, timeout=6)  # resume_after_ms=1500 in this fixture
+		assert 'result' in await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 5, 'y': 5}, sid)
+	finally:
+		await http.close()

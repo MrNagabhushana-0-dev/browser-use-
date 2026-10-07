@@ -40,11 +40,13 @@ def write_extension(
 	relay: str | None = None,
 	always_share: list[str] | None = None,
 	manifest_version: int = 3,
+	resume_after_ms: int | None = None,
 ) -> Path:
 	"""Copy the extension to `out`, ready for "Load unpacked".
 
 	`relay` overrides the WebSocket address it dials (default ws://127.0.0.1:9333/extension); `always_share` lists
-	URL globs the person has decided to share without asking each time. `manifest_version=2` writes the variant for
+	URL globs the person has decided to share without asking each time; `resume_after_ms` is how long after the
+	person's last click or key in a shared tab the AI may carry on (0: only when handed back). `manifest_version=2` writes the variant for
 	Chromium older than 88, which has no Manifest V3.
 	"""
 	assert manifest_version in (2, 3), manifest_version
@@ -55,6 +57,8 @@ def write_extension(
 		settings['relay'] = relay
 	if always_share is not None:
 		settings['alwaysShare'] = list(always_share)
+	if resume_after_ms is not None:
+		settings['resumeAfterMs'] = resume_after_ms
 	(out / 'settings.json').write_text(json.dumps(settings, indent=2) + '\n')
 	if manifest_version == 2:
 		manifest = json.loads((out / 'manifest.json').read_text())

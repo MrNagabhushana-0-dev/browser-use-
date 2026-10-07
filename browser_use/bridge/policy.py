@@ -13,7 +13,10 @@ TRAFFIC = 'it would rewrite or inject network traffic instead of letting the sit
 STORAGE = "it would write cookies or site data directly instead of through the site's own pages"
 PROTECTION = 'it would switch off a browser protection'
 BROWSER = 'it reaches past the shared tabs into the browser itself'
-HOLDING = 'the person is driving right now; wait until they hand back the wheel'
+HOLDING = (
+	'the person is using the browser right now; wait a few seconds and try again, or ask them to hand back the wheel'
+	' (Alt+Shift+Z)'
+)
 
 REFUSED: dict[str, str] = {
 	**dict.fromkeys(

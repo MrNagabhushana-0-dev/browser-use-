@@ -1,4 +1,5 @@
 {
   "relay": "ws://127.0.0.1:9333/extension",
-  "alwaysShare": []
+  "alwaysShare": [],
+  "resumeAfterMs": 8000
 }

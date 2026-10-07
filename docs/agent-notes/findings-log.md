@@ -1808,3 +1808,105 @@ steps, which is the gap the browser retina already fills for pages.
 3. A blind-agent check that `find` and `zoom` get used, and what they save, against look-only on a small-print task.
 4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion. Count the false cuts against the
    luma-only detector.
+
+## Round 36 (owner's request): the AI in the person's own browser, through an extension
+
+**Item.** The owner's direction replaced the Next list for this round:
+- use a normal browser, not an agent sandbox, so sites don't flag the account as automated;
+- an extension that works across Chromium browsers, old and new;
+- the person and the AI share one browser;
+- the AI can do only what the person can.
+
+**Research** (primary sources, read 2026-10-07):
+- **Playwright MCP's extension mode** is the closest prior art, read from source (`microsoft/playwright`
+  `packages/extension`, `tools/mcp/cdpRelay.ts`). It is an MV3 extension relaying `chrome.debugger` to a loopback
+  relay that synthesizes `Target.*`. It works one tab or tab group per client.
+- **Chrome DevTools MCP `--autoConnect`** (Chrome 144+, approval dialog) is Chrome-only and shows the "controlled by
+  automated test software" banner.
+- **`--remote-debugging-port` is ignored on the default profile since Chrome 136**, so the old `--cdp-url` route
+  never reached the person's everyday logins.
+- **Flat `chrome.debugger` child sessions need Chrome 125**; WebSocket traffic keeps an MV3 worker alive from 116;
+  MV3 exists from 88. **MV2** is gone from Chrome 139.
+- **`--load-extension` is ignored by branded Chrome 137+**, but kept by Chromium and Chrome for Testing.
+- **Where `navigator.webdriver` comes from** (Blink source): only `--enable-automation`, headless,
+  `--remote-debugging-pipe` or port 0 set it. A browser the person starts has none of these.
+- **Not confirmed by the vendors:** that Brave, Vivaldi and Arc support `chrome.debugger`. Edge and Opera document it.
+
+**Built (`f328db5`; auto-pause in the commit after it).**
+- **`browser_use/bridge/extension/`**: the MV3 extension, with a fixed public key so its ID is pinned
+  (`lcdhfliibkimhbimdfhogcmjedlkoemg`).
+  - **Sharing:** the person shares a tab from the popup, with Alt+Shift+A, or by always-share URL globs. A tab a
+    shared page opens is shared too.
+  - **Tabs the AI opens** go into a separate, visible window of the person's browser.
+  - **The wheel:** Alt+Shift+Z or the popup hands it to the person.
+  - **Disclosure:** the "started debugging this browser" bar stays; its Cancel unshares everything.
+  - **Hidden tabs:** a hidden shared tab is brought to the front of its window before input, as a person would.
+    Hidden tabs got no clicks in the test, which is how this was found.
+- **`browser_use/bridge/relay.py`**: an aiohttp relay serving `/json/version` and a browser-level CDP WebSocket.
+  - **Target emulation:** `getTargets`, `setDiscoverTargets`, `setAutoAttach`, `attachToTarget`, `createTarget`,
+    `closeTarget`, `activateTarget` and `getTargetInfo`. Child sessions route through `chrome.debugger`'s `sessionId`.
+  - **Order:** a per-client outbox keeps events and replies in send order.
+  - **Who may connect:** loopback Host only (against DNS rebinding), no web-page Origin, only the pinned extension ID,
+    and an unguessable `/cdp/<token>` path.
+- **`browser_use/bridge/policy.py`** refuses, with a reason:
+  - identity and location overrides (user agent, geolocation, timezone, locale, device metrics, touch emulation);
+  - `Fetch` and extra headers;
+  - direct cookie and site-data writes;
+  - `setBypassCSP` and ignoring certificate errors;
+  - anything `Browser.*` or browser-context.
+  - While the person holds the wheel, input, navigation and DOM writes are refused too.
+- **`bridge_session_kwargs()`** leaves the person's window size and permissions alone.
+- **`retinat --bridge [PORT]`** and **`BROWSER_USE_BRIDGE=PORT`** for the browser-use MCP server. Both refuse to type
+  into password, card and one-time-code fields in the person's browser.
+- **Old Chromium:** `python -m browser_use.bridge extension DIR --mv2` writes a Manifest V2 build for Chromium older
+  than 88.
+- **A packaging bug caught before push:** the repo's `*.json` gitignore would have left `manifest.json` out of every
+  clone. It now has an exception.
+
+**Measured** (`tests/ci/test_bridge.py`, first 8 tests):
+- **The browser:** Playwright's Chromium 141, headful on a private Xvfb, launched like a person's: no debugging
+  port, no automation flag. The only addition is `--load-extension`, standing in for Load unpacked.
+- **Results:**
+  - only the always-shared tab is visible (the private tab is not listed and can't be attached);
+  - an unchanged `BrowserSession` attaches;
+  - `navigator.webdriver === false`;
+  - a `HumanInput` click arrives with `isTrusted === true`;
+  - navigation works;
+  - stopping the session leaves the browser running;
+  - all six refusals hold;
+  - the person-holds-the-wheel refusal works, and reading still works while the person drives;
+  - the AI's own tab opens and closes;
+  - the MV2 manifest is right;
+  - Retinat `open`/`find`/`click` work, and typing into a password field is refused (the field stays empty);
+  - the browser-use MCP server's typing into the password field is refused.
+- **8/8 passed three times in a row, about 6 s each.** Retinat and MCP tests: 24 passed.
+
+**Not measured.**
+- Branded Chrome, Edge, Brave, Opera and Vivaldi. Only Chromium 141 ran here; the others are expected from
+  documentation and their shared engine.
+- Chromium below 125 (no child sessions, so cross-site iframes are unreachable) and the MV2 build in a real old
+  browser.
+- Whether real sites treat the bridge differently from the person: no live site was used, by design.
+- Packaging for the Chrome Web Store and Edge Add-ons. Unpacked only for now.
+
+**Then the first Next item, built in the same round: the AI pauses while the person uses a shared tab.**
+- **How it tells them apart:** the person's input and the AI's are both trusted events, so a content script can't
+  tell them apart by the event alone.
+  - `watch.js` reports trusted `pointerdown`, `keydown` and `wheel` events from every page.
+  - The worker drops any that land within 600 ms of input it sent to that tab itself. Whatever is left is the
+    person's.
+- **What follows:** the person's input hands them the wheel, and the relay then refuses the AI's input with "the
+  person is using the browser right now...". The AI resumes after `resumeAfterMs` of quiet (default 8 s; 0 means
+  only when handed back).
+  - An explicit hold (Alt+Shift+Z or the popup) never resumes on its own.
+- **Test:** a real XTest pointer click on the Xvfb screen, which is what a mouse produces and not CDP, pauses the
+  AI. The AI is refused, then resumes after 1.5 s of quiet. The AI's own `HumanInput` click does not pause it.
+  - With `onPersonInput` disabled, the test fails (it times out waiting for the pause), so it measures the feature.
+  - The bridge suite, now 9 tests, passed 3/3.
+- **Limit:** a person's click within 600 ms of the AI's own input in the same tab is read as the AI's.
+
+**Next, in order:**
+1. Run the bridge suite against branded Chrome or Edge with Load unpacked, and record what differs.
+2. Keep `loopwatch` on for full runs until a red one is caught with it.
+3. Drop strays from `motion.track` and the "covering" span too.
+4. A blind-agent check that `find` and `zoom` get used, and what they save.

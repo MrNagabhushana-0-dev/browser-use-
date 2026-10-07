@@ -13,11 +13,15 @@ const ACTING =
 	/^(Input\.|Page\.(navigate|navigateToHistoryEntry|reload|close)$|DOM\.(setFileInputFiles|setAttributeValue|setAttributesAsText|setOuterHTML|setNodeValue|removeNode|removeAttribute)$)/;
 
 const state = {
-	settings: { relay: 'ws://127.0.0.1:9333/extension', alwaysShare: [] },
+	// resumeAfterMs: after the person's last input in a shared tab, how long until the AI may carry on (0: never)
+	settings: { relay: 'ws://127.0.0.1:9333/extension', alwaysShare: [], resumeAfterMs: 8000 },
 	shared: new Set(), // tab ids the person shared, or the AI opened
 	attached: new Set(), // tab ids with a live chrome.debugger session
 	targets: new Map(), // tab id -> DevTools target id
 	holder: 'agent', // who drives shared tabs: 'agent' or 'human'
+	autoHeld: false, // the person took the wheel just by using a shared tab (resumes on its own)
+	personAt: 0, // when the person last used a shared tab
+	aiInputAt: new Map(), // tab id -> when the AI last sent input there
 	aiWindow: null,
 	ws: null,
 	backoff: 500,
@@ -154,11 +158,17 @@ async function handle(msg) {
 		}
 		case 'send': {
 			needShared(msg.tabId);
-			if (state.holder === 'human' && ACTING.test(msg.method)) throw new Error('the person is driving right now');
+			if (state.holder === 'human' && ACTING.test(msg.method)) throw new Error('the person is using the browser right now');
 			await ensureAttached(msg.tabId);
-			if (msg.method.startsWith('Input.') && !msg.sessionId) await bringToFront(msg.tabId);
+			const input = msg.method.startsWith('Input.');
+			if (input && !msg.sessionId) await bringToFront(msg.tabId);
 			const target = msg.sessionId ? { tabId: msg.tabId, sessionId: msg.sessionId } : { tabId: msg.tabId };
-			return (await call(C.debugger, 'sendCommand', target, msg.method, msg.params || {})) || {};
+			if (input) state.aiInputAt.set(msg.tabId, Date.now());
+			try {
+				return (await call(C.debugger, 'sendCommand', target, msg.method, msg.params || {})) || {};
+			} finally {
+				if (input) state.aiInputAt.set(msg.tabId, Date.now());
+			}
 		}
 		case 'open':
 			return await openForAgent(msg.url || 'about:blank');
@@ -220,11 +230,32 @@ function retry() {
 	state.backoff = Math.min(state.backoff * 2, 10000);
 }
 
-async function setHolder(holder) {
+async function setHolder(holder, why = 'set by the person') {
 	state.holder = holder;
+	state.autoHeld = false;
 	await save();
-	emit({ event: 'control', holder });
+	emit({ event: 'control', holder, why });
 	for (const tabId of state.shared) badge(tabId);
+}
+
+// Input the AI did not send is the person's: their clicks, keys and wheel turns are trusted events too,
+// so the only way to tell them apart is that the AI's own input went through this worker moments before.
+const AI_ECHO_MS = 600;
+
+async function onPersonInput(tabId, type) {
+	if (Date.now() - (state.aiInputAt.get(tabId) || 0) < AI_ECHO_MS) return;
+	state.personAt = Date.now();
+	if (state.holder !== 'agent') return;
+	await setHolder('human', `the person used a shared tab (${type})`);
+	state.autoHeld = true;
+	if (state.settings.resumeAfterMs > 0) setTimeout(resumeWhenQuiet, state.settings.resumeAfterMs);
+}
+
+async function resumeWhenQuiet() {
+	if (!state.autoHeld) return; // the person took or gave the wheel explicitly since
+	const quiet = Date.now() - state.personAt;
+	if (quiet >= state.settings.resumeAfterMs) await setHolder('agent', 'the person has been idle');
+	else setTimeout(resumeWhenQuiet, state.settings.resumeAfterMs - quiet);
 }
 
 async function activeTab() {
@@ -305,6 +336,10 @@ C.windows.onRemoved.addListener((id) => {
 });
 
 C.runtime.onMessage.addListener((msg, sender, reply) => {
+	if (msg.input) {
+		if (sender.tab && state.shared.has(sender.tab.id)) onPersonInput(sender.tab.id, msg.input);
+		return false;
+	}
 	(async () => {
 		if (msg.ask === 'share') await share(msg.tabId, 'shared by the person');
 		else if (msg.ask === 'unshare') await unshare(msg.tabId, 'unshared by the person');
