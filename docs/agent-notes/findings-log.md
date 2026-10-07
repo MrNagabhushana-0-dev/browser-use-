@@ -1880,6 +1880,9 @@ steps, which is the gap the browser retina already fills for pages.
   - Retinat `open`/`find`/`click` work, and typing into a password field is refused (the field stays empty);
   - the browser-use MCP server's typing into the password field is refused.
 - **8/8 passed three times in a row, about 6 s each.** Retinat and MCP tests: 24 passed.
+- **Full `tests/ci` on `86dcc43`** (bridge plus auto-pause): **green, 1,606 passed, 30 skipped, 0 failed** (28m33s).
+  The keepalive commit after it (`328791b`) touches only `relay.py`, the bridge tests and these notes; the bridge
+  suite passed 10/10 on it.
 
 **Not measured.**
 - Branded Chrome, Edge, Brave, Opera and Vivaldi. Only Chromium 141 ran here; the others are expected from
