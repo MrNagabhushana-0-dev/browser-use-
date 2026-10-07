@@ -73,7 +73,12 @@ class ItemPercept:
 
 	@property
 	def t_span(self) -> tuple[float, float]:
-		ts = [f.t for f in self.frames] + [h.t for h in self.hops]
+		"""The media time held, from the first to the last sample. A lone stray sample (stamped at the wrong moment)
+		is left out: stamped 0.0 it would claim the start was held when it wasn't."""
+		ts = []
+		for samples in ([f.t for f in self.frames], [h.t for h in self.hops]):
+			drop = sight_mod.strays(samples, sight_mod.LOOP_JUMP_S)
+			ts += [t for i, t in enumerate(samples) if i not in drop]
 		return (min(ts), max(ts)) if ts else (0.0, 0.0)
 
 

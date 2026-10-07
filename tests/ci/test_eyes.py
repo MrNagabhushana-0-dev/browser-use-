@@ -708,6 +708,40 @@ def test_one_stray_sample_going_back_in_time_is_not_a_loop_or_a_rewind():
 	assert sight.read(_frames([(t, 100) for t in looped]), duration=2.4).loops == [2.3]
 
 
+def _ball(t: float) -> int:
+	"""Row of a ball that falls from row 2 to row 13 by t=1.0 s and rises back by t=2.0 s."""
+	return round(2 + 11 * (1 - abs(1 - t)))
+
+
+def _ball_frame(seq: int, t: float, row: int) -> FrameSample:
+	luma = bytearray([20]) * 256
+	for y in (row, row + 1):
+		for x in (7, 8):
+			luma[y * 16 + x] = 230
+	return FrameSample(seq, 1, t, float(seq), bytes(luma), (20, 20, 20), True)
+
+
+def test_one_stray_sample_does_not_add_a_turn_to_the_motion_or_widen_what_was_covered():
+	from browser_use.eyes import motion
+	from browser_use.eyes.percept import ItemPercept
+
+	clock = [round(0.05 * i, 2) for i in range(41)]  # 0.0-2.0 s: down, one bottom at 1.0 s, back up
+	frames = [_ball_frame(i + 1, t, _ball(t)) for i, t in enumerate(clock)]
+	clean = motion.track(frames)
+	assert clean is not None and len(clean.bottom) == 1 and abs(clean.bottom[0] - 1.0) <= 0.1, clean
+	# One sample sent during a source change: stamped 0.0, but showing the ball near the bottom.
+	stray = _ball_frame(99, 0.0, 12)
+	with_stray = frames[:30] + [stray] + frames[30:]
+	seen = motion.track(with_stray)
+	assert seen is not None and seen.bottom == clean.bottom and seen.top == clean.top, (clean, seen)
+
+	late = [_ball_frame(i + 1, 5.0 + t, _ball(t)) for i, t in enumerate(clock)]
+	late = late[:30] + [_ball_frame(99, 0.0, 12)] + late[30:]
+	hops = _hops([5.0 + t for t in clock[:30]] + [0.0] + [5.0 + t for t in clock[30:]])
+	item = ItemPercept(1, 1, {}, late, hops, sight.read(late), hearing.listen(hops))
+	assert item.t_span == (5.0, 7.0), 'a stray sample stamped 0.0 must not claim the start was held'
+
+
 def test_a_cut_between_two_shots_of_the_same_brightness_is_found_by_colour():
 	# Red to blue at the same luma: brightness alone sees nothing change.
 	red, blue = bytes([208, 16, 16]) * 16, bytes([16, 48, 208]) * 16

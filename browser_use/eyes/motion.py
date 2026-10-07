@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from browser_use.eyes.retina import FrameSample
+from browser_use.eyes.sight import LOOP_JUMP_S, strays
 
 GRID = 16
 DIFF_FLOOR = 12  # luma levels: below this a cell matches the background
@@ -83,7 +84,10 @@ def track(frames: list[FrameSample]) -> Motion | None:
 	The object is what changed since the previous sample (not what differs from a background: a thing that
 	rests most of the time would become background and leave a ghost). Its centroid lags half a sample.
 	"""
-	frames = sorted((f for f in frames if len(f.luma) == GRID * GRID), key=lambda f: f.t)
+	# A lone sample stamped at the wrong moment, sorted in by its time, would put a picture from elsewhere in the
+	# motion and add a turning point that never happened (`frames` arrive in order, so it can be told apart).
+	drop = strays([f.t for f in frames], LOOP_JUMP_S)
+	frames = sorted((f for i, f in enumerate(frames) if i not in drop and len(f.luma) == GRID * GRID), key=lambda f: f.t)
 	if len(frames) < 8:
 		return None
 	lum = np.stack([np.frombuffer(f.luma, dtype=np.uint8).reshape(GRID, GRID).astype(np.float32) for f in frames])
