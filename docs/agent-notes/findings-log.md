@@ -1747,3 +1747,64 @@ dependencies.
    content.
 3. Drop strays from `motion.track` and the "covering" span too.
 4. A blind-agent check that `find` and `zoom` get used, and what they save, against look-only on a small-print task.
+
+## Round 35 (unattended loop): opt-in desktop eyes, and cuts by colour as well as brightness
+
+**Item.** Round 34's item 2: opt-in desktop eyes. Item 1, the watchdog, ran on this round's full run.
+
+**Research.** UFO2 (Microsoft, arXiv 2504.14603, 2025) is the leading open desktop agent. It perceives one screenshot
+per step, fused with Windows UI Automation and an OmniParser-v2 element detector. Nothing watches the screen between
+steps, which is the gap the browser retina already fills for pages.
+
+**Built (`3b1bb8f`).**
+- `browser_use/eyes/desktop.py`: `DesktopEyes` samples an X display with Pillow (`ImageGrab.grab(xdisplay=...)`,
+  XCB) into the retina's `FrameSample` pipeline: shots and cuts, motion, keyframes, one sheet. `look()` returns one
+  image.
+- **Opt-in:** `DesktopEyes(enabled=True)` or `BROWSER_USE_DESKTOP_EYES=1`; otherwise `DesktopEyesOff` with a message
+  saying why. Retinat lists `retinat_desktop_look` and `retinat_desktop_watch` only when started with that variable,
+  and they run without starting a browser.
+- Percepts label the item "screen" and skip sound (the desktop has no single audio track). AI.md documents both
+  tools and the consent point.
+
+**The test caught a real gap in cut detection.**
+- On a private Xvfb, a real headful Chrome window turned from red to blue. The desktop eyes chose keyframes at the
+  change, but declared no cut.
+- Red (208,16,16) and blue (16,48,208) have near-equal luma (about 73 and 56), and `sight.deltas` was luma-only. So a
+  hard cut between two equally bright, differently coloured *video* shots was missed too.
+- Fix: deltas take the larger of the luma difference and the 4x4 RGB grid difference, which the frames already carry.
+  This follows content-based scene detectors (PySceneDetect's `ContentDetector` scores hue and saturation as well as
+  brightness). Applied to `sight.read` and the page scan.
+- A unit test pins it: it fails on the old code (no cut) and finds the one cut at 2.0 s now.
+
+**Measured.**
+- Desktop tests 3/3: opt-in gating, a cut with both colours named and two keyframes, and the gated Retinat tool
+  returning an 800x600 screen.
+- All eyes, Retinat, bench and desktop tests with the colour-aware deltas: 72/72. No existing cut test changed.
+- Full `tests/ci` on `3b1bb8f` with the watchdog: **red**, 1 failed and 1,264 passed before stopping. The failure was
+  `test_a_headful_request_with_no_display_falls_back_to_headless_and_launches` (below).
+
+**That red run, traced and fixed (`cc8fddd`).**
+- The test passed alone and failed only after the new desktop tests, 2/2 in that order. The error said only "exited
+  before CDP became available".
+- Chrome's stderr was piped and never read. The launch error now ends with its tail, which said
+  `Missing X server or $DISPLAY`: a headful launch, although `DISPLAY` was unset.
+- Cause: `_no_display_server()` was `@functools.cache`'d. Its answer depends on the environment, which can change in a
+  running process (here a test's virtual display; for users, `DISPLAY` set after import). Once a display had been
+  seen, a later launch with none skipped the headless fallback.
+- The cache is gone (two env lookups, nothing to save). A regression test fails on the cached version and passes now.
+  The pair passes 4/4 in the failing order; browser and session tests: 92 passed, 4 skipped.
+- Full `tests/ci` on `cc8fddd` with the watchdog: **green, 1,597 passed, 30 skipped, 0 failed** (27m47s). One stall (1.4 s) and no `keyframes:` warnings.
+
+**Not measured.**
+- macOS and Windows: Pillow grabs those screens differently, and macOS needs Screen Recording permission. Wayland:
+  X11 only.
+- Sound on the desktop.
+- Whether colour-aware deltas add false cuts on real footage with fast colour motion. The adaptive threshold should
+  absorb it, but there is no real-footage measurement.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. Drop strays from `motion.track` and the "covering" span too.
+3. A blind-agent check that `find` and `zoom` get used, and what they save, against look-only on a small-print task.
+4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion. Count the false cuts against the
+   luma-only detector.
