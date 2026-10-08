@@ -1108,13 +1108,16 @@ _FIND_JS = """(q, cap) => {
 		for (let e = up(a); e && e !== common; e = up(e)) left.push(e);
 		return [...left, ...entered].some((e) => !getComputedStyle(e).display.startsWith('inline'));
 	};
+	// A block break is a newline: a query (whitespace folded to spaces) never spans two blocks, and the context
+	// shown around a match stops there, as the person reading the page would see it.
 	let flat = '', shown = '';
 	const from = [];
 	let space = true;
 	for (let k = 0; k < nodes.length; k++) {
 		const n = nodes[k];
-		if (k && !space && breaks(nodes[k - 1], n)) {
-			flat += ' '; shown += ' '; from.push(null); space = true;
+		if (k && flat && !flat.endsWith('\\n') && breaks(nodes[k - 1], n)) {
+			if (space) { flat = flat.slice(0, -1); shown = shown.slice(0, -1); from.pop(); }
+			flat += '\\n'; shown += '\\n'; from.push(null); space = true;
 		}
 		const d = n.data;
 		for (let i = 0; i < d.length; i++) {
@@ -1151,7 +1154,11 @@ _FIND_JS = """(q, cap) => {
 			x1 = Math.max(x1, box.right); y1 = Math.max(y1, box.bottom);
 		}
 		if (x1 <= x0 || y1 <= y0) continue;
-		const context = shown.slice(Math.max(0, at - 40), at + needle.length + 40).trim();
+		let c0 = Math.max(0, at - 40), c1 = Math.min(shown.length, at + needle.length + 40);
+		c0 = Math.max(c0, shown.lastIndexOf('\\n', at) + 1);
+		const end = shown.indexOf('\\n', at + needle.length);
+		if (end >= 0) c1 = Math.min(c1, end);
+		const context = shown.slice(c0, c1).trim();
 		out.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, context });
 	}
 	return { matches: out, vw: innerWidth, vh: innerHeight };

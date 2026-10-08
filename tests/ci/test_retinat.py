@@ -22,6 +22,8 @@ FIND_DEEP = (
 	'<!doctype html><title>Deep</title><body style="margin:0;font:16px sans-serif">'
 	'<button style="position:absolute;left:300px;top:100px;width:160px;height:44px">Check<b>out</b> now</button>'
 	'<ship-box style="position:absolute;left:300px;top:240px;display:block"><span>Ships from Lisbon</span></ship-box>'
+	'<div style="position:absolute;left:300px;top:400px"><p>Sizes run true, so pick the larger.</p>'
+	'<footer><p>Terms apply to every order.</p></footer></div>'
 	"<script>customElements.define('ship-box', class extends HTMLElement { constructor() { super();"
 	"this.attachShadow({mode: 'open'}).innerHTML = '<p>Shipping estimate 3 days</p><slot></slot>'; } });</script></body>"
 )
@@ -236,3 +238,11 @@ async def test_find_matches_text_split_across_elements_and_inside_shadow_roots(r
 	assert 'in view' in shadow and 'not found' not in shadow, shadow
 	slotted = _text(await _call(retinat, 'retinat_find', {'text': 'ships from lisbon'}))
 	assert slotted.count('. at (') == 1, f'slotted light-DOM text is found once, not twice: {slotted}'
+
+
+async def test_find_keeps_to_one_block_in_its_match_and_its_context(retinat, site):
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/find-deep')})
+	terms = _text(await _call(retinat, 'retinat_find', {'text': 'terms apply'}))
+	assert '"Terms apply to every order."' in terms, f'the context is its own paragraph, nothing more: {terms}'
+	across = _text(await _call(retinat, 'retinat_find', {'text': 'larger. terms'}))
+	assert 'not found' in across or '0 match' in across, f'two paragraphs are not one phrase: {across}'
