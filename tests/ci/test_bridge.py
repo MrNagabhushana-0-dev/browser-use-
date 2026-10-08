@@ -137,7 +137,21 @@ def mail():
 
 
 @pytest.fixture(scope='module')
-async def bridge(display, site, mail, tmp_path_factory):
+def bank():
+	"""A site the person wants asked about on every visit (ask-every-time), on its own loopback address."""
+	server = HTTPServer(host='127.0.0.10')
+	server.start()
+	server.expect_request('/account').respond_with_data(
+		'<!doctype html><title>Bank</title><body style="margin:0;height:100vh">balance', content_type='text/html'
+	)
+	yield server
+	server.clear()
+	if server.is_running():
+		server.stop()
+
+
+@pytest.fixture(scope='module')
+async def bridge(display, site, mail, bank, tmp_path_factory):
 	"""A relay plus a person's browser that shares /shared* (by the always-share setting) and not the mail tab."""
 	relay = await BridgeRelay(port=0).start()
 	proc = _person_browser(
@@ -146,6 +160,7 @@ async def bridge(display, site, mail, tmp_path_factory):
 		display,
 		[mail.url_for('/private'), site.url_for('/shared')],
 		always_share=[site.url_for('/shared') + '*'],
+		ask_every_time=[f'http://127.0.0.10:{bank.port}'],
 		resume_after_ms=1500,
 	)
 	try:
@@ -1400,6 +1415,54 @@ async def _topmost(display: str, colour: tuple[int, int, int], timeout: float = 
 			return xs[len(xs) // 2], ys[len(ys) // 2]
 		await asyncio.sleep(0.25)
 	raise AssertionError('no such button on screen')
+
+
+async def test_a_site_the_person_wants_asked_about_every_time_is_allowed_for_one_visit_only(bridge, display, site, bank):
+	"""After Claude in Chrome's force-prompt category: a site the person lists (a bank) is asked about on every visit,
+	with no Always, and an Allow covers one visit of one tab. Their list wins over Always."""
+	from PIL import ImageGrab
+
+	relay, _ = bridge
+	account, origin = bank.url_for('/account'), f'http://127.0.0.10:{bank.port}'
+	http, cdp, sid = await _shared_session(relay, site)
+
+	async def there() -> bool:
+		r = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, sid)
+		return r.get('result', {}).get('result', {}).get('value') == 'Bank'
+
+	try:
+		refused = await cdp.call('Page.navigate', {'url': account}, sid)
+		assert 'asks on every visit' in refused.get('error', {}).get('message', ''), refused
+		assert not bank.log, 'the request left before the person allowed the visit'
+		where = await _asked(display, ALLOW)
+		assert _button(ImageGrab.grab(xdisplay=display).convert('RGB'), ALWAYS) is None, 'Always offered for an every-time site'
+		x_click(display, *where)  # the person allows this visit
+		await _until_ok(cdp, 'Page.navigate', {'url': account}, sid)
+		await until(there)
+		sites = (await relay.status())['extension']['sites']
+		assert origin in sites['everyTime'] and origin not in sites['allowed'] + sites['always'], sites
+
+		other = await cdp.call('Target.createTarget', {'url': account})  # the visit is that tab's, not another's
+		assert 'asks on every visit' in other.get('error', {}).get('message', ''), other
+		x_click(display, *await _asked(display, ALLOW))
+		opened = await _until_ok(cdp, 'Target.createTarget', {'url': account})
+		await cdp.call('Target.closeTarget', {'targetId': opened['result']['targetId']})
+		once = await cdp.call('Target.createTarget', {'url': account})  # an Allow opens one tab, not every tab after it
+		assert 'asks on every visit' in once.get('error', {}).get('message', ''), once
+		x_click(display, *await _asked(display, ALLOW))
+		opened = await _until_ok(cdp, 'Target.createTarget', {'url': account})
+		await cdp.call('Target.closeTarget', {'targetId': opened['result']['targetId']})
+
+		await _back_to_shared(cdp, sid, site)  # leaving ends the visit
+		again = await cdp.call('Page.navigate', {'url': account}, sid)
+		assert 'asks on every visit' in again.get('error', {}).get('message', ''), 'a second visit went without asking'
+		x_click(display, *await _asked(display, NO))
+		await asyncio.sleep(1.0)
+		declined = await cdp.call('Page.navigate', {'url': account}, sid)
+		assert 'declined' in declined.get('error', {}).get('message', ''), declined
+	finally:
+		await _back_to_shared(cdp, sid, site)
+		await http.close()
 
 
 def test_the_servers_know_the_words_the_extension_refuses_a_site_with():

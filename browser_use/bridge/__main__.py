@@ -40,6 +40,9 @@ def main() -> None:
 	ext.add_argument(
 		'--always-allow', action='append', default=None, metavar='SITE', help='site the AI may use without asking (* for all)'
 	)
+	ext.add_argument(
+		'--ask-every-time', action='append', default=None, metavar='SITE', help='site asked about on every visit (a bank)'
+	)
 	doctor = sub.add_parser('doctor', help='check relay, extension, browser, policy, shared tabs and wheel; say how to fix')
 	doctor.add_argument('--port', type=int, default=DEFAULT_PORT, help='relay port to check')
 	doctor.add_argument('--json', action='store_true', help='print the checks as JSON')
@@ -57,6 +60,7 @@ def main() -> None:
 			relay=f'ws://127.0.0.1:{args.port}/extension',
 			always_share=args.always_share,
 			always_allow=args.always_allow,
+			ask_every_time=args.ask_every_time,
 			manifest_version=2 if args.mv2 else 3,
 		)
 		print(f'Wrote the extension to {out}; load it with "Load unpacked".')

@@ -66,6 +66,10 @@ Then:
     Remove each. A removed site is asked about again, and a shared tab on it stops being shared at once.
     `relay.forget(site)` does the same from code; it only ever takes access away. `python -m browser_use.bridge extension DIR --always-allow SITE`
     (`https://*.example.com` for subdomains, `*` for every site, as before this check) writes them in advance.
+  - **Sites asked about every time** (after Claude in Chrome's force-prompt category): sites the person lists with
+    `--ask-every-time SITE` (a bank, say) are asked about on every visit, with no Always. An Allow covers one visit
+    of one tab: the tab has a minute to get there, and the visit ends when it leaves. Another tab is asked about on
+    its own. Their list wins over Always and `*`; `relay.status()` shows it as `everyTime`.
   - **Frames of other sites** inside an allowed page (a sign-in widget, a payment form, an embed) are shown to you
     only when their site is allowed too. Otherwise their own sessions never reach you: no attach, no events, no
     commands. They still load for the person, never left paused, and their pixels are in your screenshots.

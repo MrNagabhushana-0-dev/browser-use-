@@ -23,12 +23,15 @@ function acts(method) {
 const state = {
 	// resumeAfterMs: after the person's last input in a shared tab, how long until the AI may carry on (0: never)
 	// alwaysAllow: sites (origin globs, like https://*.example.com) the person lets the AI use without asking
-	settings: { relay: 'ws://127.0.0.1:9333/extension', alwaysShare: [], alwaysAllow: [], resumeAfterMs: 8000 },
+	// askEveryTime: sites (same patterns) the person wants asked about on every visit, with no Always: a bank, say
+	settings: { relay: 'ws://127.0.0.1:9333/extension', alwaysShare: [], alwaysAllow: [], askEveryTime: [], resumeAfterMs: 8000 },
 	shared: new Set(), // tab ids the person shared, or the AI opened
 	offered: new Set(), // tabs the person (or a page) opened from a shared tab: unshared until they press Share
 	moved: new Map(), // tab id -> {site, byAi}: a shared tab that moved to a site not allowed, unshared and offered back
 	urls: new Map(), // tab id -> the address a shared tab was last seen on
 	allowed: new Set(), // sites (origins) the person let the AI use until the browser closes
+	visits: new Map(), // tab id -> {site, until, arrived}: an ask-every-time site allowed for one visit of that tab
+	openOnce: null, // {site, until}: the person allowed the AI to open one tab on an ask-every-time site
 	declined: new Set(), // sites the person said no to: asked about again only if they share a tab there
 	asking: null, // {kind, origin, url, label, tabId, windowId}: the one ask waiting for the person
 	dialogs: new Map(), // tab id -> the type of the page's open native dialog (alert, confirm, prompt, beforeunload)
@@ -79,11 +82,34 @@ function siteOf(url) {
 	}
 }
 
-function allowedUrl(url) {
+function asksEveryTime(site) {
+	return state.settings.askEveryTime.some((p) => siteMatches(p, site));
+}
+
+// Whether the AI may use `url`, in tab `tabId` when it is about a tab. A site the person wants asked about every time
+// is allowed only for the visit they allowed, in that tab; their list wins over Always, "*" included.
+function allowedUrl(url, tabId) {
 	const site = siteOf(url);
 	if (site === '') return true;
 	if (site === 'null') return false;
+	if (asksEveryTime(site)) {
+		const v = tabId === undefined ? null : state.visits.get(tabId);
+		return !!v && v.site === site && (v.arrived || v.until > Date.now());
+	}
 	return state.allowed.has(site) || state.settings.alwaysAllow.some((p) => siteMatches(p, site));
+}
+
+// A visit starts when its tab reaches the site (within a minute of the person's Allow) and ends when it leaves.
+function visit(tabId, site, arrived) {
+	state.visits.set(tabId, { site, until: Date.now() + 60000, arrived });
+}
+
+function trackVisit(tabId, url) {
+	const v = state.visits.get(tabId);
+	const site = siteOf(url);
+	if (!v || site === '') return;
+	if (site === v.site) v.arrived = true;
+	else if (v.arrived) state.visits.delete(tabId);
 }
 
 // An alwaysAllow entry is a site (https://example.com:8443), a site's subdomains (https://*.example.com, which
@@ -100,9 +126,13 @@ function siteMatches(pattern, site) {
 	}
 }
 
-async function allowSite(url) {
+async function allowSite(url, tabId) {
 	const site = siteOf(url);
 	if (!site || site === 'null') return;
+	if (asksEveryTime(site)) {
+		if (tabId !== undefined) visit(tabId, site, true); // the person allowed the tab where it is: this visit
+		return;
+	}
 	state.allowed.add(site);
 	state.declined.delete(site);
 	await save();
@@ -114,13 +144,14 @@ function notAllowed(url, more) {
 
 // The AI asks for a new site in a window of this extension's own: no shared tab can reach it, and the AI's input
 // goes only to shared tabs, so only the person can answer. One ask at a time; a site they declined isn't asked again.
-async function ask(url) {
+async function ask(url, tabId) {
 	const site = siteOf(url);
 	if (site === 'null') return `${url} is refused through the extension bridge: only web pages can be opened there`;
 	if (state.declined.has(site)) return notAllowed(url, 'they declined it. They can share a tab on it themselves if they change their mind');
 	if (state.asking && state.asking.origin !== site) return notAllowed(url, `another ask (${state.asking.origin}) is waiting for them`);
-	if (!state.asking) await openAsk({ kind: 'site', origin: site, url });
-	return notAllowed(url, 'a window asks them now. Once they allow it, try again');
+	const once = asksEveryTime(site); // asked about every visit: no Always
+	if (!state.asking) await openAsk({ kind: 'site', origin: site, url, tabId, once });
+	return notAllowed(url, once ? 'it asks on every visit; a window asks them now. Once they allow it, try again' : 'a window asks them now. Once they allow it, try again');
 }
 
 async function openAsk(asked) {
@@ -213,14 +244,25 @@ async function answer(reply, windowId) {
 	const asked = state.asking;
 	// only from the window this worker opened for this ask: a copy of the page in some tab is not the person's answer
 	if (!asked || reply.origin !== asked.origin || windowId !== asked.windowId) return;
+	// the grant is recorded before anything is awaited: a retry racing this answer finds it, not an ask of its own
 	state.asking = null;
-	await save();
 	call(C.windows, 'remove', asked.windowId).catch(() => {});
 	if (asked.kind === 'click') {
 		// one click on that control, never the site: a site the person allowed is not consent to pay there
 		if (reply.answer === 'allow') state.clickGrants.push({ tabId: asked.tabId, origin: asked.origin, label: asked.label, until: Date.now() + 60000 });
 		if (reply.answer === 'no') state.clickDeclined.add(clickKey(asked.origin, asked.label));
+		await save();
 		emit({ event: 'site', origin: asked.origin, answer: reply.answer, click: asked.label });
+		return;
+	}
+	if (asked.once) {
+		if (reply.answer === 'allow') {
+			if (asked.tabId !== undefined) visit(asked.tabId, asked.origin, false);
+			else state.openOnce = { site: asked.origin, until: Date.now() + 60000 };
+		}
+		if (reply.answer === 'no') state.declined.add(asked.origin);
+		await save();
+		emit({ event: 'site', origin: asked.origin, answer: reply.answer, once: true });
 		return;
 	}
 	if (reply.answer === 'allow' || reply.answer === 'always') await allowSite(asked.url);
@@ -228,10 +270,8 @@ async function answer(reply, windowId) {
 		state.settings.alwaysAllow = [...state.settings.alwaysAllow, asked.origin];
 		await keepSettings({ alwaysAllow: state.settings.alwaysAllow });
 	}
-	if (reply.answer === 'no') {
-		state.declined.add(asked.origin);
-		await save();
-	}
+	if (reply.answer === 'no') state.declined.add(asked.origin);
+	await save();
 	emit({ event: 'site', origin: asked.origin, answer: reply.answer });
 }
 
@@ -245,17 +285,19 @@ async function forgetSite(site) {
 		await keepSettings({ alwaysAllow: state.settings.alwaysAllow });
 	}
 	for (const g of [...state.clickDeclined]) if (g.startsWith(site + '|')) state.clickDeclined.delete(g);
+	for (const [tabId, v] of [...state.visits]) if (v.site === site) state.visits.delete(tabId);
 	await save();
 	for (const tabId of [...state.shared]) {
 		const url = state.urls.get(tabId) || (await call(C.tabs, 'get', tabId).catch(() => ({}))).url;
-		if (url && siteOf(url) === site && !allowedUrl(url)) await moved(tabId, url);
+		if (url && siteOf(url) === site && !allowedUrl(url, tabId)) await moved(tabId, url);
 	}
 	emit({ event: 'site', origin: site, answer: 'forgotten' });
 }
 
 function sitesNow() {
 	const asking = state.asking ? state.asking.origin : null;
-	return { allowed: [...state.allowed], always: state.settings.alwaysAllow, declined: [...state.declined], asking };
+	const everyTime = state.settings.askEveryTime;
+	return { allowed: [...state.allowed], always: state.settings.alwaysAllow, declined: [...state.declined], everyTime, asking };
 }
 
 async function keepSettings(changes) {
@@ -293,11 +335,11 @@ async function checkSite(tabId, acting) {
 		pending = tab.pendingUrl || null;
 		state.urls.set(tabId, url);
 	}
-	if (!allowedUrl(url)) {
+	if (!allowedUrl(url, tabId)) {
 		await moved(tabId, url);
 		throw new Error(notAllowed(url, 'the tab went there, so it is no longer shared; its pill asks the person'));
 	}
-	if (pending && !allowedUrl(pending)) throw new Error(notAllowed(pending, 'the tab is on its way there'));
+	if (pending && !allowedUrl(pending, tabId)) throw new Error(notAllowed(pending, 'the tab is on its way there'));
 }
 
 // -- Frames and workers of other sites ------------------------------------------------------------------------------
@@ -337,7 +379,7 @@ async function resumeChild(tabId, sessionId) {
 function decideChild(sessionId) {
 	const child = state.children.get(sessionId);
 	if (!child || child.hidden) return false;
-	if (!allowedUrl(child.url)) {
+	if (!allowedUrl(child.url, child.tabId)) {
 		letGo(child.tabId, sessionId);
 		return false;
 	}
@@ -362,7 +404,7 @@ function letGo(tabId, sessionId) {
 
 function childAllowed(sessionId) {
 	const child = state.children.get(sessionId);
-	return !!child && !child.hidden && !child.pending && siteOf(child.url) !== '' && allowedUrl(child.url);
+	return !!child && !child.hidden && !child.pending && siteOf(child.url) !== '' && allowedUrl(child.url, child.tabId);
 }
 
 // Sessions reach their own tab and its frames, never other tabs: tabs are opened, closed and switched with the tab
@@ -380,7 +422,7 @@ async function checkNavigation(msg) {
 		const entry = (history.entries || []).find((e) => e.id === params.entryId);
 		url = entry ? entry.url : null;
 	}
-	if (url !== null && !allowedUrl(url)) throw new Error(await ask(url));
+	if (url !== null && !allowedUrl(url, msg.tabId)) throw new Error(await ask(url, msg.tabId));
 }
 
 function alwaysShared(url) {
@@ -450,8 +492,8 @@ async function share(tabId, why) {
 	const tab = await call(C.tabs, 'get', tabId);
 	const url = tab.pendingUrl || tab.url;
 	if ((url || '').startsWith(C.runtime.getURL(''))) throw new Error("the bridge's own pages are never shared");
-	if (BY_PERSON.has(why)) await allowSite(url);
-	else if (!allowedUrl(url)) throw new Error(notAllowed(url, 'the tab was not shared'));
+	if (BY_PERSON.has(why)) await allowSite(url, tabId);
+	else if (!allowedUrl(url, tabId)) throw new Error(notAllowed(url, 'the tab was not shared'));
 	state.offered.delete(tabId);
 	state.moved.delete(tabId);
 	state.urls.delete(tabId); // the next check reads the address afresh
@@ -498,7 +540,7 @@ async function ensureAttached(tabId) {
 	state.attached.add(tabId);
 }
 
-async function openForAgent(url) {
+async function openForAgent(url, visitSite) {
 	let tab = null;
 	if (state.aiWindow !== null) {
 		tab = await call(C.tabs, 'create', { windowId: state.aiWindow, url, active: true }).catch(() => null);
@@ -509,6 +551,7 @@ async function openForAgent(url) {
 		state.aiWindow = win.id;
 		tab = win.tabs[0];
 	}
+	if (visitSite) visit(tab.id, visitSite, false);
 	await share(tab.id, 'opened by the AI');
 	return await targetInfo(tab.id);
 }
@@ -599,7 +642,14 @@ async function handle(msg) {
 			return result;
 		}
 		case 'open':
-			if (!allowedUrl(msg.url || 'about:blank')) throw new Error(await ask(msg.url));
+			if (!allowedUrl(msg.url || 'about:blank')) {
+				const once = state.openOnce;
+				if (once && once.site === siteOf(msg.url) && once.until > Date.now()) {
+					state.openOnce = null; // the one tab the person allowed on an ask-every-time site
+					return await openForAgent(msg.url, once.site);
+				}
+				throw new Error(await ask(msg.url));
+			}
 			return await openForAgent(msg.url || 'about:blank');
 		case 'close':
 			needShared(msg.tabId);
@@ -744,7 +794,7 @@ async function boot() {
 	const live = new Set(tabs.map((t) => t.id));
 	for (const t of tabs) {
 		if (!(kept.shared || []).includes(t.id)) continue;
-		if (allowedUrl(t.url)) state.shared.add(t.id);
+		if (allowedUrl(t.url, t.id)) state.shared.add(t.id);
 		else {
 			state.offered.add(t.id); // it reached a site not allowed while the worker was stopped
 			state.moved.set(t.id, { site: siteOf(t.url), byAi: false });
@@ -785,7 +835,7 @@ C.debugger.onEvent.addListener((source, method, params) => {
 				if (siteOf(child.url) !== '') decideChild(sid);
 				return; // the AI hears of it, if at all, through its attach
 			}
-			if (known && !allowedUrl(child.url)) {
+			if (known && !allowedUrl(child.url, child.tabId)) {
 				// a frame that went to a site not allowed: the AI's session on it ends here
 				letGo(source.tabId, sid);
 				emit({ event: 'cdp', tabId: source.tabId, method: 'Target.detachedFromTarget', params: { sessionId: sid, targetId: child.targetId } });
@@ -797,7 +847,8 @@ C.debugger.onEvent.addListener((source, method, params) => {
 	if (method === 'Page.javascriptDialogClosed' && !source.sessionId) state.dialogs.delete(source.tabId);
 	if (method === 'Page.frameNavigated' && !source.sessionId && params && params.frame && !params.frame.parentId) {
 		state.urls.set(source.tabId, params.frame.url);
-		if (!allowedUrl(params.frame.url)) return void moved(source.tabId, params.frame.url); // nothing of it is passed on
+		trackVisit(source.tabId, params.frame.url);
+		if (!allowedUrl(params.frame.url, source.tabId)) return void moved(source.tabId, params.frame.url); // nothing of it is passed on
 	}
 	emit({ event: 'cdp', tabId: source.tabId, sessionId: source.sessionId, method, params });
 });
@@ -839,6 +890,7 @@ C.tabs.onRemoved.addListener((tabId) => {
 	state.urls.delete(tabId);
 	state.dialogs.delete(tabId);
 	state.held.delete(tabId);
+	state.visits.delete(tabId);
 	unshare(tabId, 'tab closed');
 });
 
@@ -863,7 +915,7 @@ async function adoptOrOffer(tabId, opener, created, ai) {
 	if (!tab) return;
 	const url = tab.pendingUrl || tab.url;
 	if (created - ai < OPENED_BY_AI_MS && person < ai) {
-		if (allowedUrl(url)) return share(tabId, 'opened by the AI from a shared tab').catch(() => {});
+		if (allowedUrl(url, tabId)) return share(tabId, 'opened by the AI from a shared tab').catch(() => {});
 		state.moved.set(tabId, { site: siteOf(url), byAi: true }); // the AI's popup went to a site not allowed: theirs to say
 	}
 	state.offered.add(tabId);
@@ -876,8 +928,11 @@ async function adoptOrOffer(tabId, opener, created, ai) {
 C.tabs.onUpdated.addListener(async (tabId, change) => {
 	await state.ready;
 	if (state.shared.has(tabId)) {
-		if (change.url) state.urls.set(tabId, change.url);
-		if (change.url && !allowedUrl(change.url)) return moved(tabId, change.url);
+		if (change.url) {
+			state.urls.set(tabId, change.url);
+			trackVisit(tabId, change.url);
+		}
+		if (change.url && !allowedUrl(change.url, tabId)) return moved(tabId, change.url);
 		if (change.url || change.title || change.status === 'complete') {
 			targetInfo(tabId).then((tab) => emit({ event: 'changed', tab })).catch(() => {});
 		}

@@ -15,6 +15,11 @@
 	} else {
 		$('site').textContent = asked.origin || 'a site';
 		$('url').textContent = asked.url || '';
+		if (asked.once) {
+			// a site the person asked to be asked about every time: this visit only, no Always
+			$('lasts').textContent = 'You asked to be asked about this site every time: Allow lets it in for this visit only.';
+			$('always').hidden = true;
+		}
 	}
 	for (const answer of ['no', 'always', 'allow']) {
 		$(answer).addEventListener('click', (e) => {
