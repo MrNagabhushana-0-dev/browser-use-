@@ -2163,7 +2163,9 @@ as "Chrome".
 - Windows and macOS.
 - Whether Vivaldi offers any other built-in sign that an extension is debugging a tab. None was seen.
 
-- Full `tests/ci` on `d34ba59` with `loopwatch`: in progress when this was written; the result follows below.
+- **Full `tests/ci` on `d34ba59` with `loopwatch`: green, 1,610 passed, 30 skipped, 0 failed** (30m32s).
+  - Three stalls: 2.4 s in screen recording, 1.2 s in a beta-agent cleanup, and 1.0 s in the CLIP search model load.
+  - No `keyframes:` warnings.
 
 **Next, in order:**
 1. Keep `loopwatch` on for full runs until a red one is caught with it.
