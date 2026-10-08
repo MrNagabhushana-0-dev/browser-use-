@@ -37,6 +37,7 @@ const state = {
 	armSeq: 0,
 	clickGrants: [], // {tabId, origin, label, until}: one click the person allowed
 	clickDeclined: new Set(), // origin + '|' + label the person said no to, until the browser closes
+	children: new Map(), // child session id -> {tabId, targetId, url}: frames of other sites and workers in shared tabs
 	attached: new Set(), // tab ids with a live chrome.debugger session
 	targets: new Map(), // tab id -> DevTools target id
 	holder: 'agent', // who drives shared tabs: 'agent' or 'human'
@@ -276,6 +277,71 @@ async function checkSite(tabId, acting) {
 	if (pending && !allowedUrl(pending)) throw new Error(notAllowed(pending, 'the tab is on its way there'));
 }
 
+// -- Frames and workers of other sites ------------------------------------------------------------------------------
+// A shared tab's page can hold frames of other sites (out-of-process: a sign-in widget, a payment form) and workers.
+// Through CDP their own sessions read what the page itself never could. A child on a site the person hasn't allowed
+// is never shown to the AI: it is let run (never left paused for a debugger, which would freeze the person's page),
+// then let go, and its events and commands stop here. Its pixels are still in the tab's screenshots.
+// Chrome attaches a cross-site frame before its navigation commits, with no address yet: whose it is isn't known. Such
+// a child is held back (let run, its events kept) until its address is known, then shown to the AI or let go.
+function childAttached(source, params) {
+	const info = params.targetInfo || {};
+	const child = { tabId: source.tabId, targetId: info.targetId, url: info.url || '', parent: source.sessionId, attach: params };
+	state.children.set(params.sessionId, child);
+	if (params.waitingForDebugger) resumeChild(source.tabId, params.sessionId); // a paused frame freezes the person's page
+	if (siteOf(child.url) === '') {
+		child.pending = [];
+		return false;
+	}
+	return decideChild(params.sessionId);
+}
+
+async function resumeChild(tabId, sessionId) {
+	// The first try can come before the child takes commands; repeat while it is still waiting to be told its site.
+	for (let attempt = 0; attempt < 4; attempt++) {
+		const child = state.children.get(sessionId);
+		if (!child || (attempt > 0 && !child.pending)) return;
+		try {
+			await call(C.debugger, 'sendCommand', { tabId, sessionId }, 'Runtime.runIfWaitingForDebugger', {});
+		} catch (e) {
+			// not ready yet, or already gone
+		}
+		await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+	}
+}
+
+// Show a child whose address is now known to the AI (its attach, then what it said meanwhile), or let it go.
+function decideChild(sessionId) {
+	const child = state.children.get(sessionId);
+	if (!child || child.hidden) return false;
+	if (!allowedUrl(child.url)) {
+		letGo(child.tabId, sessionId);
+		return false;
+	}
+	const held = child.pending;
+	child.pending = null;
+	if (held) {
+		const attach = { ...child.attach, waitingForDebugger: false, targetInfo: { ...(child.attach.targetInfo || {}), url: child.url } };
+		emit({ event: 'cdp', tabId: child.tabId, sessionId: child.parent, method: 'Target.attachedToTarget', params: attach });
+		for (const e of held) emit({ event: 'cdp', tabId: child.tabId, sessionId, method: e.method, params: e.params });
+	}
+	return true;
+}
+
+function letGo(tabId, sessionId) {
+	// Kept attached but hidden: detaching it would end the auto-attach that later frames of the page rely on.
+	const child = state.children.get(sessionId);
+	if (child) {
+		child.hidden = true;
+		child.pending = null;
+	}
+}
+
+function childAllowed(sessionId) {
+	const child = state.children.get(sessionId);
+	return !!child && !child.hidden && !child.pending && siteOf(child.url) !== '' && allowedUrl(child.url);
+}
+
 // Sessions reach their own tab and its frames, never other tabs: tabs are opened, closed and switched with the tab
 // tools, which the person's consent covers.
 const SESSION_TARGET_OK = new Set(['Target.setAutoAttach', 'Target.getTargetInfo', 'Target.detachFromTarget']);
@@ -389,6 +455,7 @@ async function share(tabId, why) {
 
 async function unshare(tabId, why) {
 	if (!state.shared.delete(tabId)) return;
+	for (const [sid, child] of state.children) if (child.tabId === tabId) state.children.delete(sid);
 	if (state.attached.delete(tabId)) await call(C.debugger, 'detach', { tabId }).catch(() => {});
 	await save();
 	badge(tabId);
@@ -467,6 +534,12 @@ async function handle(msg) {
 			if (state.holder === 'human' && acts(msg.method)) throw new Error('the person is using the browser right now');
 			if (msg.method.startsWith('Target.') && !SESSION_TARGET_OK.has(msg.method)) {
 				throw new Error(`${msg.method} is refused through the extension bridge: it reaches past the shared tab; use the tab tools`);
+			}
+			if (msg.sessionId && !childAllowed(msg.sessionId)) {
+				const child = state.children.get(msg.sessionId);
+				throw new Error(child
+					? notAllowed(child.url, 'that frame or worker belongs to it, so the AI cannot use it here')
+					: `${msg.method} is refused through the extension bridge: that session is not a frame or worker the bridge knows of`);
 			}
 			await checkSite(msg.tabId, acts(msg.method));
 			await checkNavigation(msg);
@@ -665,6 +738,37 @@ async function boot() {
 
 C.debugger.onEvent.addListener((source, method, params) => {
 	if (!state.shared.has(source.tabId)) return;
+	if (source.sessionId && state.children.has(source.sessionId)) {
+		const child = state.children.get(source.sessionId);
+		if (child.pending) {
+			if (child.pending.length < 200) child.pending.push({ method, params }); // kept until its site is known
+			return;
+		}
+	}
+	if (source.sessionId && !childAllowed(source.sessionId)) return; // a frame or worker of a site not allowed
+	if (method === 'Target.attachedToTarget' && !childAttached(source, params)) return;
+	if (method === 'Target.detachedFromTarget') {
+		const child = state.children.get(params.sessionId);
+		state.children.delete(params.sessionId);
+		if (child && child.pending) return; // the AI was never told of it
+	}
+	if (method === 'Target.targetInfoChanged') {
+		for (const [sid, child] of state.children) {
+			if (child.targetId !== (params.targetInfo || {}).targetId || child.hidden) continue;
+			const known = siteOf(child.url) !== '';
+			child.url = params.targetInfo.url || child.url;
+			if (child.pending) {
+				if (siteOf(child.url) !== '') decideChild(sid);
+				return; // the AI hears of it, if at all, through its attach
+			}
+			if (known && !allowedUrl(child.url)) {
+				// a frame that went to a site not allowed: the AI's session on it ends here
+				letGo(source.tabId, sid);
+				emit({ event: 'cdp', tabId: source.tabId, method: 'Target.detachedFromTarget', params: { sessionId: sid, targetId: child.targetId } });
+				return;
+			}
+		}
+	}
 	if (method === 'Page.javascriptDialogOpening' && !source.sessionId) state.dialogs.set(source.tabId, params.type);
 	if (method === 'Page.javascriptDialogClosed' && !source.sessionId) state.dialogs.delete(source.tabId);
 	if (method === 'Page.frameNavigated' && !source.sessionId && params && params.frame && !params.frame.parentId) {

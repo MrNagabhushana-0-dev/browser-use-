@@ -63,8 +63,11 @@ Then:
   - `relay.status()` lists the allowed, always-allowed and declined sites. Allowed sites last until the browser
     closes; Always lasts until the person removes it. `python -m browser_use.bridge extension DIR --always-allow SITE`
     (`https://*.example.com` for subdomains, `*` for every site, as before this check) writes them in advance.
-  - **Not covered:** frames of other sites inside an allowed page, and what that page's own script fetches. Those
-    reach what the page itself can reach.
+  - **Frames of other sites** inside an allowed page (a sign-in widget, a payment form, an embed) are shown to you
+    only when their site is allowed too. Otherwise their own sessions never reach you: no attach, no events, no
+    commands. They still load for the person, never left paused, and their pixels are in your screenshots.
+  - **Not covered:** what an allowed page's own script fetches from other sites. That reaches what the page itself
+    can reach.
 - A click that would place an order, pay, move money, delete an account or grant access waits for the person, on
   any site (after Claude in Chrome's "ask first" classes). While you act, the extension holds a press, click, Enter,
   touch or form submit on a control labelled so ("Place order", "Pay now", "Delete my account", "Authorize": the

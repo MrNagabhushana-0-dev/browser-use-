@@ -202,7 +202,13 @@ def _person_browser(tmp: Path, relay: BridgeRelay, display: str, urls: list[str]
 		ext = write_extension(tmp / 'ext', relay=relay_url, **settings)
 		args = [binary, f'--user-data-dir={profile}', f'--load-extension={ext}', f'--disable-extensions-except={ext}']
 	# A window that fits the 1280x900 test screen, as a person's does (the default can run past its bottom edge).
-	args += ['--no-first-run', '--no-default-browser-check', '--window-position=0,0', '--window-size=1200,860', *urls]
+	args += ['--no-first-run', '--no-default-browser-check', '--window-position=0,0', '--window-size=1200,860']
+	if not os.environ.get('BRIDGE_TEST_BROWSER'):
+		# The Chromium here is a test build, which turns on Chromium's testing field trials at start; one of them keeps
+		# cross-site frames from ever loading in this sandbox. Official builds (Chrome, Edge, Brave, a distro's
+		# Chromium) don't apply that config, so this makes the stand-in behave like a person's browser.
+		args.append('--disable-field-trial-config')
+	args += urls
 	if os.geteuid() == 0:
 		# Chromium refuses to run as root without --no-sandbox (a person's browser doesn't run as root); --test-type
 		# drops the warning bar that flag adds, which would otherwise queue the debugging bar behind it.
@@ -1023,7 +1029,7 @@ ALLOW, ALWAYS, NO = (106, 27, 154), (0, 105, 92), (198, 40, 40)  # the ask windo
 def elsewhere():
 	"""Sites the person has not shared, each on its own loopback address (so each is its own site)."""
 	servers = []
-	for host in ('127.0.0.2', '127.0.0.3', '127.0.0.4', '127.0.0.5', '127.0.0.6'):
+	for host in ('127.0.0.2', '127.0.0.3', '127.0.0.4', '127.0.0.5', '127.0.0.6', '127.0.0.7', '127.0.0.8'):
 		server = HTTPServer(host=host)
 		server.start()
 		server.expect_request('/page').respond_with_data(
@@ -1072,8 +1078,14 @@ async def _until_ok(cdp: RawCDP, method: str, params: dict, sid: str | None = No
 
 async def _back_to_shared(cdp: RawCDP, sid: str, site: HTTPServer) -> None:
 	"""Hand the shared tab back on the shared page for the tests after this one. A navigation can be refused for a
-	moment (the person's click on an ask window pauses the AI), so retry until it goes."""
-	await _until_ok(cdp, 'Page.navigate', {'url': site.url_for('/shared')}, sid)
+	moment (the person's click on an ask window pauses the AI) or come back aborted, so repeat until the tab is there."""
+	for _ in range(20):
+		await cdp.call('Page.navigate', {'url': site.url_for('/shared')}, sid)
+		await asyncio.sleep(0.5)
+		where = await cdp.call('Runtime.evaluate', {'expression': 'location.href', 'returnByValue': True}, sid)
+		if '/shared' in str(where.get('result', {}).get('result', {}).get('value')):
+			return
+	raise AssertionError(f'the shared tab did not come back to the shared page: {where}')
 
 
 async def test_the_ai_asks_before_taking_a_shared_tab_to_a_site_the_person_has_not_allowed(bridge, display, site, elsewhere):
@@ -1242,6 +1254,60 @@ async def test_browser_navigate_says_a_site_is_waiting_for_the_person_instead_of
 	finally:
 		await retinat._close_all_sessions()
 	assert not new.log
+
+
+async def test_frames_of_sites_the_person_has_not_allowed_stay_out_of_the_ais_reach(bridge, display, site, elsewhere):
+	"""A shared page can hold frames of other sites (a sign-in widget, a payment form). Their own CDP sessions read what
+	the page itself never could, so a frame of a site the person hasn't allowed never reaches the AI. It still loads:
+	a frame left paused for a debugger would freeze the person's page."""
+	relay, _ = bridge
+	friend, stranger = elsewhere[5], elsewhere[6]
+	site.expect_request('/shared/framed').respond_with_data(
+		'<!doctype html><title>Framed</title><body style="margin:0">'
+		f'<iframe src="{friend.url_for("/page")}" onload="window.a = 1"></iframe>'
+		f'<iframe src="{stranger.url_for("/page")}" onload="window.b = 1"></iframe></body>',
+		content_type='text/html',
+	)
+	http, cdp, sid = await _shared_session(relay, site)
+	try:
+		await cdp.call('Target.createTarget', {'url': friend.url_for('/page')})  # the AI asks for the friend's site
+		x_click(display, *await _asked(display, ALLOW))  # and the person allows it; it is not opened here
+		friend_site = f'http://127.0.0.7:{friend.port}'
+
+		async def allowed() -> bool:
+			return friend_site in (await relay.status())['extension']['sites']['allowed']
+
+		# Not opened first: a site already drawn in another tab of this sandbox's test build never loads as a frame
+		await until(allowed)
+		await cdp.call('Target.setAutoAttach', {'autoAttach': True, 'waitForDebuggerOnStart': True, 'flatten': True}, sid)
+		seen = len(cdp.events)
+		await cdp.call('Page.navigate', {'url': site.url_for('/shared/framed')}, sid)
+		resumed: set[str] = set()
+
+		async def both_loaded() -> bool:
+			for e in cdp.events[seen:]:  # a client resumes the frames it is shown, as the library does
+				if e.get('method') == 'Target.attachedToTarget' and e['params']['sessionId'] not in resumed:
+					resumed.add(e['params']['sessionId'])
+					await cdp.call('Runtime.runIfWaitingForDebugger', {}, e['params']['sessionId'])
+			r = await cdp.call('Runtime.evaluate', {'expression': 'window.a === 1 && window.b === 1', 'returnByValue': True}, sid)
+			return r.get('result', {}).get('result', {}).get('value') is True
+
+		await until(both_loaded, timeout=20)
+		attached = [e['params'] for e in cdp.events[seen:] if e.get('method') == 'Target.attachedToTarget']
+		urls = [a['targetInfo']['url'] for a in attached]
+		assert any('127.0.0.7' in u for u in urls), f"the allowed site's frame is there: {urls}"
+		assert not any('127.0.0.8' in u for u in urls), f'a frame of a site not allowed reached the AI: {urls}'
+		# Nothing from a session the AI wasn't shown. (The page's own session may name the frame's address: that is in
+		# the page's HTML anyway.)
+		shown = {sid, *(a['sessionId'] for a in attached)}
+		strays = [e for e in cdp.events[seen:] if e.get('sessionId') and e['sessionId'] not in shown]
+		assert not strays, f'events from a frame the AI was not shown: {strays[:3]}'
+		inside = next(a['sessionId'] for a in attached if '127.0.0.7' in a['targetInfo']['url'])
+		title = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, inside)
+		assert title.get('result', {}).get('result', {}).get('value') == 'Elsewhere 127.0.0.7', title
+	finally:
+		await _back_to_shared(cdp, sid, site)
+		await http.close()
 
 
 def test_the_servers_know_the_words_the_extension_refuses_a_site_with():
