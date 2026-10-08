@@ -394,7 +394,9 @@ async def test_chromium_uses_the_proxy_resolves_names_there_and_fails_closed(sit
 	try:
 		await session.navigate_to(f'http://direct.test:{site.port}/')
 		assert await _title(session) == 'Hello', 'the page must load through the proxy'
-		assert seen and seen[-1] == 'direct.test', f'the proxy must be handed the hostname, not an address: {seen}'
+		# Chromium's own background requests (Google sign-in, component checks) go through the proxy too, in any order:
+		# what matters is that it got the name, never the address the name resolves to here.
+		assert 'direct.test' in seen and '127.0.0.1' not in seen, f'the proxy must be handed the hostname, not an address: {seen}'
 
 		proxy.close()
 		await proxy.wait_closed()

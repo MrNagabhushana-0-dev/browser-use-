@@ -2912,9 +2912,12 @@ never could: the frame's DOM, its script context, its non-HttpOnly cookies.
   had come back without an error and stranded the next test; this explains the earlier cascades.
 
 **The dropout fix, measured.**
-- The three-file combination that failed about 1 in 14 before ran 29 times after the fix (the 30th was still
-  running at this writing), with 0 beep-count failures. Part of it ran under extra load from bridge runs.
-- If the fix had changed nothing, 29 clean runs would happen about 12% of the time ((13/14)^29). This is evidence,
+- The three-file combination that failed about 1 in 14 before ran 30 times after the fix, with 0 beep-count
+  failures. Part of it ran under extra load from bridge runs.
+- If the fix had changed nothing, 30 clean runs would happen about 11% of the time ((13/14)^30). This is evidence,
   not proof.
-- The same loop had one other failure: `test_network.py:397`, Chromium's own Google requests among the hostnames
-  handed to the SOCKS proxy (Next item 4).
+- The same loop had one other failure: `test_network.py:397`.
+  - Its assertion wanted the last hostname the SOCKS proxy saw to be the test's. Chromium's own background
+    requests (Google sign-in, component checks) also go through that proxy, and sometimes came last.
+  - It now asks what it meant: the proxy got the name, never the address the name resolves to. This was a test
+    bug; the routing was right.
