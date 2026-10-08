@@ -273,10 +273,18 @@ tests for them skip elsewhere.
   - **Hidden tabs:** a hidden shared tab is brought to the front of its own window before any click or key, as a
     person would.
   - **Browsers:**
-    - **Tested:** Google Chrome 155, with the extension added through Load unpacked in its own UI; Microsoft Edge 154;
-      Chromium 141. The whole bridge suite passed on each.
-    - **Expected to work, untested:** Brave, Opera, Vivaldi and Arc. Opera documents `chrome.debugger`; the others are
-      Chromium, but their vendors don't say so.
+    - **Tested:** the whole bridge suite passed on each of these.
+      - Google Chrome 155, with the extension added through Load unpacked in its own UI.
+      - Microsoft Edge 154.
+      - Brave 1.97.
+      - Vivaldi 8.2.
+      - Chromium 141.
+    - **Vivaldi shows no "started debugging" bar** (it draws its own browser UI), so there is no Cancel there.
+      - The person stops sharing from the extension's popup, Alt+Shift+A or Alt+Shift+Z.
+      - The extension's AI/YOU badge is only visible once they pin the extension.
+    - **Brave** puts its own notices (such as its analytics notice) in the same bar slot, so the debugging bar
+      appears after the person deals with those.
+    - **Expected to work, untested:** Opera and Arc. Opera documents `chrome.debugger`.
     - **Version floor:** MV3 needs Chromium 88+. Pages inside cross-site iframes need 125+ (flat debugger sessions);
       116+ keeps the connection from dropping while idle.
     - **Older Chromium:** `python -m browser_use.bridge extension DIR --mv2` writes a Manifest V2 build. Chrome 139+

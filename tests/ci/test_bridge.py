@@ -31,6 +31,7 @@ pytestmark = pytest.mark.skipif(not shutil.which('Xvfb'), reason='Xvfb not insta
 
 SHARED = (
 	'<!doctype html><title>Shared page</title><body style="margin:0;height:100vh">'
+	'<div style="position:fixed;left:0;top:0;width:6px;height:6px;background:#f0f"></div>'  # where the page starts
 	'<button id="b" style="position:fixed;left:40px;top:40px;width:220px;height:90px">Press</button>'
 	"<script>window.clicks = []; addEventListener('click', e => clicks.push(e.isTrusted))</script></body>"
 )
@@ -137,18 +138,21 @@ def _person_browser(tmp: Path, relay: BridgeRelay, display: str, urls: list[str]
 	unpacked). BRIDGE_TEST_BROWSER picks another binary, e.g. Edge. Branded Chrome 137+ ignores --load-extension:
 	for it, set BRIDGE_TEST_PROFILE to a profile where the extension was added with Load unpacked from the folder
 	BRIDGE_TEST_EXTENSION. That folder's settings are rewritten for this run and the profile is copied, so run the
-	idle test (its own browser) in a separate pytest invocation then.
+	idle test (its own browser) in a separate pytest invocation then. BRIDGE_TEST_PROFILE alone is a profile past
+	first run (Vivaldi shows only its welcome page on a fresh one): copied, with the extension added as usual.
 	"""
 	relay_url = f'ws://127.0.0.1:{relay.port}/extension'
 	binary = os.environ.get('BRIDGE_TEST_BROWSER') or LocalBrowserWatchdog._find_installed_browser_path()
 	assert binary, 'no Chromium found'
-	if preloaded := os.environ.get('BRIDGE_TEST_PROFILE'):
-		write_extension(Path(os.environ['BRIDGE_TEST_EXTENSION']), relay=relay_url, **settings)
-		profile = shutil.copytree(preloaded, tmp / 'profile', ignore=shutil.ignore_patterns('Singleton*'))
+	profile = tmp / 'profile'
+	if template := os.environ.get('BRIDGE_TEST_PROFILE'):
+		shutil.copytree(template, profile, ignore=shutil.ignore_patterns('Singleton*'))
+	if loaded := os.environ.get('BRIDGE_TEST_EXTENSION'):
+		write_extension(Path(loaded), relay=relay_url, **settings)
 		args = [binary, f'--user-data-dir={profile}']
 	else:
 		ext = write_extension(tmp / 'ext', relay=relay_url, **settings)
-		args = [binary, f'--user-data-dir={tmp / "profile"}', f'--load-extension={ext}', f'--disable-extensions-except={ext}']
+		args = [binary, f'--user-data-dir={profile}', f'--load-extension={ext}', f'--disable-extensions-except={ext}']
 	args += ['--no-first-run', '--no-default-browser-check', *urls]
 	if os.geteuid() == 0:
 		# Chromium refuses to run as root without --no-sandbox (a person's browser doesn't run as root); --test-type
@@ -362,22 +366,27 @@ async def test_browser_use_mcp_works_in_the_persons_browser_too(bridge, site):
 	assert proc.poll() is None
 
 
-async def test_the_ai_pauses_while_the_person_uses_a_shared_tab_and_resumes_after(bridge, display):
+async def test_the_ai_pauses_while_the_person_uses_a_shared_tab_and_resumes_after(bridge, display, site):
 	relay, _ = bridge
 	http, cdp = await raw_cdp(relay)
 	try:
 		target = (await cdp.call('Target.getTargets'))['result']['targetInfos'][0]['targetId']
 		sid = (await cdp.call('Target.attachToTarget', {'targetId': target, 'flatten': True}))['result']['sessionId']
+		await cdp.call('Page.navigate', {'url': site.url_for('/shared')}, sid)  # the page with the corner marker
+
+		async def marked():
+			r = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, sid)
+			return r.get('result', {}).get('result', {}).get('value') == 'Shared page'
+
+		await until(marked)
 		await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 1, 'y': 1}, sid)  # brings the tab forward
 		await asyncio.sleep(0.8)  # past the window in which input counts as the AI's own
 		assert relay.holder == 'agent'
 
-		geometry = (
-			'JSON.stringify([screenX, screenY, outerWidth - innerWidth, outerHeight - innerHeight, innerWidth, innerHeight])'
-		)
-		r = await cdp.call('Runtime.evaluate', {'expression': geometry, 'returnByValue': True}, sid)
-		sx, sy, chrome_w, chrome_h, w, h = json.loads(r['result']['result']['value'])
-		x_click(display, sx + chrome_w // 2 + w // 2, sy + chrome_h + h // 2)
+		from PIL import ImageGrab
+
+		x, y = _page_origin(ImageGrab.grab(xdisplay=display).convert('RGB'))
+		x_click(display, x + 400, y + 300)  # in the page, away from its button
 
 		async def paused():
 			return relay.holder == 'human'
@@ -413,27 +422,44 @@ async def test_an_idle_extension_stays_connected_past_the_service_worker_timeout
 		proc.wait(timeout=10)
 
 
-def _find_cancel(display: str, geometry: list[int]) -> tuple[int, int]:
-	"""Where the debugging bar's Cancel button is: the longest solid run of colour in the bar just above the page.
+def _page_origin(shot) -> tuple[int, int]:
+	"""Screen position of the shared page's top-left corner, found by its magenta marker."""
+	for y in range(min(shot.height, 400)):
+		for x in range(0, shot.width, 2):
+			r, g, b = shot.getpixel((x, y))  # type: ignore[misc]  # an RGB image gives a 3-tuple
+			if r > 170 and b > 170 and g < 70 and abs(r - b) < 30:  # rendered #f0f comes out near (211, 14, 213)
+				return x, y
+	raise AssertionError('the shared page is not on screen')
 
-	Chrome draws it blue and Edge near-black. The bar's text is ink too, but it breaks into short runs letter by
-	letter, and the close (x) at the right end is left out.
+
+def _find_cancel(display: str) -> tuple[int, int] | None:
+	"""Where the button of the bar just above the page is: its longest solid run of colour, or None with no bar.
+
+	The page's top-left corner is found on screen by its magenta marker, not from screenX/outerHeight: Brave
+	farbles those against fingerprinting. Chrome draws Cancel blue and Edge near-black; the bar's text is ink too,
+	but it breaks into short runs letter by letter, and the close (x) at the right end is left out.
 	"""
 	from PIL import ImageGrab
 
-	sx, sy, chrome_w, chrome_h, w, _ = geometry
-	left, top = sx + chrome_w // 2, sy + chrome_h
 	shot = ImageGrab.grab(xdisplay=display).convert('RGB')
+	left, top = _page_origin(shot)
+	# The window ends where the bare X screen (pure black) begins; past it everything would read as one long run.
+	right = next((x for x in range(left, shot.width) if shot.getpixel((x, top + 2)) == (0, 0, 0)), shot.width)
+
+	def ink(x: int, y: int) -> bool:
+		r, g, b = shot.getpixel((x, y))  # type: ignore[misc]  # an RGB image gives a 3-tuple
+		return max(r, g, b) < 120 or b - r > 80
+
+	band = range(max(0, top - 48), top - 4)
 	best = (0, 0, 0)  # run length, x at its middle, y
-	for y in range(top - 48, top - 4):
+	for y in band:
 		run = 0
-		for x in range(left, left + w - 60):
-			r, g, b = shot.getpixel((x, y))  # type: ignore[misc]  # an RGB image gives a 3-tuple
-			run = run + 1 if max(r, g, b) < 120 or b - r > 80 else 0
-			if run > best[0]:
+		for x in range(left, right - 60):
+			run = run + 1 if ink(x, y) else 0
+			# A button is filled: solid colour well down its middle too, unlike a link's 1 px underline.
+			if run >= 30 and run > best[0] and sum(ink(x - run // 2, v) for v in band) >= 12:
 				best = (run, x - run // 2, y)
-	assert best[0] >= 30, f'no Cancel button in the bar above the page (longest run {best[0]} px)'
-	return best[1], best[2]
+	return (best[1], best[2]) if best[0] >= 30 else None
 
 
 async def test_cancel_on_the_debugging_bar_stops_the_ai_until_the_person_shares_again(own_display, tmp_path, site):
@@ -449,15 +475,25 @@ async def test_cancel_on_the_debugging_bar_stops_the_ai_until_the_person_shares_
 		sid = (await cdp.call('Target.attachToTarget', {'targetId': target, 'flatten': True}))['result']['sessionId']
 		assert 'result' in await cdp.call('Runtime.evaluate', {'expression': '1'}, sid)  # attaches: the bar appears
 		await asyncio.sleep(1)
-		geometry = (
-			'JSON.stringify([screenX, screenY, outerWidth - innerWidth, outerHeight - innerHeight, innerWidth, innerHeight])'
-		)
-		r = await cdp.call('Runtime.evaluate', {'expression': geometry, 'returnByValue': True}, sid)
-		x_click(display, *_find_cancel(display, json.loads(r['result']['result']['value'])))
 
 		async def stopped():
 			return relay.stopped and not relay.tabs
 
+		# Bars queue: a browser's own notice (Brave's analytics bar) can stand in front of the debugging bar, as it
+		# does for the person. Press the button of whichever bar is showing until the stop arrives.
+		for attempt in range(3):
+			button = _find_cancel(display)
+			if button is None:
+				if attempt == 0 and os.environ.get('BRIDGE_TEST_BROWSER'):
+					pytest.skip('this browser shows no debugging bar (Vivaldi draws its own UI), so there is no Cancel')
+				assert attempt, 'no debugging bar above the page'
+				break
+			x_click(display, *button)
+			try:
+				await until(stopped, timeout=2.5)
+				break
+			except TimeoutError:
+				await asyncio.sleep(0.5)
 		await until(stopped, timeout=5)
 		refused = await cdp.call('Target.createTarget', {'url': site.url_for('/shared/next')})
 		assert 'pressed Cancel' in refused['error']['message']
