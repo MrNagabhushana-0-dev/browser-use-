@@ -1096,6 +1096,42 @@ def test_the_start_of_a_beat_split_off_as_sound_is_folded_back_into_the_beats():
 	assert [s.kind for s in absorb_beat_edges(segs, off)] == ['sound', 'beats']
 
 
+def test_a_dropout_inside_a_sound_is_not_a_second_sound():
+	# Under load the captured audio can drop out for a few ms in the middle of a sound. The hop after the dropout
+	# jumps back to the sound's spectrum, which reads as an onset: a 120 ms beep was counted twice (hops from a
+	# failing run of the asked-late beeps test). A different sound after a dip, or the same one after a real gap,
+	# is still a new onset.
+	from browser_use.eyes.hearing import onsets
+
+	tone = bytes([0] * 8 + [0, 10, 17, 42, 115, 200, 72, 17] + [0] * 8)  # 1 kHz: one band
+	other = bytes([0] * 4 + [17, 115, 200, 72, 10] + [0] * 15)  # a lower note
+	click = bytes([134] * 24)  # the broadband edge of a gated sound, or a dropout's discontinuity
+	quiet = bytes(24)
+
+	def hop(t: float, rms: float, flux: float, bands: bytes) -> AudioHop:
+		return AudioHop(1, t, t, rms, 0.05, 1000.0, flux, 0.1, 1000.0, bands)
+
+	def silence(t0: float, t1: float) -> list[AudioHop]:
+		return [hop(round(t0 + 0.0213 * k, 3), -90.0, 0.0, quiet) for k in range(int((t1 - t0) / 0.0213))]
+
+	beep = [  # the failing run's beep at 5.49 s: rms and flux as captured
+		hop(5.441, -10.1, 1.0, click),
+		hop(5.467, -7.5, 0.2779, tone),
+		hop(5.476, -7.9, 0.1055, tone),
+		hop(5.505, -14.8, 0.5551, click),  # the dropout
+		hop(5.528, -7.4, 0.9038, tone),  # back to the same sound
+		hop(5.550, -7.5, 0.004, tone),
+		hop(5.569, -10.0, 0.5818, click),
+	]
+	hops = silence(5.0, 5.44) + beep + silence(5.59, 6.0)
+	assert onsets(hops, 0.0213) == [5.441], onsets(hops, 0.0213)
+
+	changed = [*beep[:4], hop(5.528, -7.4, 0.9038, other), hop(5.550, -7.5, 0.004, other), beep[-1]]
+	assert onsets(silence(5.0, 5.44) + changed + silence(5.59, 6.0), 0.0213) == [5.441, 5.528], 'a new note after a dip'
+	gap = [*beep[:3], hop(5.505, -60.0, 0.5551, quiet), *beep[4:]]
+	assert len(onsets(silence(5.0, 5.44) + gap + silence(5.59, 6.0), 0.0213)) == 2, 'the same note again after a real gap'
+
+
 def test_text_addressed_to_an_agent_is_told_apart_from_ordinary_page_text():
 	from browser_use.eyes.percept import page_text_note
 

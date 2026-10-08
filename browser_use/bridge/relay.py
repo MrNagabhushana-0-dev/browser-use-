@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from aiohttp import WSMsgType, web
 
-from browser_use.bridge.policy import PASSIVE_GLOBS, POLICY_FILE, refusal
+from browser_use.bridge.policy import FILES, PASSIVE_GLOBS, POLICY_FILE, refusal
 
 logger = logging.getLogger(__name__)
 
@@ -422,6 +422,8 @@ class BridgeRelay:
 			return {'targetInfo': self.tabs[tab_id]}
 		self._check(method)
 		self._check_site(method, params)
+		if method == 'Input.dispatchDragEvent' and (params.get('data') or {}).get('files'):
+			raise BridgeError(f'{method} with files is refused through the extension bridge: {FILES}')
 		result = await self._ext_call('send', tabId=tab_id, sessionId=child, method=method, params=params)
 		if method in COOKIE_READS:
 			result = {**result, 'cookies': self._only_shared_sites(result.get('cookies', []))}

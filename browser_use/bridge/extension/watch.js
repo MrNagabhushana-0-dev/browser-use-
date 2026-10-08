@@ -24,6 +24,79 @@
 	};
 	for (const type of ['pointerdown', 'keydown', 'wheel']) addEventListener(type, tell, { capture: true, passive: true });
 
+	// 3. While the AI acts in a shared tab (the bridge arms this copy just before each action), hold an activation of a
+	//    control that places an order, pays, deletes an account or grants access: in the event itself, before any of
+	//    the page's listeners (these are registered first, at document start) and before its default action. The
+	//    bridge then refuses the AI's action and asks the person. Every frame runs this, payment forms' included.
+	let armed = { id: 0, until: 0, words: [], grants: [] };
+	const reported = new Set();
+	const PAYMENT_FRAME = /(^|\.)(stripe\.com|paypal\.com|braintreegateway\.com|adyen\.com|checkout\.com|klarna\.com|mollie\.com|squareup\.com)$/;
+	const ACTIVATABLE =
+		'button, input[type=submit i], input[type=button i], input[type=image i], a[href], summary, [role=button], [role=link], [role=menuitem], [onclick]';
+	const norm = (s) =>
+		String(s || '')
+			.normalize('NFKC')
+			.replace(/[\u200b-\u200d\u2060\ufeff]/g, '')
+			.replace(/\s+/g, ' ')
+			.trim()
+			.toLowerCase();
+	const labelOf = (el) =>
+		norm([el.getAttribute('aria-label'), el.innerText || el.textContent, el.value, el.title, el.getAttribute('alt')].filter(Boolean).join(' ')).slice(0, 160);
+	const phrase = (label) => armed.words.find((w) => new RegExp('(^|[^a-z0-9])' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^a-z0-9])').test(label));
+	const activatable = (e) => {
+		for (const n of e.composedPath()) {
+			if (n === host) return null; // the sharing pill is the person's
+			if (n.nodeType === 1 && n.matches(ACTIVATABLE)) return n;
+		}
+		return null;
+	};
+	const ACTIVATING_KEYS = new Set(['Enter', ' ', 'Spacebar', 'NumpadEnter']);
+	const gate = (e) => {
+		if (Date.now() > armed.until) return;
+		let el = null;
+		if (e.type === 'submit') {
+			const form = e.target;
+			el = e.submitter || (form.querySelector && form.querySelector('button:not([type]), [type=submit i], [type=image i]')) || form;
+		} else if (e.type.startsWith('key')) {
+			if (!ACTIVATING_KEYS.has(e.key) && e.code !== 'Enter' && e.code !== 'NumpadEnter') return;
+			el = activatable(e); // Enter in a text field submits its form: the submit event is gated instead
+		} else {
+			el = activatable(e);
+		}
+		if (!el) return;
+		const label = labelOf(el);
+		const paying = window.top !== window && PAYMENT_FRAME.test(location.hostname);
+		const hit = phrase(label) || (paying ? 'a payment form from ' + location.hostname : null);
+		if (!hit) return;
+		const key = location.origin + '|' + label;
+		if (armed.grants.includes(key)) {
+			if (e.type === 'click' || e.type === 'submit') {
+				try {
+					chrome.runtime.sendMessage({ consumed: key });
+				} catch (err) {
+					// orphaned copy
+				}
+			}
+			return; // the person allowed this one
+		}
+		e.preventDefault();
+		e.stopImmediatePropagation();
+		if (reported.has(armed.id)) return;
+		reported.add(armed.id);
+		try {
+			chrome.runtime.sendMessage({ held: { id: armed.id, label, origin: location.origin, hit } });
+		} catch (err) {
+			// orphaned copy
+		}
+	};
+	const GATED = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'dblclick', 'auxclick', 'touchstart', 'touchend'];
+	for (const type of [...GATED, 'keydown', 'keypress', 'keyup', 'submit']) addEventListener(type, gate, { capture: true });
+	chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+		if (!msg || !msg.arm) return;
+		armed = { id: msg.arm.id, until: Date.now() + msg.arm.ms, words: msg.arm.words || [], grants: msg.arm.grants || [] };
+		reply({ armed: true });
+	});
+
 	if (window.top !== window) return; // one pill per tab, in its top document
 
 	let state = { shared: false, offered: false, holder: 'agent', stopped: false };

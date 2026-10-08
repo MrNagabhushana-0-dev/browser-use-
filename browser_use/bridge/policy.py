@@ -35,6 +35,9 @@ FILES = (
 # The extension's worker refuses sites the person hasn't allowed with these words (worker.js, notAllowed). Such a
 # refusal comes before anything is sent.
 NOT_ALLOWED = 'is not a site the person has allowed'
+# ... and holds a click that would place an order, pay, delete an account or grant access with these (worker.js).
+HELD = 'held through the extension bridge'
+PAST_INPUT = "it would act on the page past the input path the person's consent checks, or freeze the person's own input"
 
 REFUSED: dict[str, str] = {
 	**dict.fromkeys(
@@ -70,6 +73,7 @@ REFUSED: dict[str, str] = {
 	**dict.fromkeys(('Page.setBypassCSP', 'Security.setIgnoreCertificateErrors'), PROTECTION),
 	'Network.loadNetworkResource': CREDENTIALED,
 	**dict.fromkeys(('DOM.setFileInputFiles', 'Page.setDownloadBehavior', 'Page.handleFileChooser'), FILES),
+	**dict.fromkeys(('Input.synthesizeTapGesture', 'Input.emulateTouchFromMouseEvent', 'Input.setIgnoreInputEvents'), PAST_INPUT),
 	**dict.fromkeys(('Target.createBrowserContext', 'Target.disposeBrowserContext', 'Target.exposeDevToolsProtocol'), BROWSER),
 }
 REFUSED_DOMAINS: dict[str, str] = {'Fetch': TRAFFIC, 'Browser': BROWSER, 'SystemInfo': BROWSER}

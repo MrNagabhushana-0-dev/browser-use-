@@ -1242,3 +1242,193 @@ def test_the_servers_know_the_words_the_extension_refuses_a_site_with():
 	from browser_use.bridge.policy import NOT_ALLOWED
 
 	assert NOT_ALLOWED in (EXTENSION_DIR / 'worker.js').read_text()
+
+
+# -- Clicks that place an order, pay, delete an account or grant access --------------------------------------------
+# After Claude in Chrome's "ask first" classes. While the AI acts, the page's copy of the extension's content script
+# holds such an activation in the event itself and the person is asked; a site they allowed is not consent to pay.
+
+SHOP = (
+	'<!doctype html><title>Shop</title><body style="margin:0;height:100vh">'
+	'<button id="order" style="position:fixed;left:40px;top:40px;width:220px;height:60px">Place order</button>'
+	'<button id="next" style="position:fixed;left:300px;top:40px;width:220px;height:60px">Next page</button>'
+	'<form id="f" style="position:fixed;left:40px;top:140px">'
+	'<input id="note" name="note" style="width:200px;height:30px"><button id="pay" style="height:34px">Pay now</button></form>'
+	'<button id="close" style="position:fixed;left:40px;top:240px;width:220px;height:60px">Delete my account</button>'
+	'<script>window.ordered = 0; window.nexted = 0; window.paid = 0; window.closed = 0;'
+	"document.getElementById('order').onclick = () => ordered++; document.getElementById('next').onclick = () => nexted++;"
+	"document.getElementById('close').onclick = () => closed++;"
+	"document.getElementById('f').onsubmit = (e) => { e.preventDefault(); paid++; };</script></body>"
+)
+HELD = 'held through the extension bridge'
+
+
+async def _value(cdp: RawCDP, sid: str, expression: str):
+	reply = await cdp.call('Runtime.evaluate', {'expression': expression, 'returnByValue': True}, sid)
+	return reply.get('result', {}).get('result', {}).get('value')
+
+
+async def _click(cdp: RawCDP, sid: str, x: int, y: int) -> list[dict]:
+	"""The AI's click, as raw CDP input: a move, a press and a release. Returns the press and release replies."""
+	await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': x, 'y': y}, sid)
+	replies = []
+	for kind in ('mousePressed', 'mouseReleased'):
+		replies.append(
+			await cdp.call('Input.dispatchMouseEvent', {'type': kind, 'x': x, 'y': y, 'button': 'left', 'clickCount': 1}, sid)
+		)
+	return replies
+
+
+def _held(replies: list[dict]) -> str:
+	return ' '.join(r.get('error', {}).get('message', '') for r in replies)
+
+
+async def _enter(cdp: RawCDP, sid: str) -> list[dict]:
+	key = {'key': 'Enter', 'code': 'Enter', 'windowsVirtualKeyCode': 13}
+	down = await cdp.call('Input.dispatchKeyEvent', {'type': 'keyDown', 'text': '\r', **key}, sid)
+	up = await cdp.call('Input.dispatchKeyEvent', {'type': 'keyUp', **key}, sid)
+	return [down, up]
+
+
+@pytest.fixture(scope='module')
+def shop(site):
+	site.expect_request('/shared/shop').respond_with_data(SHOP, content_type='text/html')
+	return site.url_for('/shared/shop')
+
+
+async def _on_shop(relay: BridgeRelay, site: HTTPServer, shop: str):
+	http, cdp, sid = await _shared_session(relay, site)
+	await cdp.call('Page.navigate', {'url': shop}, sid)
+
+	async def loaded():
+		return await _value(cdp, sid, 'document.title + typeof window.ordered') == 'Shopnumber'
+
+	await until(loaded)
+	return http, cdp, sid
+
+
+async def test_a_click_that_places_an_order_waits_for_the_person_whatever_way_the_ai_clicks(bridge, display, site, shop):
+	from PIL import ImageGrab
+
+	relay, _ = bridge
+	http, cdp, sid = await _on_shop(relay, site, shop)
+	try:
+		assert not _held(await _click(cdp, sid, 410, 70)) and await _value(cdp, sid, 'nexted') == 1, 'ordinary buttons pass'
+
+		held = _held(await _click(cdp, sid, 150, 70))
+		assert HELD in held and 'place order' in held and 'did not happen' in held, held
+		assert await _value(cdp, sid, 'ordered') == 0, 'the order went through'
+		listed = (await get(relay, '/json/list')).json()
+		assert not any('ask.html' in t['url'] for t in listed), 'the AI can see the window that asks the person'
+
+		script = await cdp.call('Runtime.evaluate', {'expression': "document.getElementById('order').click()"}, sid)
+		assert HELD in script.get('error', {}).get('message', ''), f'a script click is held too: {script}'
+		assert await _value(cdp, sid, 'ordered') == 0
+
+		x_click(display, *await _asked(display, ALLOW))  # the person allows this one click
+		await asyncio.sleep(1.0)
+		assert not _held(await _click(cdp, sid, 150, 70)), 'the allowed click was held'
+		assert await _value(cdp, sid, 'ordered') == 1
+		again = _held(await _click(cdp, sid, 150, 70))
+		assert HELD in again and await _value(cdp, sid, 'ordered') == 1, 'one allowed click, not every click after it'
+		await asyncio.sleep(0.5)
+		assert _button(ImageGrab.grab(xdisplay=display).convert('RGB'), ALLOW), 'asked again for the next one'
+		x_click(display, *await _asked(display, NO))
+	finally:
+		await http.close()
+
+
+async def test_enter_and_form_submits_that_pay_are_held_and_a_no_is_remembered(bridge, display, site, shop):
+	from PIL import ImageGrab
+
+	relay, _ = bridge
+	http, cdp, sid = await _on_shop(relay, site, shop)
+	try:
+		await _value(cdp, sid, "document.getElementById('pay').focus()")
+		enter = _held(await _enter(cdp, sid))
+		assert HELD in enter and 'pay now' in enter, f'Enter on a focused "Pay now": {enter}'
+		await asyncio.sleep(0.5)
+		x_click(display, *await _asked(display, NO))  # the person says no
+		await asyncio.sleep(1.0)
+
+		await _value(cdp, sid, "document.getElementById('note').focus()")
+		implicit = _held(await _enter(cdp, sid))  # Enter in the text field submits the form through "Pay now"
+		assert HELD in implicit and 'said no' in implicit, implicit
+		assert await _value(cdp, sid, 'paid') == 0, 'the payment went through'
+		await asyncio.sleep(0.5)
+		assert _button(ImageGrab.grab(xdisplay=display).convert('RGB'), ALLOW) is None, 'asked again after a no'
+
+		closing = _held(await _click(cdp, sid, 150, 270))
+		assert HELD in closing and 'delete my account' in closing and await _value(cdp, sid, 'closed') == 0
+		x_click(display, *await _asked(display, NO))
+	finally:
+		await http.close()
+
+
+async def test_the_pages_own_questions_are_the_persons_to_accept(bridge, site, shop):
+	"""The library accepts confirm() dialogs on its own ("Delete your account?" included). Through the bridge only
+	dismissing them is allowed; accepting is the person's, in their tab. An alert can still be closed."""
+	relay, _ = bridge
+	http, cdp, sid = await _on_shop(relay, site, shop)
+	try:
+		await cdp.call('Page.enable', {}, sid)
+		await _value(cdp, sid, "setTimeout(() => window.answer = confirm('Remove this item?'), 0); 1")
+		await asyncio.sleep(0.5)
+		accepted = await cdp.call('Page.handleJavaScriptDialog', {'accept': True}, sid)
+		assert "person's to answer" in accepted.get('error', {}).get('message', ''), accepted
+		dismissed = await cdp.call('Page.handleJavaScriptDialog', {'accept': False}, sid)
+		assert 'error' not in dismissed, dismissed
+		assert await _value(cdp, sid, 'window.answer') is False
+
+		await _value(cdp, sid, "setTimeout(() => alert('Saved'), 0); 1")
+		await asyncio.sleep(0.5)
+		closed = await cdp.call('Page.handleJavaScriptDialog', {'accept': True}, sid)
+		assert 'error' not in closed, f'an alert can be closed: {closed}'
+	finally:
+		await http.close()
+
+
+async def test_browser_click_through_the_library_is_held_too(bridge, site, shop):
+	"""The library's click has fallbacks (a script click when input doesn't land); none of them gets past the page."""
+	relay, _ = bridge
+	server = BrowserUseServer()
+	server.bridge, server.cdp_url = relay, relay.cdp_url
+	try:
+		await _call(server, 'browser_navigate', {'url': shop})
+		state = json.loads(await _call(server, 'browser_get_state', {}))
+		order = next(e['index'] for e in state['interactive_elements'] if 'Place order' in json.dumps(e))
+		clicked = await _call(server, 'browser_click', {'index': order})
+		assert HELD in clicked, clicked
+		http, cdp, sid = await _shared_session_on(relay, '/shared/shop')
+		try:
+			assert await _value(cdp, sid, 'ordered') == 0, 'a fallback click placed the order'
+		finally:
+			await http.close()
+	finally:
+		await server._close_all_sessions()
+
+
+async def _shared_session_on(relay: BridgeRelay, path: str):
+	http, cdp = await raw_cdp(relay)
+	target = next(i['targetId'] for i in (await cdp.call('Target.getTargets'))['result']['targetInfos'] if path in i['url'])
+	sid = (await cdp.call('Target.attachToTarget', {'targetId': target, 'flatten': True}))['result']['sessionId']
+	return http, cdp, sid
+
+
+async def test_input_that_clicks_past_the_page_or_freezes_the_person_is_refused(bridge, site):
+	relay, _ = bridge
+	http, cdp, sid = await _shared_session(relay, site)
+	try:
+		for method, params in [
+			('Input.synthesizeTapGesture', {'x': 150, 'y': 70}),  # a tap the page's input path never sees coming
+			('Input.emulateTouchFromMouseEvent', {'type': 'mousePressed', 'x': 150, 'y': 70, 'button': 'left'}),
+			('Input.setIgnoreInputEvents', {'ignore': True}),  # would freeze the person's own mouse and keys
+			(
+				'Input.dispatchDragEvent',
+				{'type': 'drop', 'x': 1, 'y': 1, 'data': {'items': [], 'files': ['/etc/passwd'], 'dragOperationsMask': 1}},
+			),
+		]:
+			reply = await cdp.call(method, params, sid)
+			assert 'refused through the extension bridge' in reply.get('error', {}).get('message', ''), (method, reply)
+	finally:
+		await http.close()

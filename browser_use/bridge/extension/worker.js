@@ -12,6 +12,9 @@ const store = C.storage.session || C.storage.local;
 // Cancel, anything else is refused, page script included. Until the list is loaded nothing counts as looking.
 let PASSIVE = [];
 let POLICY = null; // the globs as loaded, reported in hello so `doctor` can spot a copy that differs from the relay's
+// Phrases on controls that place an order, pay, delete an account or grant access (policy.json). The page's copy of
+// watch.js holds such an activation while the AI acts, in the event itself, and the person is asked.
+let CONSEQUENTIAL = [];
 
 function acts(method) {
 	return !PASSIVE.some((re) => re.test(method));
@@ -27,7 +30,13 @@ const state = {
 	urls: new Map(), // tab id -> the address a shared tab was last seen on
 	allowed: new Set(), // sites (origins) the person let the AI use until the browser closes
 	declined: new Set(), // sites the person said no to: asked about again only if they share a tab there
-	asking: null, // {origin, url, windowId}: the one ask waiting for the person
+	asking: null, // {kind, origin, url, label, tabId, windowId}: the one ask waiting for the person
+	dialogs: new Map(), // tab id -> the type of the page's open native dialog (alert, confirm, prompt, beforeunload)
+	held: new Map(), // tab id -> the last activation the page held for the person: {id, label, origin}
+	heldWaiters: new Map(), // arm id -> resolve, for a send waiting to hear whether its event was held
+	armSeq: 0,
+	clickGrants: [], // {tabId, origin, label, until}: one click the person allowed
+	clickDeclined: new Set(), // origin + '|' + label the person said no to, until the browser closes
 	attached: new Set(), // tab ids with a live chrome.debugger session
 	targets: new Map(), // tab id -> DevTools target id
 	holder: 'agent', // who drives shared tabs: 'agent' or 'human'
@@ -109,13 +118,94 @@ async function ask(url) {
 	if (site === 'null') return `${url} is refused through the extension bridge: only web pages can be opened there`;
 	if (state.declined.has(site)) return notAllowed(url, 'they declined it. They can share a tab on it themselves if they change their mind');
 	if (state.asking && state.asking.origin !== site) return notAllowed(url, `another ask (${state.asking.origin}) is waiting for them`);
-	if (!state.asking) {
-		const page = C.runtime.getURL('ask.html') + '#' + encodeURIComponent(JSON.stringify({ origin: site, url }));
-		const win = await call(C.windows, 'create', { url: page, type: 'popup', width: 520, height: 240, left: 640, top: 80, focused: true });
-		state.asking = { origin: site, url, windowId: win.id };
-		await save();
-	}
+	if (!state.asking) await openAsk({ kind: 'site', origin: site, url });
 	return notAllowed(url, 'a window asks them now. Once they allow it, try again');
+}
+
+async function openAsk(asked) {
+	const page = C.runtime.getURL('ask.html') + '#' + encodeURIComponent(JSON.stringify(asked));
+	const win = await call(C.windows, 'create', { url: page, type: 'popup', width: 520, height: 240, left: 640, top: 80, focused: true });
+	state.asking = { ...asked, windowId: win.id };
+	await save();
+}
+
+// -- Consequential clicks --------------------------------------------------------------------------------------------
+// Before an AI action that can activate something (a press, a key, a touch, page script), the page's copy of watch.js
+// is armed. While armed, its capture listeners (registered before any of the page's own) hold a press, click, Enter
+// or form submit on a control that places an order, pays, deletes an account or grants access, in that same event,
+// and tell this worker. The action then comes back refused and the person is asked: Allow this one click, or No.
+const ACTIVATING = /^(Input\.dispatch(Mouse|Key|Touch)Event|Input\.insertText|Runtime\.(evaluate|callFunctionOn|runScript)|DOM\.focus)$/;
+const HELD_WAIT_MS = 60; // the page reports a held event while dispatching it, before the command's reply
+
+function activates(msg) {
+	if (!ACTIVATING.test(msg.method)) return false;
+	const type = (msg.params || {}).type;
+	return !(msg.method === 'Input.dispatchMouseEvent' && (type === 'mouseMoved' || type === 'mouseWheel'));
+}
+
+// Whether to wait to hear if the page held it: what can activate a control (typing a letter can't).
+function mayActivate(msg) {
+	const p = msg.params || {};
+	if (msg.method.startsWith('Runtime.')) return true;
+	if (msg.method === 'Input.dispatchMouseEvent') return p.type === 'mousePressed' || p.type === 'mouseReleased';
+	if (msg.method === 'Input.dispatchTouchEvent') return p.type === 'touchStart' || p.type === 'touchEnd';
+	if (msg.method === 'Input.dispatchKeyEvent') {
+		return ['Enter', ' ', 'NumpadEnter'].includes(p.key) || p.code === 'Enter' || p.code === 'NumpadEnter' || p.code === 'Space' ||
+			p.text === '\r' || p.text === '\n' || p.text === ' ' || p.windowsVirtualKeyCode === 13 || p.windowsVirtualKeyCode === 32;
+	}
+	return false;
+}
+
+function clickKey(origin, label) {
+	return origin + '|' + label;
+}
+
+async function armPage(tabId) {
+	const id = ++state.armSeq;
+	const now = Date.now();
+	state.clickGrants = state.clickGrants.filter((g) => g.until > now);
+	const grants = state.clickGrants.filter((g) => g.tabId === tabId).map((g) => clickKey(g.origin, g.label));
+	const arm = { id, ms: 3000, words: CONSEQUENTIAL, grants };
+	// every frame gets it (payment forms live in frames); the top frame's answer says the page is listening
+	await Promise.race([
+		new Promise((resolve) => C.tabs.sendMessage(tabId, { arm }, () => resolve(void C.runtime.lastError))),
+		new Promise((resolve) => setTimeout(resolve, 300)),
+	]);
+	return id;
+}
+
+// Listen before sending: the page reports while it dispatches, which can be before the command's reply arrives.
+function listenHeld(id) {
+	const box = { report: null, wake: null };
+	state.heldWaiters.set(id, (report) => {
+		box.report = box.report || report;
+		if (box.wake) box.wake();
+	});
+	const done = () => state.heldWaiters.delete(id);
+	const wait = (ms) =>
+		new Promise((resolve) => {
+			if (box.report) return resolve(box.report);
+			box.wake = () => resolve(box.report);
+			setTimeout(() => resolve(box.report), ms);
+		}).finally(done);
+	return { wait, done };
+}
+
+function onHeld(tabId, report) {
+	state.held.set(tabId, report);
+	const waiter = state.heldWaiters.get(report.id);
+	if (waiter) waiter(report);
+}
+
+async function heldRefusal(tabId, report) {
+	const label = String(report.label || '').replace(/[\u0000-\u001f]/g, ' ').slice(0, 80);
+	const what = `the press on "${label}" (the page's own words) is held through the extension bridge: it would place an order, pay, delete an account or grant access, which waits for the person`;
+	if (state.clickDeclined.has(clickKey(report.origin, report.label))) return `${what}; they said no to it. It did not happen.`;
+	if (state.asking && !(state.asking.kind === 'click' && state.asking.label === report.label)) {
+		return `${what}; another ask is waiting for them first. It did not happen.`;
+	}
+	if (!state.asking) await openAsk({ kind: 'click', origin: report.origin, label: report.label, tabId });
+	return `${what}; a window asks them now. It did not happen. Once they allow it, click again.`;
 }
 
 async function answer(reply, windowId) {
@@ -124,6 +214,14 @@ async function answer(reply, windowId) {
 	if (!asked || reply.origin !== asked.origin || windowId !== asked.windowId) return;
 	state.asking = null;
 	await save();
+	call(C.windows, 'remove', asked.windowId).catch(() => {});
+	if (asked.kind === 'click') {
+		// one click on that control, never the site: a site the person allowed is not consent to pay there
+		if (reply.answer === 'allow') state.clickGrants.push({ tabId: asked.tabId, origin: asked.origin, label: asked.label, until: Date.now() + 60000 });
+		if (reply.answer === 'no') state.clickDeclined.add(clickKey(asked.origin, asked.label));
+		emit({ event: 'site', origin: asked.origin, answer: reply.answer, click: asked.label });
+		return;
+	}
 	if (reply.answer === 'allow' || reply.answer === 'always') await allowSite(asked.url);
 	if (reply.answer === 'always' && !state.settings.alwaysAllow.includes(asked.origin)) {
 		state.settings.alwaysAllow = [...state.settings.alwaysAllow, asked.origin];
@@ -134,7 +232,6 @@ async function answer(reply, windowId) {
 		await save();
 	}
 	emit({ event: 'site', origin: asked.origin, answer: reply.answer });
-	call(C.windows, 'remove', asked.windowId).catch(() => {});
 }
 
 async function keepSettings(changes) {
@@ -373,6 +470,15 @@ async function handle(msg) {
 			}
 			await checkSite(msg.tabId, acts(msg.method));
 			await checkNavigation(msg);
+			if (msg.method === 'Page.handleJavaScriptDialog' && (msg.params || {}).accept) {
+				// The page's own question (confirm, prompt) is the person's to answer: it is in front of them in the tab.
+				const type = state.dialogs.get(msg.tabId);
+				if (type !== 'alert' && type !== 'beforeunload') {
+					throw new Error(`Page.handleJavaScriptDialog is refused through the extension bridge: accepting the page's ${type || 'unknown'} dialog is the person's to answer, in their tab; dismissing it is allowed`);
+				}
+			}
+			const arming = activates(msg) ? await armPage(msg.tabId) : 0;
+			const held = arming && mayActivate(msg) ? listenHeld(arming) : null;
 			await ensureAttached(msg.tabId);
 			const input = msg.method.startsWith('Input.');
 			if (input && !msg.sessionId) await bringToFront(msg.tabId);
@@ -383,11 +489,18 @@ async function handle(msg) {
 				if (acting) state.aiActAt.set(msg.tabId, Date.now());
 			};
 			mark();
+			let result;
 			try {
-				return (await call(C.debugger, 'sendCommand', target, msg.method, msg.params || {})) || {};
+				result = (await call(C.debugger, 'sendCommand', target, msg.method, msg.params || {})) || {};
+			} catch (e) {
+				if (held) held.done();
+				throw e;
 			} finally {
 				mark();
 			}
+			const report = held ? await held.wait(HELD_WAIT_MS) : null;
+			if (report) throw new Error(await heldRefusal(msg.tabId, report));
+			return result;
 		}
 		case 'open':
 			if (!allowedUrl(msg.url || 'about:blank')) throw new Error(await ask(msg.url));
@@ -511,6 +624,7 @@ async function boot() {
 		const policy = await (await fetch(C.runtime.getURL('policy.json'))).json();
 		PASSIVE = policy.passive.map(globToRegExp);
 		POLICY = policy.passive;
+		CONSEQUENTIAL = policy.consequential || [];
 	} catch (e) {
 		// no policy: nothing counts as looking, so a held wheel refuses everything
 	}
@@ -551,6 +665,8 @@ async function boot() {
 
 C.debugger.onEvent.addListener((source, method, params) => {
 	if (!state.shared.has(source.tabId)) return;
+	if (method === 'Page.javascriptDialogOpening' && !source.sessionId) state.dialogs.set(source.tabId, params.type);
+	if (method === 'Page.javascriptDialogClosed' && !source.sessionId) state.dialogs.delete(source.tabId);
 	if (method === 'Page.frameNavigated' && !source.sessionId && params && params.frame && !params.frame.parentId) {
 		state.urls.set(source.tabId, params.frame.url);
 		if (!allowedUrl(params.frame.url)) return void moved(source.tabId, params.frame.url); // nothing of it is passed on
@@ -593,6 +709,8 @@ C.tabs.onRemoved.addListener((tabId) => {
 	state.offered.delete(tabId);
 	state.moved.delete(tabId);
 	state.urls.delete(tabId);
+	state.dialogs.delete(tabId);
+	state.held.delete(tabId);
 	unshare(tabId, 'tab closed');
 });
 
@@ -655,6 +773,16 @@ C.windows.onRemoved.addListener((id) => {
 C.runtime.onMessage.addListener((msg, sender, reply) => {
 	if (msg.input) {
 		if (sender.tab && state.shared.has(sender.tab.id)) onPersonInput(sender.tab.id, msg.input);
+		return false;
+	}
+	if (msg.held || msg.consumed) {
+		// from this extension's content script in a shared tab (any frame); page script can't reach this channel
+		if (!sender.tab || sender.id !== C.runtime.id || !state.shared.has(sender.tab.id)) return false;
+		if (msg.held) onHeld(sender.tab.id, msg.held);
+		if (msg.consumed) {
+			const at = state.clickGrants.findIndex((g) => g.tabId === sender.tab.id && clickKey(g.origin, g.label) === msg.consumed);
+			if (at >= 0) state.clickGrants.splice(at, 1);
+		}
 		return false;
 	}
 	if (msg.answer) {

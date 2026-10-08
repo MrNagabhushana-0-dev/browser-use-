@@ -51,6 +51,12 @@ OFFSET_COLLAPSE_DB = 25.0  # the hop after an ending is this much quieter: the s
 ONSET_FLOOR = 0.3
 ONSET_MADS = 4.0
 ONSET_MIN_GAP_S = 0.08
+# A dropout in the capture inside a sound that keeps going: one or two hops this much quieter (but not silent, as a
+# real gap between notes is), then the same spectrum at the same level. The hop after it is not a new sound.
+DROPOUT_MIN_DB = 3.0
+DROPOUT_MAX_DB = 12.0
+DROPOUT_SAME_LEVEL_DB = 3.0
+DROPOUT_SAME_SPECTRUM = 0.9
 ENERGY_JUMP_DB = 15.0
 TEMPO_MIN_S = 3.0
 DEFAULT_HOP_S = 1024 / 48000
@@ -174,6 +180,23 @@ def classify(
 	return 'sound', ''
 
 
+def _resumed(hops: list[AudioHop], rms: np.ndarray, i: int) -> bool:
+	"""Whether hop i is the same sound coming back after a short dropout in the capture, not a new one."""
+	for dip_len in (1, 2):
+		j = i - dip_len - 1  # the hop before the dip
+		if j < 0 or rms[j] <= SILENCE_DB or abs(float(rms[i] - rms[j])) > DROPOUT_SAME_LEVEL_DB:
+			continue
+		depth = float(rms[j] - rms[j + 1 : i].min())
+		if not DROPOUT_MIN_DB <= depth <= DROPOUT_MAX_DB:
+			continue
+		a = np.frombuffer(hops[j].bands, dtype=np.uint8).astype(np.float32)
+		b = np.frombuffer(hops[i].bands, dtype=np.uint8).astype(np.float32)
+		norm = float(np.linalg.norm(a) * np.linalg.norm(b))
+		if norm > 0 and float(a @ b) / norm >= DROPOUT_SAME_SPECTRUM:
+			return True
+	return False
+
+
 def onsets(hops: list[AudioHop], hop_s: float) -> list[float]:
 	if len(hops) < 5:
 		return []
@@ -201,6 +224,7 @@ def onsets(hops: list[AudioHop], hop_s: float) -> list[float]:
 			and rms[i + 1] < rms[i] - OFFSET_COLLAPSE_DB
 		)
 		flux_onset = is_peak and flux[i] > max(ONSET_FLOOR, med + ONSET_MADS * mad) and rms[i] > -60 and not (falling or ending)
+		flux_onset = flux_onset and not _resumed(hops, rms, i)
 		energy_onset = rms[i] > SILENCE_DB and rms[i] - rms[max(0, i - 3) : i].min() >= ENERGY_JUMP_DB
 		if (flux_onset or energy_onset) and hops[i].t - last >= ONSET_MIN_GAP_S:
 			found.append(hops[i].t)
