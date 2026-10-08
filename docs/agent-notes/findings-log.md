@@ -2751,3 +2751,24 @@ tab moves to another site. Before this round, sharing a tab let the AI take it a
 - revoking Always from a UI (the person edits the setting);
 - a force-ask category for sensitive sites;
 - the purchase and confirm-first action classes, the third P1 gap.
+
+- **Full `tests/ci` on `9ba65c9`: green, 1,645 passed, 30 skipped, 0 failed** (38m25s, `loopwatch` on, whole log
+  kept).
+  - 11 stalls of 1.0-2.2 s, mostly in eyesbench.
+  - The `f127c8e` run had 142. It shared the machine with the three review agents, which fits the Round 47 pattern
+    of more stalls under outside load; not proven.
+  - Skips are the long-standing named ones: TODOs, missing API keys, no Tor.
+
+**Next, in order:**
+1. The beep-count intermittent (task 43). The asked-late beeps test counted 6 onsets for 4 beeps: the two beeps at
+   or before the late watch were each found twice, about 0.1 s either side of the true time; the later two were
+   single. Two leads, to tell apart from a dump of the raw hops in a failing run:
+   - two overlapping `startHearing` calls each building an ear (`ensureEar` checks `R.node` before its first
+     await);
+   - a beep split by the hold/resume of the video, its halves stamped apart by the wall-clock lag correction.
+2. The third P1 gap from Round 46: purchase, checkout and payment controls refused through the bridge, and
+   confirm-first for delete, send and publish.
+3. Frames and child sessions of other sites (OOPIFs) through the bridge.
+4. A revoke for Always (popup) and a force-ask category for sensitive sites.
+5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
