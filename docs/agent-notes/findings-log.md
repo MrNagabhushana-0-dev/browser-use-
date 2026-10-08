@@ -2772,3 +2772,73 @@ tab moves to another site. Before this round, sharing a tab let the AI take it a
 4. A revoke for Always (popup) and a force-ask category for sensitive sites.
 5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 50: the beep-count intermittent, found; clicks that pay wait for the person
+
+### The beep-count intermittent (task 43), root cause
+- **Method:** a pytest plugin (scratch, not committed) dumped the retina's hops and events after the asked-late
+  beeps test, on every run.
+  - The test alone passed 16 of 16, under load from 3 busy cores.
+  - In the combination where it had failed before (the tool-annotation, network and Retinat files), 1 of 14 runs
+    failed with its hops kept.
+- **What the hops show:**
+  - One stream (536 hops in 11 s), not two. My first lead, overlapping `startHearing` calls, was wrong.
+  - Inside the 120 ms beep at 5.49 s, one hop dips to -14.8 dB between hops at -7.5 dB, and is broadband. The next
+    hop returns to the same level and the 1 kHz spectrum with flux 0.90, so it passed as an onset: one beep counted
+    twice.
+  - Under load, the captured audio drops out for a few ms inside a sound.
+- **Fix** (`hearing.onsets`): the hop after a dip of 1-2 hops and 3-12 dB, which returns to within 3 dB of the level
+  before it and to the same spectrum (cosine of the 24 bands at least 0.9), is the same sound resuming.
+  - A real gap between notes falls further than 12 dB.
+  - A different note after a dip has another spectrum.
+- **Unit test**, built from the failing run's own hop values: it fails on the old code with exactly the extra onset
+  (5.528 s). Its negative controls, a different note after a dip and the same note after a real gap, still count
+  as two onsets.
+- **Not proven:** the fix's effect on the intermittent's rate. It fired in about 1 of 14 combined runs, so a loop of
+  some 40 clean runs would be needed to show the rate dropped. Not run yet.
+- **Also seen:**
+  - `test_eyes.py::test_cuts_and_sounds_are_found_where_they_are` failed once in a 15-minute three-file run. Its
+    diff was cut by my own output filter.
+    - It passed alone and in a 51/51 eyes-file rerun.
+    - The new rule can't reach that test's click track, whose clicks all follow silence, and it failed the same way
+      in Round 43 with no eyes change. Recorded as unattributed; full logs are kept from now on.
+  - `test_network.py:397` failed once in the combination loop: Chromium's own requests to Google services showed up
+    among the hostnames handed to the SOCKS proxy.
+
+### Consequential clicks through the bridge
+- **Design, reviewed by three adversarial passes before building.** All three found that classifying the AI's press
+  in the worker can't be sound:
+  - the library's own fallback clicks with `this.click()`;
+  - script can `requestSubmit()`;
+  - the page can swap the button between the check and the press;
+  - `Page.handleJavaScriptDialog` answers a native `confirm()` with no click at all.
+- **Built** (`119c19a` WIP, `db7d6f5`):
+  - **The gate is in the page, at the event.** Before each AI action that can activate something, the worker arms
+    the page's copy of `watch.js` in every frame. Its capture listeners, registered at document start before the
+    page's own, hold a press, click, Enter, touch or form submit on a control labelled to place an order, pay, move
+    money, delete an account or grant access. They act in that event, before the page sees it.
+    - The phrases are in `policy.json`, as whole phrases.
+    - A click inside a known payment provider's frame counts too.
+    - The AI's command comes back "held through the extension bridge" with the page's label.
+    - The ask window offers "Allow this one click" (once, within a minute) or No, which is remembered.
+    - A site grant is never consent to pay there.
+  - **Dialogs:** accepting a page's `confirm()` or `prompt()` is refused. The library had auto-accepted confirms,
+    which in the person's browser would answer "Delete your account?". Dismissing, and closing an alert, pass.
+  - **Refused through the bridge:** tap synthesis, touch emulation, ignoring input, and dragging files in.
+  - **Found by the library test:** `browser_click` reported "Clicked element N" whatever happened, because it
+    awaited the event but not its result. It now raises a failed click.
+- **Tests:**
+  - 5 new tests on real Chromium, with the person's clicks made through XTest. 9 of 9 mutants fail a test.
+  - The first version missed one mutant: Enter in a text field makes Chrome click the default button, so the submit
+    gate went untested. A script `requestSubmit()` case now covers it.
+  - Bridge file: 32/32 in four of the last six runs.
+    - The two failures were a cascade: the drift test started with no shared tab on the shared site. Cause not
+      pinned.
+    - Tab hand-backs now retry, and the setup names the tabs if it happens again.
+- **Not covered, written in AI.md:**
+  - controls whose label doesn't say so (icons, other languages, text in images);
+  - script that calls the site's API directly or uses `form.submit()`;
+  - frames and child sessions of other sites.
+  - The reviewers' sound option for the API case, a request gate through `Fetch`, can't tell the person's own
+    requests from the AI's, so it isn't built.
+- **Not run:** the branded browsers with the click gate.
