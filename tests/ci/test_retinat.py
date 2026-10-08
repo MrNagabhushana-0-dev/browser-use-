@@ -1,5 +1,7 @@
 """The Retinat MCP server, called the way an MCP client calls it. Real browser, local pages."""
 
+import json
+
 import mcp.types as types
 import pytest
 from pytest_httpserver import HTTPServer
@@ -27,6 +29,13 @@ FIND_DEEP = (
 	"<script>customElements.define('ship-box', class extends HTMLElement { constructor() { super();"
 	"this.attachShadow({mode: 'open'}).innerHTML = '<p>Shipping estimate 3 days</p><slot></slot>'; } });</script></body>"
 )
+CLICK = (
+	'<!doctype html><title>Two buttons</title><body style="margin:0;font:16px sans-serif">'
+	'<button id="save" style="position:absolute;left:100px;top:100px;width:120px;height:40px">Save</button>'
+	'<button id="del" style="position:absolute;left:260px;top:100px;width:120px;height:40px">Delete</button>'
+	"<script>window.hits = {save: 0, del: 0}; for (const b of document.querySelectorAll('button'))"
+	' b.onclick = () => hits[b.id]++;</script></body>'
+)
 WALL = '<!doctype html><title>Just a moment...</title><body>Checking your browser before accessing the site.</body>'
 
 
@@ -38,6 +47,7 @@ def site():
 	server.expect_request('/wall').respond_with_data(WALL, content_type='text/html')
 	server.expect_request('/find').respond_with_data(FIND, content_type='text/html')
 	server.expect_request('/find-deep').respond_with_data(FIND_DEEP, content_type='text/html')
+	server.expect_request('/click').respond_with_data(CLICK, content_type='text/html')
 	server.expect_request('/toast').respond_with_data(TOAST, content_type='text/html')
 	yield server
 	server.stop()
@@ -246,3 +256,21 @@ async def test_find_keeps_to_one_block_in_its_match_and_its_context(retinat, sit
 	assert '"Terms apply to every order."' in terms, f'the context is its own paragraph, nothing more: {terms}'
 	across = _text(await _call(retinat, 'retinat_find', {'text': 'larger. terms'}))
 	assert 'not found' in across or '0 match' in across, f'two paragraphs are not one phrase: {across}'
+
+
+async def test_click_says_what_it_hit_and_refuses_when_it_is_not_what_was_expected(retinat, site):
+	"""A page moves between a look and a click; saying what is under the point, and refusing a mismatch, keeps an
+	agent from pressing Delete while it believes it pressed Save (after BrowserSkill's hit verification)."""
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/click')})
+	saved = _text(await _call(retinat, 'retinat_click', {'x': 160, 'y': 120, 'expect': 'Save'}))
+	assert 'Clicked' in saved and 'button "Save"' in saved, saved
+	wrong = _text(await _call(retinat, 'retinat_click', {'x': 320, 'y': 120, 'expect': 'Save'}))
+	assert 'Not clicked' in wrong and 'button "Delete"' in wrong, wrong
+	plain = _text(await _call(retinat, 'retinat_click', {'x': 160, 'y': 120}))
+	assert 'button "Save"' in plain, f'without expect it still says what it clicked: {plain}'
+	assert retinat.browser_session is not None
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	hits = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'JSON.stringify(hits)', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	assert json.loads(hits['result'].get('value', '{}')) == {'save': 2, 'del': 0}

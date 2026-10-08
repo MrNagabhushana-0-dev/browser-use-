@@ -56,6 +56,12 @@ Then:
 - Their browser shows "Retinat bridge started debugging this browser" while a tab is shared. **Cancel** on that bar
   (or closing it) is their stop button. Every tab is unshared, and you may not open a tab of your own either, until they
   share a tab again. If your calls come back with "pressed Cancel", stop and ask them.
+- Each shared tab shows a pill at the bottom: "An AI is working in this tab", with **Take the wheel** (it turns into
+  **Hand back** while they hold it). It sits in a closed shadow root that the DOM state skips, so it never shows up in
+  what you read, and clicking it doesn't count as the person using the page.
+- When something doesn't connect, `python -m browser_use.bridge doctor` (add `--json` for data) checks each link:
+  relay, extension (version and whether it answers), browser version, policy, shared tabs and wheel. Each problem comes
+  with the fix in the person's words. Retinat's "not connected" error carries the same fixes; pass them on.
 - After the extension's files change (an update of this repository), they press the reload arrow on its card at
   `chrome://extensions`. Chrome keeps running the old service worker until then.
 - Python code uses `BridgeRelay` plus `bridge_session_kwargs(relay.cdp_url)`; see `python -m browser_use.bridge`.
@@ -102,7 +108,9 @@ continuous stream on disk rather than in your context.
 Token figures are estimates. Images are costed at about one token per 28×28 px patch.
 
 Coordinates for `retinat_tap` and `retinat_click` are viewport CSS pixels. Read them off the
-`retinat_look` image, or take them from browser-use's `browser_get_state`.
+`retinat_look` image, or take them from browser-use's `browser_get_state`. `retinat_click` says what it landed on
+(`Clicked (160, 120) on button "Save".`). Give it `expect` with text the target carries, and it refuses a click that
+would land on something else. Pages shift between a look and a click, and Delete sits next to Save.
 
 ## Hard rules
 
@@ -288,7 +296,7 @@ tests for them skip elsewhere.
       - Chromium 141.
     - **Vivaldi shows no "started debugging" bar** (it draws its own browser UI), so there is no Cancel there.
       - The person stops sharing from the extension's popup, Alt+Shift+A or Alt+Shift+Z.
-      - The extension's AI/YOU badge is only visible once they pin the extension.
+      - The pill in each shared tab is their sign; the extension's AI/YOU badge shows only once they pin it.
     - **Brave** puts its own notices (such as its analytics notice) in the same bar slot, so the debugging bar
       appears after the person deals with those.
     - **Expected to work, untested:** Opera and Arc. Opera documents `chrome.debugger`.

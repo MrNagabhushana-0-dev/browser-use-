@@ -39,6 +39,29 @@ if TYPE_CHECKING:
 
 TOOL_PREFIX = 'retinat_'
 
+# What a click at (x, y) lands on: the topmost element there (into open shadow roots), lifted to the control that owns
+# it, described as role plus the text a person would read on it.
+_HIT_JS = r"""(x, y) => {
+	let el = document.elementFromPoint(x, y);
+	while (el && el.shadowRoot) {
+		const inner = el.shadowRoot.elementFromPoint(x, y);
+		if (!inner || inner === el) break;
+		el = inner;
+	}
+	if (!el) return null;
+	const control = el.closest('a[href], button, input, select, textarea, summary, label, [role], [onclick], [tabindex]');
+	const hit = control || el;
+	const inputRole = { checkbox: 'checkbox', radio: 'radio', button: 'button', submit: 'button', reset: 'button', range: 'slider' };
+	const tagRole = { A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox', SUMMARY: 'button', IMG: 'img', IFRAME: 'iframe' };
+	const role = hit.getAttribute('role') || (hit.tagName === 'INPUT' ? inputRole[hit.type] || 'textbox' : tagRole[hit.tagName])
+		|| hit.tagName.toLowerCase();
+	const text = control ? hit.innerText : el.textContent;
+	const name = [hit.getAttribute('aria-label'), text, hit.value, hit.placeholder, hit.title, hit.alt]
+		.find((v) => typeof v === 'string' && v.trim()) || '';
+	const short = name.replace(/\s+/g, ' ').trim();
+	return short ? `${role} "${short.length > 80 ? short.slice(0, 79) + '…' : short}"` : role;
+}"""
+
 _DETAIL = {
 	'type': 'string',
 	'enum': ['glance', 'look', 'study'],
@@ -197,10 +220,18 @@ def _browser_tools() -> list['types.Tool']:
 		),
 		types.Tool(
 			name='retinat_click',
-			description='Move the mouse along a human path to viewport coordinates and click (for desktop pages).',
+			description=(
+				'Move the mouse along a human path to viewport coordinates and click (for desktop pages). Says what '
+				'was under the pointer. Pass expect (text you believe is on the target, like "Save") and the click is '
+				'refused if the thing there does not say it: pages move between a look and a click.'
+			),
 			input_schema={
 				'type': 'object',
-				'properties': {'x': {'type': 'number'}, 'y': {'type': 'number'}},
+				'properties': {
+					'x': {'type': 'number'},
+					'y': {'type': 'number'},
+					'expect': {'type': 'string', 'description': 'Text the target should carry; refuse the click otherwise.'},
+				},
 				'required': ['x', 'y'],
 			},
 		),
@@ -355,9 +386,11 @@ class RetinatServer(BrowserUseServer):
 				try:
 					await self.bridge.wait_for_extension(timeout=5)
 				except TimeoutError:
+					from browser_use.bridge.doctor import checks, summary
+
 					raise RuntimeError(
-						"The person's browser is not connected. Ask them to open it with the Retinat bridge extension "
-						'loaded and share a tab (extension button, or Alt+Shift+A).'
+						"The person's browser is not connected; tell them what to do. "
+						+ summary(checks(await self.bridge.status()))
 					) from None
 				await self._init_browser_session(allowed_domains=None)
 			elif self.cdp_url:
@@ -400,6 +433,22 @@ class RetinatServer(BrowserUseServer):
 			session_id=cdp.session_id,
 		)
 		return bool((r.get('result') or {}).get('value'))
+
+	async def _what_is_at(self, x: float, y: float, strict: bool = False) -> str | None:
+		"""What a click at viewport (x, y) would land on, as role and text (`button "Save"`), or None if unknown.
+		strict: let a failure to ask (such as the bridge refusing while the person holds the wheel) propagate."""
+		assert self.browser_session is not None
+		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		try:
+			r = await cdp.cdp_client.send.Runtime.evaluate(
+				params={'expression': f'({_HIT_JS})({x}, {y})', 'returnByValue': True}, session_id=cdp.session_id
+			)
+		except Exception:
+			if strict:
+				raise
+			return None  # a page that won't answer (or a bridge refusing script) leaves the click unchecked
+		value = (r.get('result') or {}).get('value')
+		return value if isinstance(value, str) and value else None
 
 	async def _call_retinat(self, name: str, args: dict[str, Any]) -> str | list['types.ContentBlock']:
 		if not name.startswith(TOOL_PREFIX):
@@ -477,8 +526,15 @@ class RetinatServer(BrowserUseServer):
 			await eyes.tap(float(args['x']), float(args['y']))
 			return f'Tapped ({args["x"]}, {args["y"]}). {eyes.now_line()}'
 		if name == 'retinat_click':
-			await eyes.hand.click(float(args['x']), float(args['y']))
-			return f'Clicked ({args["x"]}, {args["y"]}).'
+			x, y, expect = float(args['x']), float(args['y']), str(args.get('expect') or '').strip()
+			there = await self._what_is_at(x, y, strict=bool(expect))
+			if expect and (there is None or expect.casefold() not in there.casefold()):
+				raise ValueError(
+					f'Not clicked: at ({args["x"]}, {args["y"]}) there is {there or "nothing the page will name"}, not '
+					f'"{expect}". Look again (retinat_look, or retinat_find "{expect}") and click where it is now.'
+				)
+			await eyes.hand.click(x, y)
+			return f'Clicked ({args["x"]}, {args["y"]}){" on " + there if there else ""}.'
 		if name == 'retinat_swipe':
 			info = await eyes.swipe(args.get('direction', 'up'), float(args.get('fraction', 0.55)))
 			return f'Swiped {args.get("direction", "up")} {info["distance_px"]:.0f}px in {info["duration_ms"]:.0f}ms. {eyes.now_line()}'

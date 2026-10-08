@@ -1,8 +1,10 @@
-"""`python -m browser_use.bridge` runs the relay; `python -m browser_use.bridge extension DIR` writes the extension."""
+"""`python -m browser_use.bridge` runs the relay; `... extension DIR` writes the extension; `... doctor` checks the links."""
 
 import argparse
 import asyncio
+import json
 import logging
+import sys
 from pathlib import Path
 
 from browser_use.bridge import DEFAULT_PORT, BridgeRelay, write_extension
@@ -35,8 +37,17 @@ def main() -> None:
 	ext.add_argument('--port', type=int, default=DEFAULT_PORT, help='relay port the extension dials')
 	ext.add_argument('--mv2', action='store_true', help='Manifest V2 variant for Chromium older than 88')
 	ext.add_argument('--always-share', action='append', default=None, metavar='GLOB', help='URL glob shared without asking')
+	doctor = sub.add_parser('doctor', help='check relay, extension, browser, policy, shared tabs and wheel; say how to fix')
+	doctor.add_argument('--port', type=int, default=DEFAULT_PORT, help='relay port to check')
+	doctor.add_argument('--json', action='store_true', help='print the checks as JSON')
 	parser.add_argument('--port', type=int, default=DEFAULT_PORT)
 	args = parser.parse_args()
+	if args.command == 'doctor':
+		from browser_use.bridge.doctor import _log_checks, diagnose
+
+		found = asyncio.run(diagnose(args.port))
+		print(json.dumps([c.model_dump() for c in found], indent=1) if args.json else _log_checks(found))
+		sys.exit(1 if any(c.status == 'fail' for c in found) else 0)
 	if args.command == 'extension':
 		out = write_extension(
 			args.out,

@@ -11,6 +11,7 @@ const store = C.storage.session || C.storage.local;
 // The methods that only look (policy.json, shared with the relay). While the person holds the wheel, or after
 // Cancel, anything else is refused, page script included. Until the list is loaded nothing counts as looking.
 let PASSIVE = [];
+let POLICY = null; // the globs as loaded, reported in hello so `doctor` can spot a copy that differs from the relay's
 
 function acts(method) {
 	return !PASSIVE.some((re) => re.test(method));
@@ -89,6 +90,15 @@ async function badge(tabId) {
 	}
 }
 
+function pillState(tabId) {
+	return { shared: state.shared.has(tabId), holder: state.holder, stopped: state.stopped };
+}
+
+function pushPill(tabId) {
+	// the page's own copy of watch.js draws it; a tab without one (chrome:// pages) just has no pill
+	C.tabs.sendMessage(tabId, { pill: pillState(tabId) }, () => void C.runtime.lastError);
+}
+
 async function share(tabId, why) {
 	const resuming = state.stopped && why === 'shared by the person'; // sharing again is the person's go-ahead
 	if (state.stopped && !resuming) throw new Error(STOPPED);
@@ -102,6 +112,7 @@ async function share(tabId, why) {
 	badge(tabId);
 	try {
 		emit({ event: 'shared', why, tab: await targetInfo(tabId) });
+		pushPill(tabId);
 	} catch (e) {
 		state.shared.delete(tabId); // chrome:// and other extensions' pages cannot be shared
 		await save();
@@ -115,6 +126,7 @@ async function unshare(tabId, why) {
 	if (state.attached.delete(tabId)) await call(C.debugger, 'detach', { tabId }).catch(() => {});
 	await save();
 	badge(tabId);
+	pushPill(tabId);
 	emit({ event: 'unshared', why, tabId, targetId: state.targets.get(tabId) });
 }
 
@@ -224,6 +236,7 @@ function connect() {
 			userAgent: navigator.userAgent,
 			extension: m.version,
 			manifest: m.manifest_version,
+			policy: POLICY,
 			holder: state.holder,
 			stopped: state.stopped,
 		});
@@ -256,7 +269,10 @@ async function setHolder(holder, why = 'set by the person') {
 	state.autoHeld = false;
 	await save();
 	emit({ event: 'control', holder, why });
-	for (const tabId of state.shared) badge(tabId);
+	for (const tabId of state.shared) {
+		badge(tabId);
+		pushPill(tabId);
+	}
 }
 
 // Input the AI did not send is the person's: their clicks, keys and wheel turns are trusted events too,
@@ -299,6 +315,7 @@ async function boot() {
 	try {
 		const policy = await (await fetch(C.runtime.getURL('policy.json'))).json();
 		PASSIVE = policy.passive.map(globToRegExp);
+		POLICY = policy.passive;
 	} catch (e) {
 		// no policy: nothing counts as looking, so a held wheel refuses everything
 	}
@@ -388,6 +405,7 @@ C.runtime.onMessage.addListener((msg, sender, reply) => {
 		if (msg.ask === 'share') await share(msg.tabId, 'shared by the person');
 		else if (msg.ask === 'unshare') await unshare(msg.tabId, 'unshared by the person');
 		else if (msg.ask === 'holder') await setHolder(msg.holder);
+		else if (msg.ask === 'pill') return pillState(sender.tab ? sender.tab.id : -1);
 		else if (msg.ask === 'relay') {
 			state.settings.relay = msg.relay;
 			await call(C.storage.local, 'set', { settings: { relay: msg.relay } });

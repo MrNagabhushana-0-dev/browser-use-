@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from aiohttp import WSMsgType, web
 
-from browser_use.bridge.policy import refusal
+from browser_use.bridge.policy import PASSIVE_GLOBS, POLICY_FILE, refusal
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,7 @@ class BridgeRelay:
 		app.router.add_get('/json/version/', self._version)
 		app.router.add_get('/json', self._list)
 		app.router.add_get('/json/list', self._list)
+		app.router.add_get('/bridge/status', self._status)
 		app.router.add_get('/extension', self._extension_socket)
 		app.router.add_get(f'/cdp/{self._token}', self._client_socket)
 		self._runner = web.AppRunner(app, access_log=None)
@@ -137,6 +138,36 @@ class BridgeRelay:
 		await asyncio.wait_for(self._some_tab.wait(), timeout)
 		return next(iter(self.tabs.values()))
 
+	async def status(self, ping_timeout: float = 3.0) -> dict[str, Any]:
+		"""Each link of person -> extension -> relay -> AI as plain data, for `doctor`. Pings the extension."""
+		extension = None
+		if self._ext is not None and self.hello:
+			answers_ms = None
+			try:
+				started = asyncio.get_running_loop().time()
+				await asyncio.wait_for(self._ext_call('ping'), ping_timeout)
+				answers_ms = round((asyncio.get_running_loop().time() - started) * 1000, 1)
+			except (BridgeError, TimeoutError):
+				pass
+			extension = {
+				'version': self.hello.get('extension'),
+				'manifest': self.hello.get('manifest'),
+				'userAgent': self.hello.get('userAgent', ''),
+				'answers_ms': answers_ms,
+			}
+		return {
+			'relay': 'retinat-bridge',
+			'url': self.cdp_url,
+			'clients': len(self._clients),
+			'expected_version': json.loads((POLICY_FILE.parent / 'manifest.json').read_text())['version'],
+			'expected_policy': list(PASSIVE_GLOBS),
+			'extension': extension,
+			'policy': self.hello.get('policy') if extension else None,
+			'holder': self.holder,
+			'stopped': self.stopped,
+			'tabs': [{'title': t.get('title', ''), 'url': t.get('url', '')} for t in self.tabs.values()],
+		}
+
 	def set_holder(self, holder: str) -> None:
 		"""Who drives the shared tabs. The extension's popup and shortcut set this too."""
 		assert holder in ('agent', 'human'), holder
@@ -164,6 +195,10 @@ class BridgeRelay:
 				'webSocketDebuggerUrl': f'ws://127.0.0.1:{self.port}/cdp/{self._token}',
 			}
 		)
+
+	async def _status(self, request: web.Request) -> web.Response:
+		self._local_only(request)
+		return web.json_response(await self.status())
 
 	async def _list(self, request: web.Request) -> web.Response:
 		self._local_only(request)

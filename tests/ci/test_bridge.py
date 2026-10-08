@@ -171,7 +171,8 @@ def _person_browser(tmp: Path, relay: BridgeRelay, display: str, urls: list[str]
 	else:
 		ext = write_extension(tmp / 'ext', relay=relay_url, **settings)
 		args = [binary, f'--user-data-dir={profile}', f'--load-extension={ext}', f'--disable-extensions-except={ext}']
-	args += ['--no-first-run', '--no-default-browser-check', *urls]
+	# A window that fits the 1280x900 test screen, as a person's does (the default can run past its bottom edge).
+	args += ['--no-first-run', '--no-default-browser-check', '--window-position=0,0', '--window-size=1200,860', *urls]
 	if os.geteuid() == 0:
 		# Chromium refuses to run as root without --no-sandbox (a person's browser doesn't run as root); --test-type
 		# drops the warning bar that flag adds, which would otherwise queue the debugging bar behind it.
@@ -358,6 +359,112 @@ def test_manifest_v2_variant_for_old_chromium(tmp_path):
 	assert json.loads((out / 'settings.json').read_text())['relay'] == 'ws://127.0.0.1:9444/extension'
 
 
+def _free_port() -> int:
+	import socket
+
+	with socket.socket() as sock:
+		sock.bind(('127.0.0.1', 0))
+		return sock.getsockname()[1]
+
+
+async def test_doctor_names_what_is_missing_and_how_to_fix_it(bridge):
+	"""After BrowserSkill's `bsk doctor`: one command that says which link of person -> extension -> relay -> AI is
+	broken, with the fix in the person's words. Nothing running, a relay alone, then the real extension sharing a tab."""
+	from browser_use.bridge.doctor import checks, diagnose
+
+	nothing = {c.name: c for c in await diagnose(_free_port())}
+	assert nothing['relay'].status == 'fail' and 'python -m browser_use.bridge' in nothing['relay'].fix
+	assert {c.status for n, c in nothing.items() if n != 'relay'} == {'na'}
+
+	lonely = await BridgeRelay(port=0).start()
+	try:
+		alone = {c.name: c for c in await diagnose(lonely.port)}
+		said = await _call(RetinatServer(bridge=lonely), 'retinat_open', {'url': 'about:blank'})  # type: ignore[arg-type]
+	finally:
+		await lonely.stop()
+	assert alone['relay'].status == 'ok'
+	assert alone['extension'].status == 'fail' and 'Load unpacked' in alone['extension'].fix
+	assert 'not connected' in said and 'Load unpacked' in said, f'the AI gets the fix to pass on: {said}'
+
+	relay, _ = bridge
+	live = {c.name: c for c in await diagnose(relay.port)}
+	assert {n: c.status for n, c in live.items()} == {
+		'relay': 'ok',
+		'extension': 'ok',
+		'browser': 'ok',
+		'policy': 'ok',
+		'tabs': 'ok',
+		'wheel': 'ok',
+	}, live
+	assert 'Chrom' in live['browser'].detail and '1 shared' in live['tabs'].detail
+	assert live['extension'].detail.startswith('Retinat bridge 0.1.0') and 'answers in' in live['extension'].detail
+	assert {c.name: c.status for c in checks(await relay.status())} == {n: c.status for n, c in live.items()}, (
+		'in process and over HTTP agree'
+	)
+	assert (await get(relay, '/bridge/status', Origin='https://evil.test')).status_code == 403
+
+
+def test_doctor_reads_old_browsers_a_held_wheel_and_a_stale_extension():
+	"""The judgement part, on states that are slow or impossible to stage live (old Chromium, an outdated copy)."""
+	from browser_use.bridge.doctor import checks
+	from browser_use.bridge.policy import PASSIVE_GLOBS
+
+	ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{v}.0.0.0 Safari/537.36'
+
+	def status(**over):
+		base = {
+			'relay': 'retinat-bridge',
+			'url': 'http://127.0.0.1:9333',
+			'clients': 0,
+			'expected_version': '0.1.0',
+			'extension': {'version': '0.1.0', 'manifest': 3, 'userAgent': ua.format(v=155), 'answers_ms': 4.0},
+			'policy': list(PASSIVE_GLOBS),
+			'holder': 'agent',
+			'stopped': False,
+			'tabs': [{'title': 'Inbox', 'url': 'https://mail.test/'}],
+		}
+		return {c.name: c for c in checks({**base, **over})}
+
+	assert status()['browser'].status == 'ok'
+	old = status(extension={'version': '0.1.0', 'manifest': 3, 'userAgent': ua.format(v=120), 'answers_ms': 4.0})
+	assert old['browser'].status == 'warn' and '125' in old['browser'].detail
+	older = status(extension={'version': '0.1.0', 'manifest': 3, 'userAgent': ua.format(v=100), 'answers_ms': 4.0})
+	assert older['browser'].status == 'warn' and 'idle' in older['browser'].detail
+	stale = status(extension={'version': '0.0.9', 'manifest': 3, 'userAgent': ua.format(v=155), 'answers_ms': 4.0})
+	assert stale['extension'].status == 'warn' and 'Reload' in stale['extension'].fix
+	asleep = status(extension={'version': '0.1.0', 'manifest': 3, 'userAgent': ua.format(v=155), 'answers_ms': None})
+	assert asleep['extension'].status == 'fail' and 'not answering' in asleep['extension'].detail
+	assert status(policy=None)['policy'].status == 'warn', 'an extension too old to report its policy'
+	assert status(policy=['DOM.*'])['policy'].status == 'fail', 'a copy that thinks more methods only look'
+	held = status(holder='human')['wheel']
+	assert held.status == 'warn' and 'Alt+Shift+Z' in held.fix
+	stopped = status(stopped=True)['wheel']
+	assert stopped.status == 'warn' and 'Cancel' in stopped.detail
+	assert status(tabs=[])['tabs'].status == 'warn' and 'Alt+Shift+A' in status(tabs=[])['tabs'].fix
+	vivaldi = status(
+		extension={'version': '0.1.0', 'manifest': 3, 'userAgent': ua.format(v=155) + ' Vivaldi/8.2', 'answers_ms': 4.0}
+	)
+	assert vivaldi['browser'].status == 'ok' and 'pill' in vivaldi['browser'].detail
+
+
+def test_doctor_command_exits_non_zero_when_a_link_is_broken():
+	import sys
+
+	port = _free_port()
+	out = subprocess.run(
+		[sys.executable, '-m', 'browser_use.bridge', 'doctor', '--port', str(port)], capture_output=True, text=True, timeout=60
+	)
+	assert out.returncode == 1, out
+	assert 'relay' in out.stdout and f'127.0.0.1:{port}' in out.stdout and '→' in out.stdout, out.stdout
+	as_json = subprocess.run(
+		[sys.executable, '-m', 'browser_use.bridge', 'doctor', '--port', str(port), '--json'],
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	assert json.loads(as_json.stdout)[0]['name'] == 'relay'
+
+
 async def _call(server: BrowserUseServer, name: str, arguments: dict) -> str:
 	handler = server.server.get_request_handler('tools/call')
 	assert handler is not None
@@ -376,6 +483,12 @@ async def test_retinat_mcp_works_in_the_persons_browser_but_leaves_passwords_to_
 		await _call(server, 'retinat_click', {'x': 160, 'y': 60})
 		refused = await _call(server, 'retinat_type', {'text': 'hunter2'})
 		assert 'they enter those themselves' in refused
+		relay.set_holder('human')
+		try:
+			held = await _call(server, 'retinat_click', {'x': 160, 'y': 60, 'expect': 'Sign in'})
+		finally:
+			relay.set_holder('agent')
+		assert 'the person is using the browser' in held, f'a checked click under a hold gives the real reason: {held}'
 		assert server.browser_session is not None
 		cdp = await server.browser_session.get_or_create_cdp_session(focus=False)
 		value = await cdp.cdp_client.send.Runtime.evaluate(
@@ -395,6 +508,7 @@ async def test_browser_use_mcp_works_in_the_persons_browser_too(bridge, site):
 		await _call(server, 'browser_navigate', {'url': site.url_for('/shared/login')})
 		state = json.loads(await _call(server, 'browser_get_state', {}))
 		assert state['title'] == 'Sign in'
+		assert 'wheel' not in json.dumps(state).lower(), "the bridge's own sharing pill is not part of the page the AI reads"
 		field = next(e['index'] for e in state['interactive_elements'] if e['tag'] == 'input')
 		assert 'they enter those themselves' in await _call(server, 'browser_type', {'index': field, 'text': 'hunter2'})
 	finally:
@@ -608,4 +722,68 @@ async def test_cookies_of_sites_that_are_not_shared_stay_hidden(bridge, site, ma
 			assert 'mail_session' not in names, f'{method} handed over a cookie of a site the person did not share'
 			assert 'shared_pref' in names, f"{method} should still show the shared site's own cookie: {names}"
 	finally:
+		await http.close()
+
+
+def _near(rgb, target, tolerance: int = 40) -> bool:
+	return all(abs(a - b) <= tolerance for a, b in zip(rgb, target))
+
+
+async def _pill(cdp: RawCDP, sid: str) -> dict | None:
+	"""The sharing pill's box in the page, or None when it is not there."""
+	expr = "(() => { const h = document.querySelector('retinat-bridge-pill'); if (!h) return null;"
+	expr += ' const b = h.getBoundingClientRect(); return {x: b.left, y: b.top, w: b.width, h: b.height,'
+	expr += " exclude: h.getAttribute('data-browser-use-exclude')}; })()"
+	reply = await cdp.call('Runtime.evaluate', {'expression': expr, 'returnByValue': True}, sid)
+	return reply.get('result', {}).get('result', {}).get('value')
+
+
+async def test_a_shared_tab_says_the_ai_is_working_and_one_click_takes_the_wheel(bridge, display, site):
+	"""The pill shows in every shared tab, in every browser (Vivaldi has no debugging bar), and is the person's own
+	button: "Take the wheel" is an explicit hold, which does not lapse when they stop clicking, unlike a pause."""
+	from PIL import ImageGrab
+
+	relay, _ = bridge
+	http, cdp, sid = await _shared_session(relay, site)
+	try:
+
+		async def shown():
+			return await _pill(cdp, sid) is not None
+
+		await until(shown)
+		pill = await _pill(cdp, sid)
+		assert pill and pill['exclude'] == 'true' and pill['w'] > 100, pill
+		await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 1, 'y': 1}, sid)  # tab to the front
+		await asyncio.sleep(0.8)
+		assert relay.holder == 'agent'
+
+		# Find it on screen as the person sees it: the page's own geometry lags the debugging bar's arrival.
+		shot = ImageGrab.grab(xdisplay=display).convert('RGB')
+		green = [
+			(x, y)
+			for y in range(shot.height // 2, shot.height, 2)
+			for x in range(0, shot.width, 2)
+			if _near(shot.getpixel((x, y)), (26, 127, 55))
+		]
+		assert len(green) > 200, 'the pill is not on screen'
+		right = max(x for x, _ in green)
+		middle = (min(y for _, y in green) + max(y for _, y in green)) // 2
+		button = (right - 50, middle)  # its button sits at the right end
+		x_click(display, *button)
+
+		async def held():
+			return relay.holder == 'human'
+
+		await until(held, timeout=5)
+		await asyncio.sleep(3)  # past resume_after_ms (1.5 s here): a pause would have lapsed, a hold does not
+		assert relay.holder == 'human', 'Take the wheel is a hold until handed back, not a pause'
+
+		x_click(display, *button)  # now it reads "Hand back"
+
+		async def back():
+			return relay.holder == 'agent'
+
+		await until(back, timeout=5)
+	finally:
+		relay.set_holder('agent')
 		await http.close()

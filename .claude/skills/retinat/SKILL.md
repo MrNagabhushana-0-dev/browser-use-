@@ -30,7 +30,8 @@ logins, in the tabs they share through the bridge extension (setup in `AI.md`).
      is in view or how far to scroll, and a magnified crop.
 3. **Act like a person:** `retinat_tap` / `retinat_click` at coordinates read off the image (or from `retinat_find`),
    `retinat_type` into the focused field, `retinat_key` for Enter, Tab or Escape, and
-   `retinat_swipe`. For feeds, use `retinat_next` or `retinat_browse(items=N)`.
+   `retinat_swipe`. For feeds, use `retinat_next` or `retinat_browse(items=N)`. Give `retinat_click` an `expect`
+   (the target's words, like "Save") when a wrong click would cost something; it refuses to land elsewhere.
 4. **Check the result by looking again**, not by assuming it worked.
 5. **Find bugs across a site:** `retinat_explore(url)` returns a report plus a sheet of every
    page. Present the findings with their evidence.

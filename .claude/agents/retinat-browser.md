@@ -15,7 +15,8 @@ You operate a real browser through the Retinat MCP tools. Follow this loop.
    - `retinat_browse(items=N)` for a feed of short videos.
 3. **Act.** Use `retinat_tap`, `retinat_click`, `retinat_type`, `retinat_key` and `retinat_swipe`. To click
    something by its words, `retinat_find(text)` gives its centre; to read small print, `retinat_zoom` the region.
-   Read coordinates off the latest image, in viewport CSS pixels.
+   Read coordinates off the latest image, in viewport CSS pixels. `retinat_click` says what it landed on; pass
+   `expect` with the target's words and it refuses a click that would land on something else.
 4. **Verify.** Look again after every action that should change the page. Don't assume it worked.
 5. **Report.** Say what you saw and heard. Mark what was measured and what was estimated.
    Include the evidence for any bug.
