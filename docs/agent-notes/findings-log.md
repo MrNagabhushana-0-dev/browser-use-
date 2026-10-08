@@ -2953,9 +2953,63 @@ lets people manage site permissions.
 **Not done:** a force-ask category, sites that ask every time with no Always, as Claude in Chrome has for some
 categories.
 
+**Full `tests/ci` on `2042b3a`** with the loop watchdog: 1,653 passed, 30 skipped, 0 failed (40m25s). The bridge file
+passed 34/34 inside it. There were 23 stalls, the longest 1.9 s.
+
 **Next, in order:**
 1. A force-ask category: listed sites (banks, health, government) ask every time, with no Always.
 2. Rerun the branded browsers with the frame gating and the Sites list (Edge, Brave, Vivaldi, Chrome).
+3. The A/B test of sheet vs recall vs journal, with blind agents (open since Round 10).
+4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+5. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 53: sites asked about on every visit
+
+**Item.** Next item 1. Claude in Chrome has a force-prompt category: some sites are asked about every time, and
+Always isn't offered. Here, Allow lasted until the browser closed, and any site could be made Always.
+
+**Built** (`475ee30`, committed as WIP before its browser test ran; unchanged since):
+- **The list:** `askEveryTime` in the extension's settings, from `write_extension(ask_every_time=[...])` or
+  `python -m browser_use.bridge extension DIR --ask-every-time SITE`. It takes the same patterns as Always (an
+  origin, `https://*.example.com`). The person's list wins over Always and `*`.
+- **One visit of one tab:**
+  - An Allow lets that tab go there within a minute.
+  - The visit starts when the tab reaches the site and ends when it leaves.
+  - Another tab is asked about on its own.
+  - A tab the AI opens there is asked about, and an Allow opens exactly one tab.
+  - The pill's "Allow here" after a link counts as a visit too.
+- **The ask window** says "Allow lets it in for this visit only" and hides Always. No is remembered as before.
+- `relay.status()` shows the list as `everyTime`. Extension 0.5.0.
+- **A race, found on review:** the answer handler cleared the waiting ask, then awaited a storage write, then
+  recorded the grant. A retry landing in that gap found neither, and opened a second ask window. The grant is now
+  recorded before anything is awaited. This affected the existing site and click asks too.
+
+**Tests:**
+- **A new bridge test, on a bank fixture at `127.0.0.10`:**
+  - the AI's navigation asks, with no Always on screen, and no request leaves first;
+  - Allow lets the visit through;
+  - the site is in `everyTime`, not in allowed or Always;
+  - a tab the AI opens is asked about separately, and one Allow opens one tab;
+  - leaving and coming back asks again;
+  - No is remembered.
+- **Test-first:** it fails on the 0.4.0 extension ("asks on every visit" missing from the refusal).
+- **Mutation check:** 5 of 5 mutants fail it: no every-time check, visit never ends, Always offered, open grant
+  kept, visit not per tab.
+- Bridge file 35/35 twice on Chromium.
+
+**Not done, and limits:**
+- The one-minute windows (to arrive, and to use an open grant) are not tested. A test would wait a minute.
+- **A worker restart forgets visits.** A tab on such a site is then found not allowed and stops being shared. This
+  errs toward asking.
+- The list is set when the extension is written. There is no built-in category list like Claude in Chrome's, and
+  the Sites page can't add to it.
+- **Frames:** a frame of an every-time site inside another site's page stays hidden from the AI. Only a top-level
+  visit counts.
+
+**Next, in order:**
+1. Rerun the branded browsers with the frame gating, the Sites list and every-time sites (Edge, Brave, Vivaldi,
+   Chrome).
+2. Let the person mark a site "ask every time" from the Sites page.
 3. The A/B test of sheet vs recall vs journal, with blind agents (open since Round 10).
 4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 5. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
