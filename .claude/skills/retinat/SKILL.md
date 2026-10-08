@@ -10,6 +10,10 @@ Retinat's MCP tools are prefixed `mcp__retinat__retinat_*`. If they aren't conne
 `uv run python -m browser_use.retinat`. Add `--bridge` to use the user's own browser, with their profile and
 logins, in the tabs they share through the bridge extension (setup in `AI.md`).
 
+For a native desktop app rather than a web page, a server started with `BROWSER_USE_DESKTOP_CONTROL=1` adds
+`retinat_desktop_*` tools: look at the screen, then click, type and press keys in the apps the person granted. Call
+`retinat_desktop_status` first. Read AI.md's "Computer use" section before using them.
+
 ## Workflow
 
 1. **Open the page:** `retinat_open(url)`. If the reply starts with `BLOCKED:`, stop and tell the

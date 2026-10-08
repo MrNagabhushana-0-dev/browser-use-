@@ -101,6 +101,35 @@ from browser_use.config import get_default_llm, get_default_profile, load_browse
 from browser_use.filesystem.file_system import FileSystem
 from browser_use.llm.openai.chat import ChatOpenAI
 from browser_use.mcp.effects import Refused
+
+# The browser_* tools this server answers; any other browser_* name is refused before a browser is started for it.
+BROWSER_TOOLS = frozenset(
+	{
+		'browser_call_page_tool',
+		'browser_click',
+		'browser_close',
+		'browser_close_all',
+		'browser_close_session',
+		'browser_close_tab',
+		'browser_extract_content',
+		'browser_get_html',
+		'browser_get_state',
+		'browser_go_back',
+		'browser_list_page_tools',
+		'browser_list_sessions',
+		'browser_list_tabs',
+		'browser_navigate',
+		'browser_network',
+		'browser_network_status',
+		'browser_run_script',
+		'browser_screenshot',
+		'browser_scroll',
+		'browser_switch_tab',
+		'browser_type',
+	}
+)
+# A handler's text that is really a failure (see handle_call_tool).
+TEXT_FAILURES = ('Error:', 'Error closing session', 'Refused:', 'Element with index ')
 from browser_use.net import NetworkPolicyError, NetworkRouter, Outcome, classify_navigation
 from browser_use.tools.service import Tools
 
@@ -553,6 +582,13 @@ class BrowserUseServer:
 				result = await self._execute_tool(name, arguments or {})
 				if isinstance(result, list):
 					return types.CallToolResult(content=result)
+				if result.startswith(TEXT_FAILURES):
+					# Handlers below report most failures as text; they are checks made before anything was sent,
+					# except a session that failed while closing, which may be half closed.
+					error_msg = result.removeprefix('Error: ')
+					after = result.startswith('Error closing session')
+					error = RuntimeError(error_msg) if after else Refused(error_msg)
+					return effects.failure(name, error, read_only=name in self._read_only_tools, instrumented=False)
 				return types.CallToolResult(content=[types.TextContent(type='text', text=result)])
 			except Exception as e:
 				error_msg = str(e)
@@ -623,6 +659,8 @@ class BrowserUseServer:
 
 		# Direct browser control tools (require active session)
 		elif tool_name.startswith('browser_'):
+			if tool_name not in BROWSER_TOOLS:
+				raise Refused(f'Unknown tool: {tool_name}')  # before starting a browser for it
 			# Ensure browser session exists
 			if not self.browser_session:
 				await self._init_browser_session()

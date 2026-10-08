@@ -66,8 +66,11 @@ Then:
 - When something doesn't connect, `python -m browser_use.bridge doctor` (add `--json` for data) checks each link:
   relay, extension (version and whether it answers), browser version, policy, shared tabs and wheel. Each problem comes
   with the fix in the person's words. Retinat's "not connected" error carries the same fixes; pass them on.
-- After the extension's files change (an update of this repository), they press the reload arrow on its card at
-  `chrome://extensions`. Chrome keeps running the old service worker until then.
+- After the extension's files change (an update of this repository), the relay notices that the extension runs
+  older code and asks it to reload itself, once per version. It does so only when its files on disk are newer than
+  the code running, so it can't loop. Copies from before this round can't reload themselves: they need the reload
+  arrow on the extension's card at `chrome://extensions` pressed once, and `doctor` says so. A reload unshares the
+  tabs, so the person shares them again.
 - Python code uses `BridgeRelay` plus `bridge_session_kwargs(relay.cdp_url)`; see `python -m browser_use.bridge`.
 
 The older route, `--cdp-url http://127.0.0.1:9222` against a Chrome started with `--remote-debugging-port`, still
@@ -79,6 +82,39 @@ Install the extras for full hearing, which adds local speech detection and trans
 uv sync --all-extras
 ```
 Without the extras, you get sight plus heuristic sound labels, and the percepts say so.
+
+## Computer use: desktop apps (opt-in)
+
+Retinat can also use apps on the person's X desktop with the mouse and keyboard, through XTest. It is off unless the
+server starts with `BROWSER_USE_DESKTOP_CONTROL=1`, and it acts only in apps the person lists:
+
+```bash
+BROWSER_USE_DESKTOP_CONTROL=1 BROWSER_USE_DESKTOP_APPS="gedit,libreoffice:full,xterm:click" uv run python -m browser_use.retinat
+```
+
+- **Tiers,** as in Anthropic's desktop computer use:
+  - Browsers can only be looked at. Use them through the bridge or the browser tools, which see the page.
+  - Terminals and IDEs can be clicked and scrolled, but not typed into, right-clicked or dragged onto.
+  - Other apps are `full`.
+  - A grant can't go above its kind's tier.
+- **Which app counts:** the tier is checked against the app the action actually reaches. For a click that is the
+  window under the pointer; for typing it is the app with the keyboard focus.
+- **The person comes first.** XInput2 tells their mouse and keyboard from the AI's injected input by device, not by
+  timing. While they have used either in the last 8 seconds, every action is refused with `effect: none`, and the AI
+  carries on once they stop.
+- **Tools:**
+  - `retinat_desktop_look` and `retinat_desktop_watch`;
+  - `retinat_desktop_status`: the focused app, the grants, and when the person last used the mouse or keyboard;
+  - `retinat_desktop_click`, `retinat_desktop_type` (any characters), `retinat_desktop_key` (`ctrl+s`) and
+    `retinat_desktop_scroll`;
+  - `retinat_desktop_drag`;
+  - `retinat_desktop_zoom`: a region at full resolution.
+- **Coordinates** are in the pixels of the latest `retinat_desktop_look` image.
+- **Each action reports** which app it reached and whether the screen changed, and roughly where. A missed click
+  shows up at once.
+- **Don't click web links inside native apps** (mail, chat, PDFs): open the address with the browser tools instead.
+  Never move money: leave orders, payments and transfers to the person.
+- Linux/X11 only. Wayland gives ordinary programs no global input injection or input-source reporting.
 
 ## Memory outside the context: the journal
 
@@ -152,9 +188,10 @@ would land on something else. Pages shift between a look and a click, and Delete
    - `unknown`: input or navigation had started. Look at the page first: the first try may have landed.
    - `committed`: it happened, and only what followed failed. Don't repeat it.
 
-   Failures of tools that only look are always `none`. Retinat marks exactly when input starts going out. The
-   browser-use server's own actions aren't marked that finely yet, so their failures say `unknown` unless they
-   were refused outright.
+   Failures of tools that only look are always `none`. Retinat marks exactly when input starts going out.
+   The browser-use server reports its pre-checks as errors with `none`: no session, element not found, bad
+   arguments, an unknown tool (which no longer starts a browser). Its actions aren't marked that finely yet, so
+   an exception during one says `unknown`.
 
 ## Python in 20 lines
 
@@ -309,7 +346,8 @@ tests for them skip elsewhere.
   - **Hidden tabs:** a hidden shared tab is brought to the front of its own window before any click or key, as a
     person would.
   - **Browsers:**
-    - **Tested:** the whole bridge suite passed on each of these.
+    - **Tested:** the whole bridge suite passed on each of these, most recently with the pill, the consent gate for
+      opened tabs and the cookie and storage scoping (Round 46).
       - Google Chrome 155, with the extension added through Load unpacked in its own UI.
       - Microsoft Edge 154.
       - Brave 1.97.

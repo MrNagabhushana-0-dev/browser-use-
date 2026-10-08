@@ -43,6 +43,12 @@ def end(token: Token) -> None:
 	_state.reset(token)
 
 
+def refused(message: str) -> Refused:
+	"""A handler said, in its answer, that it refused before doing anything: whatever was marked, nothing was sent."""
+	_state.set('none')
+	return Refused(message)
+
+
 async def act(step: Awaitable[T]) -> T:
 	"""Run one step that sends input or navigates: unknown while it runs, committed once it returned."""
 	_state.set('unknown')
@@ -53,7 +59,7 @@ async def act(step: Awaitable[T]) -> T:
 
 def state_of(error: BaseException, read_only: bool, instrumented: bool = True) -> EffectState:
 	current = _state.get()
-	if read_only or (isinstance(error, Refused) and current in (None, 'none')):
+	if read_only or isinstance(error, Refused):  # raised only by checks made before anything is sent
 		return 'none'
 	if not instrumented:  # a tool whose sending isn't marked: assume it may have acted
 		return 'committed' if current == 'committed' else 'unknown'

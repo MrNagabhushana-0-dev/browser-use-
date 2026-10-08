@@ -268,7 +268,9 @@ async def test_status_and_setting_the_route_need_no_browser(retinat):
 
 async def test_a_bad_country_or_mode_comes_back_as_an_error_the_agent_can_read(retinat):
 	assert _text(await _call(retinat, 'retinat_network', {'mode': 'auto', 'exit_country': 'germany'})).startswith('Error:')
-	assert _text(await _call(retinat, 'retinat_network', {'mode': 'sometimes'})).startswith('Error:')
+	nonsense = await _call(retinat, 'retinat_network', {'mode': 'sometimes'})
+	assert _text(nonsense).startswith('Error:') and nonsense.is_error
+	assert (nonsense.structured_content or {}).get('effect_state') == 'none', 'a refused route change changed nothing'
 	assert retinat.network.mode is NetworkMode.AUTO
 
 

@@ -33,11 +33,12 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from browser_use.mcp.server import MCP_AVAILABLE, BrowserUseServer, types
+from browser_use.mcp.server import MCP_AVAILABLE, TEXT_FAILURES, BrowserUseServer, types
 from browser_use.net import NetworkMode, NetworkRouter
 
 if TYPE_CHECKING:
 	from browser_use.bridge import BridgeRelay
+	from browser_use.desktop.service import DesktopControl
 
 TOOL_PREFIX = 'retinat_'
 # Tools that send input, navigate, scroll or play: refused up front while the person holds the wheel.
@@ -89,14 +90,95 @@ _DETAIL = {
 
 
 def _tools() -> list['types.Tool']:
-	return _browser_tools() + (_desktop_tools() if _desktop_allowed() else [])
+	return _browser_tools() + (_desktop_tools() if _desktop_allowed() else []) + (_control_tools() if _control_allowed() else [])
+
+
+def _control_tools() -> list['types.Tool']:
+	ro = types.ToolAnnotations(read_only_hint=True)
+	point = {'x': {'type': 'number'}, 'y': {'type': 'number'}}
+	where = 'Coordinates are in the pixels of the latest retinat_desktop_look image.'
+	return [
+		types.Tool(
+			name='retinat_desktop_status',
+			description='Which app has the keyboard focus, which apps the person granted (and at what tier), and when '
+			'they last used the mouse or keyboard. Cheap; call it before acting.',
+			input_schema={'type': 'object', 'properties': {}},
+			annotations=ro,
+		),
+		types.Tool(
+			name='retinat_desktop_click',
+			description=f'Click in a desktop app the person granted. Says which app it reached and what changed. {where}',
+			input_schema={
+				'type': 'object',
+				'properties': {
+					**point,
+					'button': {'type': 'string', 'enum': ['left', 'middle', 'right'], 'default': 'left'},
+					'count': {'type': 'integer', 'minimum': 1, 'maximum': 3, 'default': 1},
+				},
+				'required': ['x', 'y'],
+			},
+		),
+		types.Tool(
+			name='retinat_desktop_type',
+			description='Type text into the focused app (any characters). Refused unless that app is granted in full.',
+			input_schema={'type': 'object', 'properties': {'text': {'type': 'string'}}, 'required': ['text']},
+		),
+		types.Tool(
+			name='retinat_desktop_key',
+			description='Press a key or combination in the focused app: "Return", "ctrl+s", "alt+Tab", "shift+F10".',
+			input_schema={'type': 'object', 'properties': {'keys': {'type': 'string'}}, 'required': ['keys']},
+		),
+		types.Tool(
+			name='retinat_desktop_scroll',
+			description=f'Scroll the wheel over a point. {where}',
+			input_schema={
+				'type': 'object',
+				'properties': {
+					**point,
+					'direction': {'type': 'string', 'enum': ['up', 'down', 'left', 'right'], 'default': 'down'},
+					'amount': {'type': 'integer', 'minimum': 1, 'maximum': 30, 'default': 3},
+				},
+				'required': ['x', 'y'],
+			},
+		),
+		types.Tool(
+			name='retinat_desktop_drag',
+			description=f'Press at one point, move, release at another (both in apps granted in full). {where}',
+			input_schema={
+				'type': 'object',
+				'properties': {k: {'type': 'number'} for k in ('x1', 'y1', 'x2', 'y2')},
+				'required': ['x1', 'y1', 'x2', 'y2'],
+			},
+		),
+		types.Tool(
+			name='retinat_desktop_zoom',
+			description=f'A region of the screen at full resolution, enlarged: small print, icons, dense lists. {where}',
+			input_schema={
+				'type': 'object',
+				'properties': {**point, 'width': {'type': 'number'}, 'height': {'type': 'number'}},
+				'required': ['x', 'y', 'width', 'height'],
+			},
+			annotations=ro,
+		),
+	]
 
 
 def _desktop_allowed() -> bool:
-	"""Desktop eyes see the whole screen: their tools exist only when the server was started with them on."""
+	"""Desktop eyes see the whole screen: their tools exist only when the server was started with them on (desktop
+	control turns them on too, since acting on the screen needs seeing it)."""
 	from browser_use.eyes.desktop import OPT_IN_ENV
 
-	return os.environ.get(OPT_IN_ENV, '').lower() in ('1', 'true', 'yes')
+	return _env_on(OPT_IN_ENV) or _control_allowed()
+
+
+def _control_allowed() -> bool:
+	from browser_use.desktop.service import OPT_IN_ENV
+
+	return _env_on(OPT_IN_ENV)
+
+
+def _env_on(name: str) -> bool:
+	return os.environ.get(name, '').lower() in ('1', 'true', 'yes')
 
 
 def _desktop_tools() -> list['types.Tool']:
@@ -390,6 +472,7 @@ class RetinatServer(BrowserUseServer):
 
 		self.bridge = bridge
 		self.cdp_url = bridge.cdp_url if bridge else cdp_url
+		self._control: 'DesktopControl | None' = None  # computer use, made on first use
 		self.server = Server('retinat', version=get_browser_use_version())
 		self._setup_retinat_handlers()
 
@@ -397,21 +480,22 @@ class RetinatServer(BrowserUseServer):
 		async def list_tools(_context: Any, _params: 'types.PaginatedRequestParams') -> 'types.ListToolsResult':
 			return types.ListToolsResult(tools=[*_tools(), *self._network_tool_entries('retinat')])
 
-		looking = {t.name for t in _tools() if t.annotations and t.annotations.read_only_hint} | {'retinat_network_status'}
-
 		async def call_tool(_context: Any, params: 'types.CallToolRequestParams') -> 'types.CallToolResult':
 			from browser_use.mcp import effects
 
 			token = effects.begin()
 			try:
 				result = await self._call_retinat(params.name, params.arguments or {})
+				if isinstance(result, str) and result.startswith(TEXT_FAILURES):  # shared handlers report checks as text
+					raise effects.refused(result.removeprefix('Error: '))
 				content: list[types.ContentBlock] = (
 					result if isinstance(result, list) else [types.TextContent(type='text', text=result)]
 				)
 				return types.CallToolResult(content=content)
 			except Exception as e:
 				# Every input and navigation below goes through effects.act, so a failure says if anything happened.
-				return effects.failure(params.name, e, read_only=params.name in looking)
+				looking = {t.name for t in _tools() if t.annotations and t.annotations.read_only_hint}
+				return effects.failure(params.name, e, read_only=params.name in looking | {'retinat_network_status'})
 			finally:
 				effects.end(token)
 
@@ -509,11 +593,17 @@ class RetinatServer(BrowserUseServer):
 			from browser_use.eyes.desktop import DesktopEyes
 
 			if not _desktop_allowed():
-				raise ValueError('Desktop eyes are off on this server (start it with BROWSER_USE_DESKTOP_EYES=1).')
+				raise Refused('Desktop eyes are off on this server (start it with BROWSER_USE_DESKTOP_EYES=1).')
 			desktop = DesktopEyes(enabled=True)
 			if name == 'retinat_desktop_look':
-				return self._content(await desktop.look())
+				seen = await desktop.look()
+				if _control_allowed() and seen.image_size:
+					desk = self._desktop_control()
+					desk.scale = desk.x.width / seen.image_size[0]  # actions take this image's pixels
+				return self._content(seen)
 			return self._content(await desktop.watch(seconds=float(args.get('seconds', 8))))
+		if name.startswith('retinat_desktop_'):
+			return await self._call_control(name, args)
 		await self._ensure_session()
 		assert self.browser_session is not None
 		if self.bridge is not None and name in ACTING:
@@ -643,6 +733,47 @@ class RetinatServer(BrowserUseServer):
 		if name == 'retinat_now':
 			await eyes.retina.wait_for_data(1.0)
 			return eyes.now_line()
+		raise Refused(f'Unknown tool: {name}')
+
+	async def _close_all_sessions(self) -> str:
+		if self._control is not None:
+			self._control.close()
+			self._control = None
+		return await super()._close_all_sessions()
+
+	def _desktop_control(self) -> 'DesktopControl':
+		if self._control is None:
+			from browser_use.desktop.service import DesktopControl
+
+			self._control = DesktopControl(enabled=True)
+		return self._control
+
+	async def _call_control(self, name: str, args: dict[str, Any]) -> str | list['types.ContentBlock']:
+		"""Computer use on the X desktop (browser_use/desktop): only apps the person granted, never over their hands."""
+		from browser_use.mcp.effects import Refused, act
+
+		if not _control_allowed():
+			raise Refused('Desktop control is off on this server (start it with BROWSER_USE_DESKTOP_CONTROL=1).')
+		desk = self._desktop_control()
+		if name == 'retinat_desktop_status':
+			return desk.status()
+		if name == 'retinat_desktop_zoom':
+			png = await desk.zoom(float(args['x']), float(args['y']), float(args['width']), float(args['height']))
+			return [types.ImageContent(type='image', data=base64.b64encode(png).decode(), mime_type='image/png')]
+		if name == 'retinat_desktop_click':
+			return await act(
+				desk.click(float(args['x']), float(args['y']), str(args.get('button', 'left')), int(args.get('count', 1)))
+			)
+		if name == 'retinat_desktop_type':
+			return await act(desk.type_text(str(args['text'])))
+		if name == 'retinat_desktop_key':
+			return await act(desk.key(str(args['keys'])))
+		if name == 'retinat_desktop_scroll':
+			return await act(
+				desk.scroll(float(args['x']), float(args['y']), str(args.get('direction', 'down')), int(args.get('amount', 3)))
+			)
+		if name == 'retinat_desktop_drag':
+			return await act(desk.drag(float(args['x1']), float(args['y1']), float(args['x2']), float(args['y2'])))
 		raise Refused(f'Unknown tool: {name}')
 
 	def _check_wheel(self) -> None:
