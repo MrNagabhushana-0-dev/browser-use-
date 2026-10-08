@@ -929,6 +929,8 @@ async def test_a_tab_the_person_opens_from_a_shared_tab_waits_for_their_say_so(b
 			return r.get('result', {}).get('result', {}).get('value') == 'Opener'
 
 		await until(loaded)
+		# A pointer reaches a link before pressing it; a press out of nowhere on a fresh page is sometimes dropped (Brave)
+		await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 150, 'y': 70}, sid)
 		for kind in ('mousePressed', 'mouseReleased'):  # the AI clicks its link
 			await cdp.call('Input.dispatchMouseEvent', {'type': kind, 'x': 150, 'y': 70, 'button': 'left', 'clickCount': 1}, sid)
 		await until(lambda: listed('/opened/ai'))
@@ -1144,7 +1146,9 @@ async def test_a_shared_tab_a_link_takes_to_a_new_site_stops_being_shared_until_
 		await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 150, 'y': 70}, sid)
 		for kind in ('mousePressed', 'mouseReleased'):  # the AI clicks the link
 			await cdp.call('Input.dispatchMouseEvent', {'type': kind, 'x': 150, 'y': 70, 'button': 'left', 'clickCount': 1}, sid)
-		await until(lambda: _gone(relay, sid))
+		# Edge holds a navigation to a new site for tens of seconds here before sending it (its own check of the
+		# address, which has no way out of this sandbox), so wait long; Chromium goes at once.
+		await until(lambda: _gone(relay, sid), timeout=90)
 		assert await tab_on('127.0.0.3') is None, 'a tab on a site the person never allowed is still shared'
 		gone = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, sid)
 		assert 'error' in gone, gone
