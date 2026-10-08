@@ -2384,3 +2384,68 @@ leaks below, which came first.
 4. A blind run: do agents reach for `retinat_requests` when a click seems to do nothing, and what does it cost?
 5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 45 (unattended loop): a failed call says whether anything happened
+
+**Item.** Round 44's Next list, item 2: C12, a fail-closed `effect_state` in tool errors. Item 1, `loopwatch` with
+the whole log kept, is applied to this round's full run.
+
+**Research** (primary sources):
+- **BrowserSkill's source:**
+  - `apps/extension/src/tools/interaction.ts`: a click reports `attempted ? "unknown" : "none"`.
+  - `crates/bsk-cli/src/daemon/queue.rs`, `input_effect_data`: a missing response becomes `unknown`, since "a missing
+    cleanup response cannot establish that replaying the input would be safe".
+  - `render_error.rs`: the hints say "do not retry when effect_state is unknown or committed".
+- **The MCP spec (2025-06-18, Tools):**
+  - Tool failures are results with `isError: true`.
+  - `structuredContent` is a JSON object, and SHOULD also be serialized in a text block.
+
+**Built** (`browser_use/mcp/effects.py`, used by both MCP servers). Every failed call ends with `effect: none`,
+`unknown` or `committed`, a one-line hint, and the same as JSON. The JSON goes in the text block (some clients show
+only the first block) and in `structuredContent`.
+- **Retinat:**
+  - Every input and navigation goes through `effects.act()`, which marks it `unknown` while it runs and `committed`
+    once it returns. These are open, explore, watch, scan, browse, next, tap, click, swipe, type, key and the route
+    change.
+  - Refusals raise `Refused`, which reports `none`: a click whose `expect` doesn't match, the password and Tor typing
+    refusals, an unknown tool, and bad arguments to recall.
+  - In the person's browser, an acting call while they hold the wheel, or after Cancel, is refused before anything
+    is sent. Before, the relay refused its first event, and that failure could not be told apart from a refusal
+    half way through a click.
+- **The browser-use server:**
+  - The same envelope, failing closed. Its read-only tools (from their `readOnlyHint`) say `none`. Its acting tools
+    don't mark when they start sending, so they say `unknown` unless refused outright.
+  - Many of its failures are still returned as plain strings rather than errors. Those carry no effect yet.
+- **Tests:**
+  - **Retinat, real browser:**
+    - a refused click reports `none`, and so does a backwards recall;
+    - an unknown tool reports `none`;
+    - opening a dead port reports `unknown`: the browser had gone to its error page. Without `act()` around
+      navigation the test fails.
+    - `committed`: an act that returned, followed by a failure.
+  - **The browser-use server:** an unknown tool reports `none`. A failing acting tool reports `unknown`.
+  - **Bridge:** a click under a held wheel reports `none`.
+- **Found on the way:** an unknown tool name that starts with `browser_` launches a browser before the
+  browser-use server reports it as unknown. Not changed here.
+
+- **Full `tests/ci` on `b26a2f1` with `loopwatch` and the whole log kept: green, 1,624 passed, 31 skipped, 0
+  failed** (30m36s). Two stalls: 1.4 s in the CLIP search test and 1.2 s in a multi-act guard test.
+  - **The 31st skip was mine.** I killed the hanging `browser_fly` test with `timeout` mid-run. The browser it had
+    launched on the default profile outlived the test and was still running. So
+    `test_session_start.py::test_user_data_dir_not_allowed_to_corrupt_default_profile` skipped: a running Chrome
+    held the default profile.
+  - Once that process was killed, the test passed.
+- **Not measured:** whether agents actually read the effect and decide better on retries; that needs a blind run.
+
+**Next, in order:**
+1. Keep `loopwatch` on, with the whole log kept, until a red one is caught with it. The cuts-and-sounds test comes
+   first if it fails again.
+2. Mark when the browser-use server's own actions start sending, so their failures can say `none` honestly. Also
+   turn its string-returned failures into real errors, and stop an unknown `browser_*` tool from launching a
+   browser.
+3. Run the bridge suite, with the pill, the consent gate and the leak fixes, on Edge, Brave, Vivaldi and branded
+   Chrome.
+4. A blind run: do agents use `retinat_requests` when a click does nothing, and do they hold back on `unknown`
+   retries? What does it cost?
+5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
