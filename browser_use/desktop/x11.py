@@ -33,7 +33,7 @@ AnyPropertyType = 0
 
 
 class _XClassHint(Structure):
-	_fields_ = [('res_name', c_char_p), ('res_class', c_char_p)]
+	_fields_ = [('res_name', c_void_p), ('res_class', c_void_p)]  # Xlib-allocated: read, then XFree
 
 
 class _XIDeviceInfo(Structure):
@@ -108,9 +108,10 @@ _sig(_X, 'XChangeKeyboardMapping', c_int, c_void_p, c_int, c_int, POINTER(KeySym
 _sig(_X, 'XFree', c_int, c_void_p)
 _sig(_X, 'XQueryPointer', c_int, c_void_p, Window, *(POINTER(Window),) * 2, *(POINTER(c_int),) * 4, POINTER(c_uint))
 _sig(_X, 'XGetInputFocus', c_int, c_void_p, POINTER(Window), POINTER(c_int))
+_sig(_X, 'XSetInputFocus', c_int, c_void_p, Window, c_int, c_ulong)
 _sig(_X, 'XQueryTree', c_int, c_void_p, Window, POINTER(Window), POINTER(Window), POINTER(POINTER(Window)), POINTER(c_uint))
 _sig(_X, 'XGetClassHint', c_int, c_void_p, Window, POINTER(_XClassHint))
-_sig(_X, 'XFetchName', c_int, c_void_p, Window, POINTER(c_char_p))
+_sig(_X, 'XFetchName', c_int, c_void_p, Window, POINTER(c_void_p))
 _sig(_X, 'XInternAtom', c_ulong, c_void_p, c_char_p, c_int)
 _sig(
 	_X,
@@ -196,6 +197,16 @@ class AppInfo(BaseModel):
 	title: str = ''
 
 
+def _take(ptr: int | None) -> str:
+	"""Read a string Xlib allocated, then free it."""
+	if not ptr:
+		return ''
+	try:
+		return ctypes.string_at(ptr).decode(errors='replace')
+	finally:
+		_X.XFree(ptr)
+
+
 def keysym_for_char(ch: str) -> int:
 	"""The X keysym of one character: Latin-1 maps to itself, the rest to the Unicode keysym range."""
 	assert len(ch) == 1, ch
@@ -268,6 +279,38 @@ class X11:
 				return win
 		return 0
 
+	def toplevels(self) -> list[tuple[tuple[int, int, int, int], AppInfo | None, bool]]:
+		"""Viewable top-level windows, bottom to top: (box in root coordinates, app, override-redirect)."""
+		with self._lock:
+			parent, root = Window(), Window()
+			children = POINTER(Window)()
+			n = c_uint()
+			if not _X.XQueryTree(self._dpy, self.root, byref(root), byref(parent), byref(children), byref(n)):
+				return []
+			try:
+				stack = [children[i] for i in range(n.value)]
+			finally:
+				if children:
+					_X.XFree(children)
+			out = []
+			for win in stack:
+				attrs = _XWindowAttributes()
+				if not _X.XGetWindowAttributes(self._dpy, win, byref(attrs)) or attrs.map_state != 2:
+					continue
+				box = (attrs.x, attrs.y, attrs.x + attrs.width, attrs.y + attrs.height)
+				out.append((box, self._class_of(win), bool(attrs.override_redirect)))
+			return out
+
+	def buttons_down(self) -> int:
+		"""The pointer's button mask (Button1Mask is 1 << 8): nonzero means a button is still held."""
+		root, child = Window(), Window()
+		rx, ry, wx, wy, mask = c_int(), c_int(), c_int(), c_int(), c_uint()
+		with self._lock:
+			_X.XQueryPointer(
+				self._dpy, self.root, byref(root), byref(child), byref(rx), byref(ry), byref(wx), byref(wy), byref(mask)
+			)
+		return mask.value & (0x1F << 8)
+
 	def _geometry(self, win: int) -> tuple[int, int, int, int, bool] | None:
 		"""(x, y, width, height, mapped) of a window in root coordinates."""
 		attrs = _XWindowAttributes()
@@ -298,18 +341,26 @@ class X11:
 		return sym
 
 	def press_keysyms(self, held: list[int], key: int) -> None:
-		"""Hold `held` (modifiers), press and release `key`, release `held` in reverse."""
-		codes = [self._ensure_keycode(s) for s in held]
-		with self._lock:
-			for code, _ in codes:
-				_XTST.XTestFakeKeyEvent(self._dpy, code, 1, 0)
-			self._tap_locked(key)
-			for code, _ in reversed(codes):
-				_XTST.XTestFakeKeyEvent(self._dpy, code, 0, 0)
-			_X.XFlush(self._dpy)
-		for code, temporary in codes:
-			if temporary:
-				self._unmap(code)
+		"""Hold `held` (modifiers), press and release `key`, release `held` in reverse, whatever happens on the way."""
+		codes: list[tuple[int, bool]] = []
+		try:
+			for sym in held:
+				codes.append(self._ensure_keycode(sym))
+			with self._lock:
+				down: list[int] = []
+				try:
+					for code, _ in codes:
+						_XTST.XTestFakeKeyEvent(self._dpy, code, 1, 0)
+						down.append(code)
+					self._tap_locked(key)
+				finally:
+					for code in reversed(down):
+						_XTST.XTestFakeKeyEvent(self._dpy, code, 0, 0)
+					_X.XFlush(self._dpy)
+		finally:
+			for code, temporary in codes:
+				if temporary:
+					self._unmap(code)
 
 	def type_char(self, ch: str) -> None:
 		with self._lock:
@@ -318,11 +369,13 @@ class X11:
 
 	def _tap_locked(self, keysym: int) -> None:
 		code = self._keycode(keysym)
+		plain = int(_X.XKeycodeToKeysym(self._dpy, code, 0)) if code else 0
+		shifted = int(_X.XKeycodeToKeysym(self._dpy, code, 1)) if code else 0
 		temporary = False
-		if not code:
+		if keysym not in (plain, shifted):  # not on the keymap, or only behind AltGr or another level: remap
 			code = self._remap_locked(keysym)
 			temporary = True
-		shift = not temporary and int(_X.XKeycodeToKeysym(self._dpy, code, 0)) != keysym
+		shift = not temporary and plain != keysym
 		shift_code = self._keycode(SHIFT_L)
 		if shift:
 			_XTST.XTestFakeKeyEvent(self._dpy, shift_code, 1, 0)
@@ -398,12 +451,9 @@ class X11:
 			w = queue.pop(0)
 			hint = _XClassHint()
 			if _X.XGetClassHint(self._dpy, w, byref(hint)):
-				app = (hint.res_class or b'').decode(errors='replace').lower()
-				instance = (hint.res_name or b'').decode(errors='replace')
-				name = c_char_p()
-				title = ''
-				if _X.XFetchName(self._dpy, w, byref(name)) and name.value:
-					title = name.value.decode(errors='replace')
+				app, instance = _take(hint.res_class).lower(), _take(hint.res_name)
+				name = c_void_p()
+				title = _take(name.value) if _X.XFetchName(self._dpy, w, byref(name)) else ''
 				return AppInfo(window=w, app=app, instance=instance, title=title)
 			root, parent = Window(), Window()
 			children = POINTER(Window)()
@@ -414,14 +464,44 @@ class X11:
 		return None
 
 	def focused_app(self) -> AppInfo | None:
-		"""The application with the keyboard focus (what typing would reach), or None."""
+		"""The application typing would reach, or None if keys go nowhere. Under PointerRoot focus (no window manager,
+		no app holding the focus) keys go to the window under the pointer, so that is the one reported."""
 		with self._lock:
 			focus, revert = Window(), c_int()
 			_X.XGetInputFocus(self._dpy, byref(focus), byref(revert))
-			if focus.value in (0, 1):  # None, PointerRoot
+			if focus.value == 0:  # None: keystrokes are discarded
 				return None
-			top = self._toplevel(focus.value)
+			if focus.value == 1:  # PointerRoot
+				root, child = Window(), Window()
+				rx, ry, wx, wy, mask = c_int(), c_int(), c_int(), c_int(), c_uint()
+				_X.XQueryPointer(
+					self._dpy, self.root, byref(root), byref(child), byref(rx), byref(ry), byref(wx), byref(wy), byref(mask)
+				)
+				top = self._toplevel_at(rx.value, ry.value)
+			else:
+				top = self._toplevel(focus.value)
 			return self._class_of(top) if top else None
+
+	def has_window_manager(self) -> bool:
+		"""Whether an EWMH window manager runs (it then decides who gets the focus, not us)."""
+		with self._lock:
+			atom = _X.XInternAtom(self._dpy, b'_NET_SUPPORTING_WM_CHECK', 1)
+			if not atom:
+				return False
+			kind, fmt, n, rest = c_ulong(), c_int(), c_ulong(), c_ulong()
+			data = POINTER(c_ubyte)()
+			ok = _X.XGetWindowProperty(
+				self._dpy, self.root, atom, 0, 1, 0, AnyPropertyType, byref(kind), byref(fmt), byref(n), byref(rest), byref(data)
+			)
+			if data:
+				_X.XFree(data)
+			return ok == 0 and n.value > 0
+
+	def give_focus(self, window: int) -> None:
+		"""Give `window` the keyboard focus, as a click-to-focus window manager does."""
+		with self._lock:
+			_X.XSetInputFocus(self._dpy, window, 2, 0)  # RevertToParent, CurrentTime
+			_X.XFlush(self._dpy)
 
 	def app_at(self, x: int, y: int) -> AppInfo | None:
 		"""The application whose window is on top at (x, y) (what a click there would reach), or None."""
@@ -472,6 +552,7 @@ class PersonWatch:
 		self.display = display
 		self.last_input = 0.0  # time.monotonic() of the person's last input, 0 if none seen
 		self.last_kind = ''
+		self.escape_at = 0.0  # when the person last pressed Escape: their stop key
 		self._dpy = _X.XOpenDisplay(display.encode())
 		if not self._dpy:
 			raise XError(f'cannot open X display {display}')
@@ -480,9 +561,10 @@ class PersonWatch:
 			raise XError('the X server has no XInput extension, so the person cannot be told apart')
 		self._opcode = opcode.value
 		major, minor = c_int(2), c_int(2)
-		if _XI.XIQueryVersion(self._dpy, byref(major), byref(minor)) != 0:
+		if _XI.XIQueryVersion(self._dpy, byref(major), byref(minor)) != 0 or (major.value, minor.value) < (2, 2):
 			raise XError('the X server lacks XInput 2.2, so the person cannot be told apart')
 		self.ours = self._xtest_devices()
+		self._escape = int(_X.XKeysymToKeycode(self._dpy, 0xFF1B))
 		mask = (c_ubyte * 4)()
 		for ev in (XI_RawKeyPress, XI_RawButtonPress, XI_RawMotion):
 			mask[ev >> 3] |= 1 << (ev & 7)
@@ -525,6 +607,8 @@ class PersonWatch:
 				if raw.sourceid not in self.ours:
 					self.last_input = time.monotonic()
 					self.last_kind = names.get(raw.evtype, 'input')
+					if raw.evtype == XI_RawKeyPress and raw.detail == self._escape:
+						self.escape_at = self.last_input
 			finally:
 				_X.XFreeEventData(self._dpy, byref(event.xcookie))
 

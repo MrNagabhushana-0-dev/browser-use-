@@ -207,7 +207,7 @@ async def test_each_app_gets_only_what_its_tier_allows(apps, control):
 	assert (await term.eval('hits.left')) == 1
 
 
-def _person_presses_a_key(display: str) -> None:
+def _person_presses_a_key(display: str, keycode: int = 50) -> None:
 	"""The person's own keyboard: a second XInput2 master's XTEST keyboard, which is not the AI's input device."""
 	x, xi, xtst = ctypes.CDLL('libX11.so.6'), ctypes.CDLL('libXi.so.6'), ctypes.CDLL('libXtst.so.6')
 	x.XOpenDisplay.restype = ctypes.c_void_p
@@ -255,8 +255,8 @@ def _person_presses_a_key(display: str) -> None:
 		xi.XIChangeHierarchy(dpy, ctypes.byref(master), 1)
 		x.XSync(dpy, 0)
 	keyboard = xi.XOpenDevice(dpy, find())
-	xtst.XTestFakeDeviceKeyEvent(dpy, keyboard, 50, 1, None, 0, 0)  # a shift key: types nothing anywhere
-	xtst.XTestFakeDeviceKeyEvent(dpy, keyboard, 50, 0, None, 0, 0)
+	xtst.XTestFakeDeviceKeyEvent(dpy, keyboard, keycode, 1, None, 0, 0)  # 50, a shift key, types nothing anywhere
+	xtst.XTestFakeDeviceKeyEvent(dpy, keyboard, keycode, 0, None, 0, 0)
 	x.XFlush(dpy)
 	x.XCloseDisplay(dpy)
 
@@ -342,3 +342,122 @@ async def test_retinat_offers_computer_use_only_when_turned_on(apps, screen, mon
 		assert 'testnotes (full)' in status and 'xterm (click)' in status and 'Focused: xterm' in status, status
 	finally:
 		await server._close_all_sessions()
+
+
+def _close(rgb, target, tolerance: int = 14) -> bool:
+	return all(abs(a - b) <= tolerance for a, b in zip(rgb, target))
+
+
+async def test_windows_of_apps_not_granted_are_hidden_from_the_ai(apps, screen):
+	"""After Anthropic's 'hide other windows while acting': the AI sees the apps it may use, not the rest of the desktop."""
+	from io import BytesIO
+
+	from PIL import Image
+
+	from browser_use.desktop.service import HIDDEN
+
+	only_notes = DesktopControl(display=screen, enabled=True, grants={'testnotes': Tier.FULL}, seed=3)
+	try:
+		jpeg, _ = await only_notes.screenshot(max_width=1280)
+		with Image.open(BytesIO(jpeg)) as img:
+			shot = img.convert('RGB')
+		assert _close(shot.getpixel((500, 300)), (238, 238, 255)), 'the granted app is shown as it is'
+		assert _close(shot.getpixel((1100, 300)), HIDDEN), 'an app not granted is covered'
+		assert _close(shot.getpixel((500, 800)), HIDDEN), 'so is a browser not granted even to look at'
+	finally:
+		only_notes.close()
+
+
+async def test_a_click_can_say_which_app_it_expects_and_hovering_points_without_clicking(apps, control):
+	notes = apps['notes']
+	before = await notes.eval('hits.left')
+	with pytest.raises(Refused, match='Not clicked'):
+		await control.click(*_page_box(notes, 'b'), expect='Term')
+	assert (await notes.eval('hits.left')) == before, 'refused before anything was sent'
+	await control.click(*_page_box(notes, 'b'), expect='notes')
+	assert (await notes.eval('hits.left')) == before + 1
+	moved = await control.move(*_page_box(notes, 't'))
+	assert moved.startswith('Moved the pointer') and (await notes.eval('hits.left')) == before + 1
+	assert control.x.pointer() == _page_box(notes, 't')
+
+
+async def test_a_cancelled_click_never_leaves_the_button_held(apps, control):
+	task = asyncio.create_task(control.click(*_page_box(apps['notes'], 'b')))
+	for _ in range(400):
+		if control.x.buttons_down():
+			break
+		await asyncio.sleep(0.005)
+	assert control.x.buttons_down(), 'the button went down'
+	task.cancel()
+	with pytest.raises(asyncio.CancelledError):
+		await task
+	assert control.x.buttons_down() == 0, 'released although the click was cancelled half way'
+
+
+def _x_click(display: str, x: int, y: int) -> None:
+	"""A click from outside the AI's controller, standing in for the person's mouse (a plain XTest click)."""
+	xlib, xtst = ctypes.CDLL('libX11.so.6'), ctypes.CDLL('libXtst.so.6')
+	xlib.XOpenDisplay.restype = ctypes.c_void_p
+	xlib.XOpenDisplay.argtypes = [ctypes.c_char_p]
+	xlib.XFlush.argtypes = xlib.XCloseDisplay.argtypes = [ctypes.c_void_p]
+	xtst.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ulong]
+	xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+	dpy = xlib.XOpenDisplay(display.encode())
+	xtst.XTestFakeMotionEvent(dpy, -1, x, y, 0)
+	xtst.XTestFakeButtonEvent(dpy, 1, 1, 0)
+	xtst.XTestFakeButtonEvent(dpy, 1, 0, 0)
+	xlib.XFlush(dpy)
+	xlib.XCloseDisplay(dpy)
+
+
+async def test_the_ai_asks_on_screen_and_only_the_person_can_answer(apps, screen, control):
+	"""After Anthropic's request_access: the person approves apps in a window on their own screen. The AI cannot press
+	Allow for them: that window's app can never be granted, so its clicks there are refused."""
+	from browser_use.desktop import consent
+
+	asking = asyncio.create_task(consent.ask(screen, {'xterm': Tier.FULL, 'gedit': Tier.FULL}, 'To run the tests.', 60))
+	box = None
+	for _ in range(150):
+		box = next((b for b, app, _ in control.x.toplevels() if app and app.app == consent.CONSENT_CLASS), None)
+		if box:
+			break
+		await asyncio.sleep(0.1)
+	assert box, 'no request window on screen'
+	await asyncio.sleep(1.5)  # let the page draw
+	allow = (box[2] - 18 - 55, box[3] - 16 - 18)  # bottom-right button, 110 px wide
+
+	with pytest.raises(Refused, match='has not granted'):
+		await control.click(*allow)
+	assert not asking.done(), 'the AI cannot answer for the person'
+
+	_x_click(screen, *allow)  # the person presses Allow
+	allowed = await asyncio.wait_for(asking, 20)
+	assert allowed == {'xterm': Tier.CLICK, 'gedit': Tier.FULL}, 'a terminal is capped at the click tier'
+
+
+async def test_session_keys_are_refused_and_typing_can_say_where_it_expects_to_go(apps, control):
+	with pytest.raises(Refused, match='session'):
+		await control.key('ctrl+alt+Delete')
+	with pytest.raises(Refused, match='session'):
+		await control.key('ctrl+alt+F2')
+	notes = apps['notes']
+	said = await control.click(*_page_box(notes, 't'))
+	assert 'Keyboard focus: testnotes' in said, said
+	before = await notes.eval('t.value')
+	with pytest.raises(Refused, match='Not typed'):
+		await control.type_text('wrong window', expect='Term')
+	assert (await notes.eval('t.value')) == before, 'refused before a single key went out'
+
+
+async def test_the_persons_escape_stops_the_ai_until_they_let_it_carry_on(apps, control, screen):
+	"""After Anthropic's Esc to stop. A pause lifts when the person is idle again; Escape holds until they approve
+	more access (their go-ahead), and the AI cannot lift it itself."""
+	notes = apps['notes']
+	_person_presses_a_key(screen, keycode=9)  # Escape on the default keymap
+	await asyncio.sleep(1.8)  # longer than resume_after_s: a plain pause would have lifted
+	with pytest.raises(Refused, match='pressed Escape'):
+		await control.click(*_page_box(notes, 'b'))
+	before = await notes.eval('hits.left')
+	control.resume()  # what an approved access request does
+	await control.click(*_page_box(notes, 'b'))
+	assert (await notes.eval('hits.left')) == before + 1

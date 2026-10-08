@@ -106,6 +106,20 @@ def _control_tools() -> list['types.Tool']:
 			annotations=ro,
 		),
 		types.Tool(
+			name='retinat_desktop_request_access',
+			description='Ask the person, in a window on their screen, to let you use some apps. Waits for their answer '
+			'(up to 2 minutes). apps: "gedit, libreoffice:full, xterm:click" (browsers are look-only, terminals and IDEs '
+			'click-only). Only they can answer it.',
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'apps': {'type': 'string', 'description': 'App names (WM_CLASS) with an optional :read, :click or :full.'},
+					'reason': {'type': 'string', 'description': 'One sentence: what you want to do in them.'},
+				},
+				'required': ['apps', 'reason'],
+			},
+		),
+		types.Tool(
 			name='retinat_desktop_click',
 			description=f'Click in a desktop app the person granted. Says which app it reached and what changed. {where}',
 			input_schema={
@@ -114,19 +128,38 @@ def _control_tools() -> list['types.Tool']:
 					**point,
 					'button': {'type': 'string', 'enum': ['left', 'middle', 'right'], 'default': 'left'},
 					'count': {'type': 'integer', 'minimum': 1, 'maximum': 3, 'default': 1},
+					'expect': {
+						'type': 'string',
+						'description': "Text in the target app's name or window title; the click is refused if it lands elsewhere.",
+					},
 				},
 				'required': ['x', 'y'],
 			},
 		),
 		types.Tool(
+			name='retinat_desktop_move',
+			description=f'Move the pointer to a point and leave it there (hover: tooltips, menus that open on hover). {where}',
+			input_schema={'type': 'object', 'properties': point, 'required': ['x', 'y']},
+		),
+		types.Tool(
 			name='retinat_desktop_type',
-			description='Type text into the focused app (any characters). Refused unless that app is granted in full.',
-			input_schema={'type': 'object', 'properties': {'text': {'type': 'string'}}, 'required': ['text']},
+			description='Type text into the focused app (any characters). Refused unless that app is granted in full. '
+			'Pass expect (text in the app name or window title) so it is refused if the focus is elsewhere.',
+			input_schema={
+				'type': 'object',
+				'properties': {'text': {'type': 'string'}, 'expect': {'type': 'string'}},
+				'required': ['text'],
+			},
 		),
 		types.Tool(
 			name='retinat_desktop_key',
-			description='Press a key or combination in the focused app: "Return", "ctrl+s", "alt+Tab", "shift+F10".',
-			input_schema={'type': 'object', 'properties': {'keys': {'type': 'string'}}, 'required': ['keys']},
+			description='Press a key or combination in the focused app: "Return", "ctrl+s", "alt+Tab", "shift+F10". '
+			'expect as for typing. Keys that lock or end the session are refused.',
+			input_schema={
+				'type': 'object',
+				'properties': {'keys': {'type': 'string'}, 'expect': {'type': 'string'}},
+				'required': ['keys'],
+			},
 		),
 		types.Tool(
 			name='retinat_desktop_scroll',
@@ -594,7 +627,8 @@ class RetinatServer(BrowserUseServer):
 
 			if not _desktop_allowed():
 				raise Refused('Desktop eyes are off on this server (start it with BROWSER_USE_DESKTOP_EYES=1).')
-			desktop = DesktopEyes(enabled=True)
+			# With computer use on, the eyes cover the windows of apps the person did not grant, like the actions do.
+			desktop = DesktopEyes(enabled=True, mask=self._desktop_control().hide_ungranted if _control_allowed() else None)
 			if name == 'retinat_desktop_look':
 				seen = await desktop.look()
 				if _control_allowed() and seen.image_size:
@@ -757,17 +791,36 @@ class RetinatServer(BrowserUseServer):
 		desk = self._desktop_control()
 		if name == 'retinat_desktop_status':
 			return desk.status()
+		if name == 'retinat_desktop_request_access':
+			from browser_use.desktop import consent
+			from browser_use.desktop.service import parse_grants
+
+			wanted = parse_grants(str(args['apps']))
+			allowed = await act(consent.ask(desk.display, wanted, str(args.get('reason') or '')))
+			desk.grant(allowed)
+			if allowed:
+				desk.resume()  # an approval is the person's go-ahead, also after an Escape
+			return consent.describe(wanted, allowed)
 		if name == 'retinat_desktop_zoom':
 			png = await desk.zoom(float(args['x']), float(args['y']), float(args['width']), float(args['height']))
 			return [types.ImageContent(type='image', data=base64.b64encode(png).decode(), mime_type='image/png')]
 		if name == 'retinat_desktop_click':
 			return await act(
-				desk.click(float(args['x']), float(args['y']), str(args.get('button', 'left')), int(args.get('count', 1)))
+				desk.click(
+					float(args['x']),
+					float(args['y']),
+					str(args.get('button', 'left')),
+					int(args.get('count', 1)),
+					str(args.get('expect') or '').strip(),
+				)
 			)
+		if name == 'retinat_desktop_move':
+			return await act(desk.move(float(args['x']), float(args['y'])))
+		expect = str(args.get('expect') or '').strip()
 		if name == 'retinat_desktop_type':
-			return await act(desk.type_text(str(args['text'])))
+			return await act(desk.type_text(str(args['text']), expect=expect))
 		if name == 'retinat_desktop_key':
-			return await act(desk.key(str(args['keys'])))
+			return await act(desk.key(str(args['keys']), expect=expect))
 		if name == 'retinat_desktop_scroll':
 			return await act(
 				desk.scroll(float(args['x']), float(args['y']), str(args.get('direction', 'down')), int(args.get('amount', 3)))

@@ -102,11 +102,29 @@ BROWSER_USE_DESKTOP_CONTROL=1 BROWSER_USE_DESKTOP_APPS="gedit,libreoffice:full,x
 - **The person comes first.** XInput2 tells their mouse and keyboard from the AI's injected input by device, not by
   timing. While they have used either in the last 8 seconds, every action is refused with `effect: none`, and the AI
   carries on once they stop.
+  - The check repeats before every typed character and every pointer step. If they take over mid-way, the action
+    stops there and says how far it got.
+  - **Escape is the person's stop key.** After they press it the AI stays stopped, however long they are idle, until
+    they approve an access request. The AI cannot lift it.
+- **Asking for access:** `retinat_desktop_request_access(apps="gedit, xterm:click", reason=...)` opens a small window on
+  the person's screen with Allow and Deny. Only they can answer: its app can never be granted, the AI's clicks
+  there are refused, and the AI's view covers it. Approved apps join `BROWSER_USE_DESKTOP_APPS` for the session.
+- **What the AI sees:** with computer use on, `retinat_desktop_look`, `retinat_desktop_watch` and `retinat_desktop_zoom`
+  cover every window of an app that wasn't granted, as Anthropic's computer use hides other windows. Unnamed popups,
+  such as menus, stay visible.
+- **Guards:**
+  - `expect` on click, type and key refuses an action whose target app or window title doesn't carry the text.
+  - Keys that lock, end or switch away from the session are refused: Ctrl+Alt+Delete, Ctrl+Alt+F1 to F12, and
+    Super+L.
+- **Keyboard focus:** after a click, the result says which app has the keyboard focus. With no window manager the
+  controller gives focus to the granted app just clicked, as click-to-focus would. Under PointerRoot focus, keys go
+  to the window under the pointer, and that is the app the checks use.
 - **Tools:**
   - `retinat_desktop_look` and `retinat_desktop_watch`;
   - `retinat_desktop_status`: the focused app, the grants, and when the person last used the mouse or keyboard;
-  - `retinat_desktop_click`, `retinat_desktop_type` (any characters), `retinat_desktop_key` (`ctrl+s`) and
-    `retinat_desktop_scroll`;
+  - `retinat_desktop_click`, `retinat_desktop_move` (hover), `retinat_desktop_type` (any characters),
+    `retinat_desktop_key` (`ctrl+s`) and `retinat_desktop_scroll`;
+  - `retinat_desktop_request_access`;
   - `retinat_desktop_drag`;
   - `retinat_desktop_zoom`: a region at full resolution.
 - **Coordinates** are in the pixels of the latest `retinat_desktop_look` image.

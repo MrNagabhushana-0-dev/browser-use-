@@ -15,6 +15,11 @@ import asyncio
 import io
 import os
 import time
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+	from PIL import Image
 
 from browser_use.eyes import hearing, motion, sight
 from browser_use.eyes.page import signature
@@ -31,7 +36,14 @@ class DesktopEyesOff(PermissionError):
 class DesktopEyes:
 	"""Watch an X display: `watch(seconds)` for a percept of what changed, `look()` for the screen now."""
 
-	def __init__(self, display: str | None = None, enabled: bool | None = None, fps: float = 5.0, max_width: int = 960):
+	def __init__(
+		self,
+		display: str | None = None,
+		enabled: bool | None = None,
+		fps: float = 5.0,
+		max_width: int = 960,
+		mask: Callable[[Image.Image], Image.Image] | None = None,
+	):
 		allowed = enabled if enabled is not None else os.environ.get(OPT_IN_ENV, '').lower() in ('1', 'true', 'yes')
 		if not allowed:
 			raise DesktopEyesOff(
@@ -42,11 +54,14 @@ class DesktopEyes:
 		assert self.display, 'no X display to watch (set DISPLAY or pass display=)'
 		assert 0 < fps <= 30, 'fps between 0 and 30'
 		self.fps, self.max_width = fps, max_width
+		self.mask = mask  # e.g. DesktopControl.hide_ungranted: what the AI may not see, covered in every frame
 
 	def _grab(self) -> tuple[bytes, tuple[int, int]]:
 		from PIL import Image, ImageGrab
 
 		img = ImageGrab.grab(xdisplay=self.display).convert('RGB')
+		if self.mask is not None:
+			img = self.mask(img)
 		size = img.size
 		if img.width > self.max_width:
 			img = img.resize((self.max_width, round(img.height * self.max_width / img.width)), Image.Resampling.BILINEAR)
