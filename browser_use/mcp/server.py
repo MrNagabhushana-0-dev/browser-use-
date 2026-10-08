@@ -96,6 +96,7 @@ logging.disable(logging.CRITICAL)
 
 # Import browser_use modules
 from browser_use import ActionModel, Agent
+from browser_use.bridge.policy import NOT_ALLOWED
 from browser_use.browser import BrowserProfile, BrowserSession
 from browser_use.config import get_default_llm, get_default_profile, load_browser_use_config
 from browser_use.filesystem.file_system import FileSystem
@@ -1209,6 +1210,9 @@ class BrowserUseServer:
 				note = f' (retried through Tor, exit {(self.network.exit_country or "any").upper()}, after a {outcome.replace("_", " ")})'
 			elif self.network.last_error:
 				note = f' Tor fallback unavailable: {self.network.last_error}'
+		if error is not None and NOT_ALLOWED in str(error):
+			# the bridge refused the site before the navigation was sent; the person is being asked
+			raise Refused(str(error)) from error
 		if error is not None and strict:
 			raise RuntimeError(f'{error}{note}') from error
 		return note
@@ -1221,7 +1225,7 @@ class BrowserUseServer:
 		# Update session activity
 		self._update_session_activity(self.browser_session.id)
 
-		note = await self._navigate_routed(url, new_tab)
+		note = await self._navigate_routed(url, new_tab, strict=self.bridge is not None)  # quiet only off the bridge
 		opened = (f'Opened new tab with URL: {url}' if new_tab else f'Navigated to: {url}') + note
 
 		# The tool surface belongs to the page, so it changes when the page does.

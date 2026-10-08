@@ -48,6 +48,23 @@ They then:
 
 Then:
 - You see and act only in shared tabs. Tabs you open yourself go to a separate window of theirs.
+- You use only the sites the person allows (after Claude in Chrome's per-site permissions). A site is an origin:
+  scheme, host and port. Sharing a tab allows that tab's site. Any other site is asked about first:
+  - Navigating a shared tab there (`Page.navigate`, going back or forward to it) or opening a tab there sends
+    nothing. A small window of the extension's own asks the person: **Allow** (until the browser closes),
+    **Always** or **No**. Your call is refused with the site named, and `browser_navigate` and `retinat_open` report
+    it as effect `none`. Once they allow it, try again.
+  - You can't answer for them. The window is never shared with you, and the extension takes an answer only from the
+    window it opened for that ask. One ask waits at a time, and a site they said no to isn't asked about again.
+  - A link you click, a redirect, a form or page script can't be checked before the request leaves: the first
+    request reaches the new site. When the tab lands there, it stops being shared at once, before any of the new
+    page reaches you, and its pill asks the person "Let it work here?". The same happens when they take a shared tab
+    to another site themselves.
+  - `relay.status()` lists the allowed, always-allowed and declined sites. Allowed sites last until the browser
+    closes; Always lasts until the person removes it. `python -m browser_use.bridge extension DIR --always-allow SITE`
+    (`https://*.example.com` for subdomains, `*` for every site, as before this check) writes them in advance.
+  - **Not covered:** frames of other sites inside an allowed page, and what that page's own script fetches. Those
+    reach what the page itself can reach.
 - A tab opened from a shared tab follows whoever opened it. When your click or script there opened it, it is shared
   with you. When the person opened it (a middle-click from a shared mail to their bank), or the page did on its own,
   it stays theirs: its pill asks them "Share this one too?". You can't answer for them, because you have no input in
@@ -362,6 +379,10 @@ tests for them skip elsewhere.
   - **The relay's CDP endpoints** answer only clients with no Origin header. That refuses web pages and every
     extension, the bridge's own included: the bridge's extension uses its own channel.
   - **Password, card and one-time-code fields** are left to the person.
+  - **Files:** handing a file input files from the person's disk (`DOM.setFileInputFiles`, the file chooser), or
+    choosing where downloads go, is refused; they pick files themselves.
+  - **Other tabs from a tab's session:** `Target.*` calls inside a shared tab's session (opening, closing or
+    attaching to other tabs) are refused; the tab tools do that, under the person's consent.
   - **Browser shortcuts** (Ctrl+T, Ctrl+W, Ctrl+L) don't fire from AI keys; open, close and switch tabs with the tab tools.
   - **Hidden tabs:** a hidden shared tab is brought to the front of its own window before any click or key, as a
     person would.

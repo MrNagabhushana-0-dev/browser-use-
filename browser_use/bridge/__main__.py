@@ -37,6 +37,9 @@ def main() -> None:
 	ext.add_argument('--port', type=int, default=DEFAULT_PORT, help='relay port the extension dials')
 	ext.add_argument('--mv2', action='store_true', help='Manifest V2 variant for Chromium older than 88')
 	ext.add_argument('--always-share', action='append', default=None, metavar='GLOB', help='URL glob shared without asking')
+	ext.add_argument(
+		'--always-allow', action='append', default=None, metavar='SITE', help='site the AI may use without asking (* for all)'
+	)
 	doctor = sub.add_parser('doctor', help='check relay, extension, browser, policy, shared tabs and wheel; say how to fix')
 	doctor.add_argument('--port', type=int, default=DEFAULT_PORT, help='relay port to check')
 	doctor.add_argument('--json', action='store_true', help='print the checks as JSON')
@@ -53,6 +56,7 @@ def main() -> None:
 			args.out,
 			relay=f'ws://127.0.0.1:{args.port}/extension',
 			always_share=args.always_share,
+			always_allow=args.always_allow,
 			manifest_version=2 if args.mv2 else 3,
 		)
 		print(f'Wrote the extension to {out}; load it with "Load unpacked".')

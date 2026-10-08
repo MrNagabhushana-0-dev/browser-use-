@@ -20,6 +20,7 @@ import pytest
 from pytest_httpserver import HTTPServer
 
 from browser_use.bridge import EXTENSION_ID, BridgeError, BridgeRelay, bridge_session_kwargs, write_extension
+from browser_use.bridge.relay import EXPECTED_VERSION
 from browser_use.browser import BrowserSession
 from browser_use.browser.profile import BrowserProfile
 from browser_use.browser.watchdogs.local_browser_watchdog import LocalBrowserWatchdog
@@ -51,6 +52,16 @@ LOGIN = (
 )
 
 
+def _stop(proc: subprocess.Popen) -> None:
+	"""End a browser or X server the test started: politely, then for good (Chromium can take over 10 s to exit)."""
+	proc.terminate()
+	try:
+		proc.wait(timeout=10)
+	except subprocess.TimeoutExpired:
+		proc.kill()
+		proc.wait(timeout=10)
+
+
 def _xvfb():
 	for n in range(91, 120):
 		if not os.path.exists(f'/tmp/.X11-unix/X{n}') and not os.path.exists(f'/tmp/.X{n}-lock'):
@@ -63,8 +74,7 @@ def _xvfb():
 			break
 		subprocess.run(['sleep', '0.1'])
 	yield f':{n}'
-	proc.terminate()
-	proc.wait(timeout=10)
+	_stop(proc)
 
 
 @pytest.fixture(scope='module')
@@ -144,11 +154,7 @@ async def bridge(display, site, mail, tmp_path_factory):
 		yield relay, proc
 	finally:
 		await relay.stop()
-		proc.terminate()
-		try:
-			proc.wait(timeout=10)
-		except subprocess.TimeoutExpired:
-			proc.kill()
+		_stop(proc)
 
 
 async def get(relay: BridgeRelay, path: str, **headers: str) -> httpx.Response:
@@ -327,6 +333,8 @@ async def test_relay_refuses_what_a_person_cannot_do(bridge):
 			('Network.setCookie', {'name': 'a', 'value': 'b', 'url': 'http://127.0.0.1/'}, sid),
 			('Browser.close', {}, None),
 			('Storage.clearCookies', {}, None),
+			('DOM.setFileInputFiles', {'files': ['/etc/passwd'], 'nodeId': 1}, sid),  # files off the person's disk
+			('Target.createTarget', {'url': 'about:blank'}, sid),  # a tab opened past the tab tools
 		]:
 			reply = await cdp.call(method, params, session)
 			assert 'refused through the extension bridge' in reply['error']['message'], method
@@ -421,7 +429,7 @@ async def test_doctor_names_what_is_missing_and_how_to_fix_it(bridge):
 		'wheel': 'ok',
 	}, live
 	assert 'Chrom' in live['browser'].detail and '1 shared' in live['tabs'].detail
-	assert live['extension'].detail.startswith('Retinat bridge 0.1.0') and 'answers in' in live['extension'].detail
+	assert live['extension'].detail.startswith(f'Retinat bridge {EXPECTED_VERSION}') and 'answers in' in live['extension'].detail
 	assert {c.name: c.status for c in checks(await relay.status())} == {n: c.status for n, c in live.items()}, (
 		'in process and over HTTP agree'
 	)
@@ -593,8 +601,7 @@ async def test_an_idle_extension_stays_connected_past_the_service_worker_timeout
 		assert relay._ext is first and first is not None and not first.closed, 'the idle extension dropped its connection'
 	finally:
 		await relay.stop()
-		proc.terminate()
-		proc.wait(timeout=10)
+		_stop(proc)
 
 
 def _page_origin(shot) -> tuple[int, int]:
@@ -678,8 +685,7 @@ async def test_cancel_on_the_debugging_bar_stops_the_ai_until_the_person_shares_
 		if http:
 			await http.close()
 		await relay.stop()
-		proc.terminate()
-		proc.wait(timeout=10)
+		_stop(proc)
 
 
 async def _shared_session(relay: BridgeRelay, site: HTTPServer):
@@ -999,8 +1005,236 @@ async def test_an_outdated_extension_reloads_itself_once_its_files_are_current(o
 		await until(healed, timeout=30)
 	finally:
 		await relay.stop()
-		proc.terminate()
-		try:
-			proc.wait(timeout=10)
-		except subprocess.TimeoutExpired:
-			proc.kill()
+		_stop(proc)
+
+
+# -- Sites the person allows ---------------------------------------------------------------------------------------
+# After Claude in Chrome's per-site permissions. Sharing a tab lets the AI use that tab's site; for any other site the
+# person is asked first, in a window of the extension's own that no shared tab can reach.
+
+ALLOW, ALWAYS, NO = (106, 27, 154), (0, 105, 92), (198, 40, 40)  # the ask window's buttons
+
+
+@pytest.fixture(scope='module')
+def elsewhere():
+	"""Sites the person has not shared, each on its own loopback address (so each is its own site)."""
+	servers = []
+	for host in ('127.0.0.2', '127.0.0.3', '127.0.0.4', '127.0.0.5', '127.0.0.6'):
+		server = HTTPServer(host=host)
+		server.start()
+		server.expect_request('/page').respond_with_data(
+			f'<!doctype html><title>Elsewhere {host}</title><body style="margin:0;height:100vh">{host}',
+			content_type='text/html',
+		)
+		servers.append(server)
+	yield servers
+	for server in servers:
+		server.clear()
+		if server.is_running():
+			server.stop()
+
+
+def _button(shot, colour: tuple[int, int, int]) -> tuple[int, int] | None:
+	"""The middle of a solid button of `colour` anywhere on screen, or None."""
+	points = [
+		(x, y) for y in range(0, shot.height, 3) for x in range(0, shot.width, 3) if _near(shot.getpixel((x, y)), colour, 24)
+	]
+	if len(points) < 60:
+		return None
+	xs, ys = sorted(p[0] for p in points), sorted(p[1] for p in points)
+	return xs[len(xs) // 2], ys[len(ys) // 2]
+
+
+async def _asked(display: str, colour: tuple[int, int, int], timeout: float = 10.0) -> tuple[int, int]:
+	from PIL import ImageGrab
+
+	for _ in range(int(timeout / 0.25)):
+		if where := _button(ImageGrab.grab(xdisplay=display).convert('RGB'), colour):
+			return where
+		await asyncio.sleep(0.25)
+	raise AssertionError('no ask window on screen')
+
+
+async def _until_ok(cdp: RawCDP, method: str, params: dict, sid: str | None = None, timeout: float = 10.0) -> dict:
+	"""Retry a call the person's answer will let through."""
+	reply: dict = {}
+	for _ in range(int(timeout / 0.25)):
+		reply = await cdp.call(method, params, sid)
+		if 'error' not in reply:
+			return reply
+		await asyncio.sleep(0.25)
+	raise AssertionError(f'still refused: {reply}')
+
+
+async def test_the_ai_asks_before_taking_a_shared_tab_to_a_site_the_person_has_not_allowed(bridge, display, site, elsewhere):
+	"""A shared tab used to go anywhere the AI sent it, with the person's cookies. Now a navigation to a site they
+	haven't allowed sends nothing: a window asks them. Allow lets it through; No is remembered."""
+	from PIL import ImageGrab
+
+	relay, _ = bridge
+	new, unwanted = elsewhere[0], elsewhere[3]
+	http, cdp, sid = await _shared_session(relay, site)
+	try:
+		refused = await cdp.call('Page.navigate', {'url': new.url_for('/page')}, sid)
+		message = refused.get('error', {}).get('message', '')
+		assert 'http://127.0.0.2' in message and 'not a site the person has allowed' in message, refused
+		assert not new.log, 'the request left before the person allowed the site'
+		where = await _asked(display, ALLOW)
+		listed = (await get(relay, '/json/list')).json()
+		assert not any('ask.html' in t['url'] for t in listed), 'the AI can see the window that asks the person'
+		spoof = f'chrome-extension://{EXTENSION_ID}/ask.html#x'
+		refused_page = await cdp.call('Page.navigate', {'url': spoof}, sid)
+		assert 'only web pages' in refused_page.get('error', {}).get('message', ''), 'the AI opened the ask page itself'
+
+		x_click(display, *where)  # the person allows it
+		await _until_ok(cdp, 'Page.navigate', {'url': new.url_for('/page')}, sid)
+
+		async def there():
+			r = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, sid)
+			return r.get('result', {}).get('result', {}).get('value') == 'Elsewhere 127.0.0.2'
+
+		await until(there)  # still shared there: the AI reads the page
+		assert f'http://127.0.0.2:{new.port}' in (await relay.status())['extension']['sites']['allowed']
+
+		refused = await cdp.call('Page.navigate', {'url': unwanted.url_for('/page')}, sid)
+		assert 'not a site the person has allowed' in refused.get('error', {}).get('message', ''), refused
+		x_click(display, *await _asked(display, NO))  # the person says no
+		await asyncio.sleep(1.0)
+		again = await cdp.call('Page.navigate', {'url': unwanted.url_for('/page')}, sid)
+		assert 'declined' in again.get('error', {}).get('message', ''), again
+		await asyncio.sleep(1.0)
+		assert _button(ImageGrab.grab(xdisplay=display).convert('RGB'), ALLOW) is None, 'asked again after a no'
+		assert not unwanted.log
+	finally:
+		await cdp.call('Page.navigate', {'url': site.url_for('/shared')}, sid)
+		await http.close()
+
+
+async def test_a_shared_tab_a_link_takes_to_a_new_site_stops_being_shared_until_the_person_allows_it(
+	bridge, display, site, elsewhere
+):
+	"""A link the AI clicks can't be checked before the request leaves, but the tab stops being shared the moment it
+	reaches a site the person hasn't allowed: the AI loses it, and its pill asks the person."""
+	from PIL import ImageGrab
+
+	relay, _ = bridge
+	away = elsewhere[1]
+	site.expect_request('/shared/away').respond_with_data(
+		'<!doctype html><title>Away</title><body style="margin:0;height:100vh">'
+		f'<a href="{away.url_for("/page")}" style="position:fixed;left:40px;top:40px;width:220px;height:60px;'
+		'display:block;background:#ddd">Elsewhere</a></body>',
+		content_type='text/html',
+	)
+	http, cdp, sid = await _shared_session(relay, site)
+
+	async def tab_on(host: str) -> dict | None:
+		return next((t for t in (await get(relay, '/json/list')).json() if host in t['url']), None)
+
+	try:
+		await cdp.call('Page.navigate', {'url': site.url_for('/shared/away')}, sid)
+
+		async def loaded():
+			r = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, sid)
+			return r.get('result', {}).get('result', {}).get('value') == 'Away'
+
+		await until(loaded)
+		await cdp.call('Page.enable', {}, sid)
+		await cdp.call('Runtime.enable', {}, sid)
+		seen = len(cdp.events)
+		await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 150, 'y': 70}, sid)
+		for kind in ('mousePressed', 'mouseReleased'):  # the AI clicks the link
+			await cdp.call('Input.dispatchMouseEvent', {'type': kind, 'x': 150, 'y': 70, 'button': 'left', 'clickCount': 1}, sid)
+		await until(lambda: _gone(relay, sid))
+		assert await tab_on('127.0.0.3') is None, 'a tab on a site the person never allowed is still shared'
+		gone = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, sid)
+		assert 'error' in gone, gone
+		after = [e for e in cdp.events[seen:] if e.get('method') in ('Page.frameNavigated', 'Runtime.executionContextCreated')]
+		assert not any('127.0.0.3' in json.dumps(e) for e in after), f"the new site's page reached the AI: {after}"
+
+		await asyncio.sleep(1.0)  # the pill asks in the tab itself
+		x_click(display, *_pill_button(ImageGrab.grab(xdisplay=display).convert('RGB'), (57, 73, 171)))
+		await until(lambda: tab_on('127.0.0.3'))
+		back = await tab_on('127.0.0.3')
+		assert back is not None
+		sid3 = (await cdp.call('Target.attachToTarget', {'targetId': back['id'], 'flatten': True}))['result']['sessionId']
+		title = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, sid3)
+		assert title.get('result', {}).get('result', {}).get('value') == 'Elsewhere 127.0.0.3', 'allowed, yet unusable'
+		assert f'http://127.0.0.3:{away.port}' in (await relay.status())['extension']['sites']['allowed']
+	finally:
+		back = await tab_on('127.0.0.3')
+		if back:  # hand the tab back on the shared page for the tests after this one
+			sid2 = (await cdp.call('Target.attachToTarget', {'targetId': back['id'], 'flatten': True}))['result']['sessionId']
+			await cdp.call('Page.navigate', {'url': site.url_for('/shared')}, sid2)
+		await http.close()
+
+
+async def _gone(relay: BridgeRelay, sid: str) -> bool:
+	return not any('/shared/away' in t['url'] for t in (await get(relay, '/json/list')).json())
+
+
+async def test_a_tab_the_ai_opens_on_a_new_site_waits_for_the_person_and_always_keeps_it(bridge, display, elsewhere):
+	relay, _ = bridge
+	wanted = elsewhere[2]
+	http, cdp = await raw_cdp(relay)
+	try:
+		refused = await cdp.call('Target.createTarget', {'url': wanted.url_for('/page')})
+		assert 'not a site the person has allowed' in refused.get('error', {}).get('message', ''), refused
+		assert not wanted.log
+		x_click(display, *await _asked(display, ALWAYS))
+		opened = await _until_ok(cdp, 'Target.createTarget', {'url': wanted.url_for('/page')})
+		assert (await relay.status())['extension']['sites']['always'] == [f'http://127.0.0.4:{wanted.port}']
+		await cdp.call('Target.closeTarget', {'targetId': opened['result']['targetId']})
+	finally:
+		await http.close()
+
+
+async def test_browser_navigate_says_a_site_is_waiting_for_the_person_instead_of_claiming_it_went_there(
+	bridge, display, site, elsewhere
+):
+	"""Off the bridge, browser_navigate keeps navigation errors quiet; on it, a refused site used to come back as
+	"Navigated to". Now it is an error with effect none: nothing was sent, and the person is being asked."""
+	relay, _ = bridge
+	new = elsewhere[4]
+	server = BrowserUseServer()
+	server.bridge, server.cdp_url = relay, relay.cdp_url
+	handler = server.server.get_request_handler('tools/call')
+	assert handler is not None
+
+	async def navigate(url: str = new.url_for('/page')) -> types.CallToolResult:
+		params = types.CallToolRequestParams(name='browser_navigate', arguments={'url': url})
+		result = await handler.handler(None, params)  # type: ignore[arg-type]
+		assert isinstance(result, types.CallToolResult)
+		return result
+
+	try:
+		asked = await navigate()
+		text = asked.content[0].text  # type: ignore[union-attr]
+		assert asked.is_error and (asked.structured_content or {}).get('effect_state') == 'none', text
+		assert f'127.0.0.6:{new.port}' in text and 'not a site the person has allowed' in text
+		x_click(display, *await _asked(display, NO))
+		await asyncio.sleep(1.0)
+		declined = await navigate()
+		assert declined.is_error and 'declined' in declined.content[0].text  # type: ignore[union-attr]
+		assert not new.log
+		relay.set_holder('human')  # any other refusal on the bridge is an error too, not "Navigated to"
+		held = await navigate(site.url_for('/shared'))
+		assert held.is_error and 'the person is using the browser' in held.content[0].text  # type: ignore[union-attr]
+	finally:
+		relay.set_holder('agent')
+		await server._close_all_sessions()
+
+	retinat = RetinatServer(bridge=relay)  # Retinat's open takes the same road
+	try:
+		opened = await _call(retinat, 'retinat_open', {'url': new.url_for('/page')})
+		assert 'declined' in opened and 'effect: none' in opened, opened
+	finally:
+		await retinat._close_all_sessions()
+	assert not new.log
+
+
+def test_the_servers_know_the_words_the_extension_refuses_a_site_with():
+	"""A refused site is reported as effect none because these words mark a refusal made before anything was sent."""
+	from browser_use.bridge import EXTENSION_DIR
+	from browser_use.bridge.policy import NOT_ALLOWED
+
+	assert NOT_ALLOWED in (EXTENSION_DIR / 'worker.js').read_text()

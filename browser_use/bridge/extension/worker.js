@@ -19,9 +19,15 @@ function acts(method) {
 
 const state = {
 	// resumeAfterMs: after the person's last input in a shared tab, how long until the AI may carry on (0: never)
-	settings: { relay: 'ws://127.0.0.1:9333/extension', alwaysShare: [], resumeAfterMs: 8000 },
+	// alwaysAllow: sites (origin globs, like https://*.example.com) the person lets the AI use without asking
+	settings: { relay: 'ws://127.0.0.1:9333/extension', alwaysShare: [], alwaysAllow: [], resumeAfterMs: 8000 },
 	shared: new Set(), // tab ids the person shared, or the AI opened
 	offered: new Set(), // tabs the person (or a page) opened from a shared tab: unshared until they press Share
+	moved: new Map(), // tab id -> {site, byAi}: a shared tab that moved to a site not allowed, unshared and offered back
+	urls: new Map(), // tab id -> the address a shared tab was last seen on
+	allowed: new Set(), // sites (origins) the person let the AI use until the browser closes
+	declined: new Set(), // sites the person said no to: asked about again only if they share a tab there
+	asking: null, // {origin, url, windowId}: the one ask waiting for the person
 	attached: new Set(), // tab ids with a live chrome.debugger session
 	targets: new Map(), // tab id -> DevTools target id
 	holder: 'agent', // who drives shared tabs: 'agent' or 'human'
@@ -51,6 +57,146 @@ function globToRegExp(glob) {
 	return new RegExp('^' + glob.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
 }
 
+// A site is a web origin: scheme://host:port. about:blank has none, so an empty tab needs no leave. Anything that
+// isn't a web page (data:, an opaque origin, chrome:, this extension's own pages) is never a site the AI may use.
+function siteOf(url) {
+	if (!url || /^about:(blank|srcdoc)([?#]|$)/.test(url)) return '';
+	try {
+		const u = new URL(url);
+		return ['http:', 'https:', 'file:'].includes(u.protocol) ? u.origin : 'null';
+	} catch (e) {
+		return 'null';
+	}
+}
+
+function allowedUrl(url) {
+	const site = siteOf(url);
+	if (site === '') return true;
+	if (site === 'null') return false;
+	return state.allowed.has(site) || state.settings.alwaysAllow.some((p) => siteMatches(p, site));
+}
+
+// An alwaysAllow entry is a site (https://example.com:8443), a site's subdomains (https://*.example.com, which
+// matches a.example.com but not example.com or badexample.com), or "*" for every site, as before sites were asked.
+function siteMatches(pattern, site) {
+	if (pattern === '*' || pattern === site) return true;
+	const m = /^(https?):\/\/\*\.([a-z0-9.-]+)(?::(\d+))?$/i.exec(pattern);
+	if (!m) return false;
+	try {
+		const u = new URL(site);
+		return u.protocol === m[1].toLowerCase() + ':' && u.hostname.endsWith('.' + m[2].toLowerCase()) && u.port === (m[3] || '');
+	} catch (e) {
+		return false;
+	}
+}
+
+async function allowSite(url) {
+	const site = siteOf(url);
+	if (!site || site === 'null') return;
+	state.allowed.add(site);
+	state.declined.delete(site);
+	await save();
+}
+
+function notAllowed(url, more) {
+	return `${siteOf(url)} is refused through the extension bridge: it is not a site the person has allowed the AI to use; ${more}`;
+}
+
+// The AI asks for a new site in a window of this extension's own: no shared tab can reach it, and the AI's input
+// goes only to shared tabs, so only the person can answer. One ask at a time; a site they declined isn't asked again.
+async function ask(url) {
+	const site = siteOf(url);
+	if (site === 'null') return `${url} is refused through the extension bridge: only web pages can be opened there`;
+	if (state.declined.has(site)) return notAllowed(url, 'they declined it. They can share a tab on it themselves if they change their mind');
+	if (state.asking && state.asking.origin !== site) return notAllowed(url, `another ask (${state.asking.origin}) is waiting for them`);
+	if (!state.asking) {
+		const page = C.runtime.getURL('ask.html') + '#' + encodeURIComponent(JSON.stringify({ origin: site, url }));
+		const win = await call(C.windows, 'create', { url: page, type: 'popup', width: 520, height: 240, left: 640, top: 80, focused: true });
+		state.asking = { origin: site, url, windowId: win.id };
+		await save();
+	}
+	return notAllowed(url, 'a window asks them now. Once they allow it, try again');
+}
+
+async function answer(reply, windowId) {
+	const asked = state.asking;
+	// only from the window this worker opened for this ask: a copy of the page in some tab is not the person's answer
+	if (!asked || reply.origin !== asked.origin || windowId !== asked.windowId) return;
+	state.asking = null;
+	await save();
+	if (reply.answer === 'allow' || reply.answer === 'always') await allowSite(asked.url);
+	if (reply.answer === 'always' && !state.settings.alwaysAllow.includes(asked.origin)) {
+		state.settings.alwaysAllow = [...state.settings.alwaysAllow, asked.origin];
+		await keepSettings({ alwaysAllow: state.settings.alwaysAllow });
+	}
+	if (reply.answer === 'no') {
+		state.declined.add(asked.origin);
+		await save();
+	}
+	emit({ event: 'site', origin: asked.origin, answer: reply.answer });
+	call(C.windows, 'remove', asked.windowId).catch(() => {});
+}
+
+async function keepSettings(changes) {
+	// settings the person changed here, kept across restarts on top of the packaged ones
+	const local = (await call(C.storage.local, 'get', 'settings')).settings || {};
+	await call(C.storage.local, 'set', { settings: { ...local, ...changes } });
+}
+
+// A shared tab that reaches a site the person hasn't allowed (a link, a redirect, page script, or the person's own
+// navigation) stops being shared at once: unshare() drops it from `shared` before its first await, so not one more
+// event from the new page is passed on. Its pill asks the person whether the AI may carry on there.
+const AI_CAUSED_MS = 5000;
+
+async function moved(tabId, url) {
+	if (!state.shared.has(tabId)) return;
+	const ai = state.aiActAt.get(tabId) || 0;
+	const byAi = Date.now() - ai < AI_CAUSED_MS && ai >= (state.personInputAt.get(tabId) || 0);
+	const site = siteOf(url);
+	const done = unshare(tabId, `it moved to ${site}, a site the person has not allowed`);
+	state.moved.set(tabId, { site, byAi });
+	state.offered.add(tabId);
+	await done;
+	pushPill(tabId);
+	emit({ event: 'offered', tabId, why: `moved to ${site}, a site the person has not allowed` });
+}
+
+async function checkSite(tabId, acting) {
+	// Before anything reaches the tab, the check Claude in Chrome makes before each action: is the tab still on a site
+	// the person allowed? Looking uses the address last seen; acting asks the browser, pending navigation included.
+	let url = state.urls.get(tabId);
+	let pending = null;
+	if (acting || url === undefined) {
+		const tab = await call(C.tabs, 'get', tabId);
+		url = tab.url;
+		pending = tab.pendingUrl || null;
+		state.urls.set(tabId, url);
+	}
+	if (!allowedUrl(url)) {
+		await moved(tabId, url);
+		throw new Error(notAllowed(url, 'the tab went there, so it is no longer shared; its pill asks the person'));
+	}
+	if (pending && !allowedUrl(pending)) throw new Error(notAllowed(pending, 'the tab is on its way there'));
+}
+
+// Sessions reach their own tab and its frames, never other tabs: tabs are opened, closed and switched with the tab
+// tools, which the person's consent covers.
+const SESSION_TARGET_OK = new Set(['Target.setAutoAttach', 'Target.getTargetInfo', 'Target.detachFromTarget']);
+
+async function checkNavigation(msg) {
+	// Navigations the AI starts are checked before any request leaves, so the person's cookies go nowhere new.
+	const params = msg.params || {};
+	let url = null;
+	if (msg.method === 'Page.navigate') url = params.url;
+	if (msg.method === 'Page.navigateToHistoryEntry') {
+		const target = msg.sessionId ? { tabId: msg.tabId, sessionId: msg.sessionId } : { tabId: msg.tabId };
+		const history = await call(C.debugger, 'sendCommand', target, 'Page.getNavigationHistory', {});
+		const entry = (history.entries || []).find((e) => e.id === params.entryId);
+		url = entry ? entry.url : null;
+	}
+	if (url !== null && !allowedUrl(url)) throw new Error(await ask(url));
+}
+
 function alwaysShared(url) {
 	return !!url && state.settings.alwaysShare.some((g) => globToRegExp(g).test(url));
 }
@@ -60,7 +206,14 @@ function emit(msg) {
 }
 
 async function save() {
-	await call(store, 'set', { shared: [...state.shared], holder: state.holder, aiWindow: state.aiWindow, stopped: state.stopped });
+	await call(store, 'set', {
+		shared: [...state.shared],
+		holder: state.holder,
+		aiWindow: state.aiWindow,
+		stopped: state.stopped,
+		// grants for this browser session only: without session storage (old Chromium) they are kept in memory
+		...(C.storage.session ? { allowed: [...state.allowed], declined: [...state.declined], asking: state.asking } : {}),
+	});
 }
 
 const STOPPED = 'the person pressed Cancel on the debugging bar, which stops the AI; ask them to share a tab again';
@@ -95,7 +248,8 @@ async function badge(tabId) {
 
 function pillState(tabId) {
 	const offered = state.offered.has(tabId) && !state.shared.has(tabId);
-	return { shared: state.shared.has(tabId), offered, holder: state.holder, stopped: state.stopped };
+	const moved = offered ? state.moved.get(tabId) || null : null;
+	return { shared: state.shared.has(tabId), offered, moved, holder: state.holder, stopped: state.stopped };
 }
 
 function pushPill(tabId) {
@@ -103,8 +257,18 @@ function pushPill(tabId) {
 	C.tabs.sendMessage(tabId, { pill: pillState(tabId) }, () => void C.runtime.lastError);
 }
 
+// The person's own ways of sharing: sharing a tab lets the AI use that tab's site.
+const BY_PERSON = new Set(['shared by the person', 'always shared site']);
+
 async function share(tabId, why) {
+	const tab = await call(C.tabs, 'get', tabId);
+	const url = tab.pendingUrl || tab.url;
+	if ((url || '').startsWith(C.runtime.getURL(''))) throw new Error("the bridge's own pages are never shared");
+	if (BY_PERSON.has(why)) await allowSite(url);
+	else if (!allowedUrl(url)) throw new Error(notAllowed(url, 'the tab was not shared'));
 	state.offered.delete(tabId);
+	state.moved.delete(tabId);
+	state.urls.delete(tabId); // the next check reads the address afresh
 	const resuming = state.stopped && why === 'shared by the person'; // sharing again is the person's go-ahead
 	if (state.stopped && !resuming) throw new Error(STOPPED);
 	if (resuming) {
@@ -181,8 +345,11 @@ function needShared(tabId) {
 async function handle(msg) {
 	if (state.stopped && msg.op !== 'ping' && msg.op !== 'tabs') throw new Error(STOPPED);
 	switch (msg.op) {
-		case 'ping':
-			return {};
+		case 'ping': {
+			const asking = state.asking ? state.asking.origin : null;
+			const sites = { allowed: [...state.allowed], always: state.settings.alwaysAllow, declined: [...state.declined], asking };
+			return { sites };
+		}
 		case 'reload': {
 			// The relay saw an older copy running: Chrome keeps the old service worker after the files change until
 			// the extension is reloaded. Reload only if the files on disk differ from the code running: otherwise it
@@ -201,6 +368,11 @@ async function handle(msg) {
 		case 'send': {
 			needShared(msg.tabId);
 			if (state.holder === 'human' && acts(msg.method)) throw new Error('the person is using the browser right now');
+			if (msg.method.startsWith('Target.') && !SESSION_TARGET_OK.has(msg.method)) {
+				throw new Error(`${msg.method} is refused through the extension bridge: it reaches past the shared tab; use the tab tools`);
+			}
+			await checkSite(msg.tabId, acts(msg.method));
+			await checkNavigation(msg);
 			await ensureAttached(msg.tabId);
 			const input = msg.method.startsWith('Input.');
 			if (input && !msg.sessionId) await bringToFront(msg.tabId);
@@ -218,6 +390,7 @@ async function handle(msg) {
 			}
 		}
 		case 'open':
+			if (!allowedUrl(msg.url || 'about:blank')) throw new Error(await ask(msg.url));
 			return await openForAgent(msg.url || 'about:blank');
 		case 'close':
 			needShared(msg.tabId);
@@ -349,21 +522,40 @@ async function boot() {
 	}
 	const local = await call(C.storage.local, 'get', 'settings');
 	Object.assign(state.settings, local.settings || {});
-	const kept = await call(store, 'get', ['shared', 'holder', 'aiWindow', 'stopped']);
+	const kept = await call(store, 'get', ['shared', 'holder', 'aiWindow', 'stopped', 'allowed', 'declined', 'asking']);
+	state.asking = kept.asking || null; // an ask still open after a worker restart is still answered
+	for (const site of kept.allowed || []) state.allowed.add(site);
+	for (const site of kept.declined || []) state.declined.add(site);
 	state.holder = kept.holder || 'agent';
 	state.stopped = !!kept.stopped;
 	state.aiWindow = kept.aiWindow ?? null;
 	const tabs = await call(C.tabs, 'query', {});
 	const live = new Set(tabs.map((t) => t.id));
-	for (const id of kept.shared || []) if (live.has(id)) state.shared.add(id);
-	if (!state.stopped) for (const t of tabs) if (alwaysShared(t.url)) state.shared.add(t.id);
+	for (const t of tabs) {
+		if (!(kept.shared || []).includes(t.id)) continue;
+		if (allowedUrl(t.url)) state.shared.add(t.id);
+		else {
+			state.offered.add(t.id); // it reached a site not allowed while the worker was stopped
+			state.moved.set(t.id, { site: siteOf(t.url), byAi: false });
+		}
+	}
+	for (const t of tabs) {
+		if (state.stopped || !alwaysShared(t.url)) continue;
+		state.shared.add(t.id);
+		state.allowed.add(siteOf(t.url)); // the person chose to share it, so its site too
+	}
 	await save();
 	for (const id of state.shared) badge(id);
 	connect();
 }
 
 C.debugger.onEvent.addListener((source, method, params) => {
-	if (state.shared.has(source.tabId)) emit({ event: 'cdp', tabId: source.tabId, sessionId: source.sessionId, method, params });
+	if (!state.shared.has(source.tabId)) return;
+	if (method === 'Page.frameNavigated' && !source.sessionId && params && params.frame && !params.frame.parentId) {
+		state.urls.set(source.tabId, params.frame.url);
+		if (!allowedUrl(params.frame.url)) return void moved(source.tabId, params.frame.url); // nothing of it is passed on
+	}
+	emit({ event: 'cdp', tabId: source.tabId, sessionId: source.sessionId, method, params });
 });
 
 C.debugger.onDetach.addListener(async (source, reason) => {
@@ -373,6 +565,10 @@ C.debugger.onDetach.addListener(async (source, reason) => {
 		// Cancel is the person's stop button, not just "this tab": unshare everything and open nothing new.
 		if (state.stopped) return; // Chrome detaches every tab at once; the first one does the work
 		state.stopped = true;
+		if (state.asking) {
+			call(C.windows, 'remove', state.asking.windowId).catch(() => {});
+			state.asking = null;
+		}
 		state.autoHeld = false;
 		for (const id of [...state.shared]) {
 			// one tab failing to let go must not leave the others shared
@@ -395,6 +591,8 @@ C.debugger.onDetach.addListener(async (source, reason) => {
 
 C.tabs.onRemoved.addListener((tabId) => {
 	state.offered.delete(tabId);
+	state.moved.delete(tabId);
+	state.urls.delete(tabId);
 	unshare(tabId, 'tab closed');
 });
 
@@ -413,18 +611,27 @@ C.tabs.onCreated.addListener((tab) => {
 });
 
 async function adoptOrOffer(tabId, opener, created, ai) {
+	await state.ready;
 	const person = state.personInputAt.get(opener) || 0;
+	const tab = await call(C.tabs, 'get', tabId).catch(() => null);
+	if (!tab) return;
+	const url = tab.pendingUrl || tab.url;
 	if (created - ai < OPENED_BY_AI_MS && person < ai) {
-		return share(tabId, 'opened by the AI from a shared tab').catch(() => {});
+		if (allowedUrl(url)) return share(tabId, 'opened by the AI from a shared tab').catch(() => {});
+		state.moved.set(tabId, { site: siteOf(url), byAi: true }); // the AI's popup went to a site not allowed: theirs to say
 	}
 	state.offered.add(tabId);
 	pushPill(tabId);
-	const why = person >= ai && created - person < OPENED_BY_AI_MS ? 'the person opened it' : 'the page opened it';
+	let why = person >= ai && created - person < OPENED_BY_AI_MS ? 'the person opened it' : 'the page opened it';
+	if (state.moved.has(tabId)) why = 'the AI opened it on a site the person has not allowed';
 	emit({ event: 'offered', tabId, why });
 }
 
 C.tabs.onUpdated.addListener(async (tabId, change) => {
+	await state.ready;
 	if (state.shared.has(tabId)) {
+		if (change.url) state.urls.set(tabId, change.url);
+		if (change.url && !allowedUrl(change.url)) return moved(tabId, change.url);
 		if (change.url || change.title || change.status === 'complete') {
 			targetInfo(tabId).then((tab) => emit({ event: 'changed', tab })).catch(() => {});
 		}
@@ -439,6 +646,10 @@ C.windows.onRemoved.addListener((id) => {
 		state.aiWindow = null;
 		save();
 	}
+	if (state.asking && id === state.asking.windowId) {
+		state.asking = null; // closed unanswered: they may be asked again
+		save();
+	}
 });
 
 C.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -446,7 +657,19 @@ C.runtime.onMessage.addListener((msg, sender, reply) => {
 		if (sender.tab && state.shared.has(sender.tab.id)) onPersonInput(sender.tab.id, msg.input);
 		return false;
 	}
+	if (msg.answer) {
+		// only from this extension's ask window, never from a content script in some page
+		if (sender.id === C.runtime.id && sender.tab && (sender.url || '').startsWith(C.runtime.getURL('ask.html'))) {
+			answer(msg, sender.tab.windowId);
+		}
+		return false;
+	}
+	// The popup (an extension page) may share any tab and change the relay; content scripts in pages may only act on
+	// their own tab through its pill.
+	const fromExtension = sender.id === C.runtime.id && (sender.url || '').startsWith(C.runtime.getURL(''));
+	if (['share', 'unshare', 'relay'].includes(msg.ask) && !fromExtension) return false;
 	(async () => {
+		await state.ready;
 		if (msg.ask === 'share') await share(msg.tabId, 'shared by the person');
 		else if (msg.ask === 'unshare') await unshare(msg.tabId, 'unshared by the person');
 		else if (msg.ask === 'holder') await setHolder(msg.holder);
@@ -454,11 +677,12 @@ C.runtime.onMessage.addListener((msg, sender, reply) => {
 		else if (msg.ask === 'share-here' && sender.tab) await share(sender.tab.id, 'shared by the person');
 		else if (msg.ask === 'decline-here' && sender.tab) {
 			state.offered.delete(sender.tab.id);
+			state.moved.delete(sender.tab.id);
 			pushPill(sender.tab.id);
 		}
 		else if (msg.ask === 'relay') {
 			state.settings.relay = msg.relay;
-			await call(C.storage.local, 'set', { settings: { relay: msg.relay } });
+			await keepSettings({ relay: msg.relay });
 			if (state.ws) state.ws.close();
 			connect();
 		}

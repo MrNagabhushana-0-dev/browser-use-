@@ -28,6 +28,13 @@ HOLDING = (
 )
 
 STOPPED = 'the person pressed Cancel on the debugging bar, which stops the AI; ask them to share a tab again'
+FILES = (
+	"it would hand a page files from the person's disk, or write downloads where they didn't choose; they pick files themselves"
+)
+
+# The extension's worker refuses sites the person hasn't allowed with these words (worker.js, notAllowed). Such a
+# refusal comes before anything is sent.
+NOT_ALLOWED = 'is not a site the person has allowed'
 
 REFUSED: dict[str, str] = {
 	**dict.fromkeys(
@@ -62,6 +69,7 @@ REFUSED: dict[str, str] = {
 	),
 	**dict.fromkeys(('Page.setBypassCSP', 'Security.setIgnoreCertificateErrors'), PROTECTION),
 	'Network.loadNetworkResource': CREDENTIALED,
+	**dict.fromkeys(('DOM.setFileInputFiles', 'Page.setDownloadBehavior', 'Page.handleFileChooser'), FILES),
 	**dict.fromkeys(('Target.createBrowserContext', 'Target.disposeBrowserContext', 'Target.exposeDevToolsProtocol'), BROWSER),
 }
 REFUSED_DOMAINS: dict[str, str] = {'Fetch': TRAFFIC, 'Browser': BROWSER, 'SystemInfo': BROWSER}

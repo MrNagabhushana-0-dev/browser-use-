@@ -149,10 +149,10 @@ class BridgeRelay:
 		"""Each link of person -> extension -> relay -> AI as plain data, for `doctor`. Pings the extension."""
 		extension = None
 		if self._ext is not None and self.hello:
-			answers_ms = None
+			answers_ms, sites = None, None
 			try:
 				started = asyncio.get_running_loop().time()
-				await asyncio.wait_for(self._ext_call('ping'), ping_timeout)
+				sites = (await asyncio.wait_for(self._ext_call('ping'), ping_timeout)).get('sites')
 				answers_ms = round((asyncio.get_running_loop().time() - started) * 1000, 1)
 			except (BridgeError, TimeoutError):
 				pass
@@ -161,6 +161,7 @@ class BridgeRelay:
 				'manifest': self.hello.get('manifest'),
 				'userAgent': self.hello.get('userAgent', ''),
 				'answers_ms': answers_ms,
+				'sites': sites,  # allowed, always, declined, and the site being asked about
 			}
 		return {
 			'relay': 'retinat-bridge',
@@ -272,6 +273,8 @@ class BridgeRelay:
 			self._log_control(msg)
 		elif event == 'offered':
 			self._log_offered(msg)
+		elif event == 'site':
+			self._log_site(msg)
 		elif event == 'hello':
 			self.hello = msg
 			self.holder = msg.get('holder', 'agent')
@@ -593,6 +596,9 @@ class BridgeRelay:
 
 	def _log_offered(self, msg: dict[str, Any]) -> None:
 		logger.info(f'🔗 A tab opened from a shared tab waits for the person to share it ({msg.get("why", "")})')
+
+	def _log_site(self, msg: dict[str, Any]) -> None:
+		logger.info(f'🔗 Asked about {msg.get("origin")}, the person answered {msg.get("answer")}')
 
 	def _log_reload(self, hello: dict[str, Any], error: BaseException | None) -> None:
 		if error is None:

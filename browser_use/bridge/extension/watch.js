@@ -70,10 +70,15 @@
 			const human = state.holder === 'human';
 			if (state.offered) {
 				pill.className = 'pill offer';
-				text.textContent = 'Opened from a tab you share with an AI. Share this one too?';
+				const site = state.moved && state.moved.site;
+				text.textContent = !site
+					? 'Opened from a tab you share with an AI. Share this one too?'
+					: state.moved.byAi
+						? `The AI came to ${site}, a site you haven't let it use. Let it work here?`
+						: `This tab is now on ${site}, a site you haven't let the AI use. Share it here too?`;
 				quiet.hidden = false;
 				quiet.textContent = 'Not now';
-				button.textContent = 'Share this tab';
+				button.textContent = state.moved ? 'Allow here' : 'Share this tab';
 				return;
 			}
 			quiet.hidden = true;
