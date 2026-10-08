@@ -2865,3 +2865,56 @@ tab moves to another site. Before this round, sharing a tab let the AI take it a
 4. The `test_network.py:397` intermittent: Chromium's own Google requests reach the SOCKS proxy's hostname log.
 5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 51: frames of other sites in a shared tab; a test-build quirk found by bisection
+
+**Item.** Next item 2: the per-site check covered only a shared tab's top frame. Through CDP, an out-of-process frame
+of another site (a sign-in widget, a payment form, an embed) gets its own session, which reads what the page itself
+never could: the frame's DOM, its script context, its non-HttpOnly cookies.
+
+**Built** (`2f0bb99`), in the worker:
+- Every child target of a shared tab (cross-site frames, workers) is tracked with its address.
+- Chrome attaches a cross-site frame before its navigation commits, with an empty address. Such a child is held
+  back: resumed if paused, its events kept, until `targetInfoChanged` gives its site.
+  - If the site is allowed, the AI gets the attach and the kept events.
+  - If not, the child stays attached but hidden: its events stop at the worker and commands to it are refused.
+    Detaching it instead seemed to stop Chrome auto-attaching the page's later frames.
+- A paused child is always resumed, with retries. `waitForDebuggerOnStart` from any client must never freeze the
+  person's page.
+
+**Found on the way: cross-site frames never loaded in the bridge tests' browser.**
+- This was not the bridge.
+  - The same page loaded fine through the library's own launch.
+  - In a person-style launch it never loaded the frame: not in 90 s, with or without the extension, with or without
+    a debugger, and even with site isolation off.
+- A bisection over the library's 60 launch flags found one flag: `--disable-field-trial-config`.
+  - The Chromium here is Playwright's test build, which applies Chromium's built-in testing field trials at start.
+    One of them keeps cross-site frames from loading in this sandbox; which one wasn't pinned.
+  - Official builds (Chrome, Edge, Brave, a distro's Chromium) don't apply that config. The bridge tests now pass
+    the flag to their stand-in for a person's Chromium, and only to it.
+  - So people's browsers never had this problem, and the tests now behave like them.
+- **Another sandbox quirk:** a site already drawn in another tab never loaded as a cross-site frame. This happened
+  1/3 to 6/6 of the time depending on setup, with the old worker too. The frame test allows the friend site without
+  opening it.
+
+**Tests:**
+- The frame test, a shared page with frames from an allowed and a not-allowed site, with
+  `waitForDebuggerOnStart`:
+  - both frames load;
+  - the AI is shown only the allowed one, and can run script in it;
+  - no event arrives on a session the AI wasn't shown.
+- It passed 6/6 alone, and the bridge file 33/33 three runs in a row.
+- **Mutation check:** showing frames whatever their site, leaving hidden frames paused, and showing frames of unknown
+  site at once each fail the test.
+  - Dropping the filter on hidden frames' events survives, in the full file too. Nobody can enable a domain on a
+    session the AI never learns of, so that filter is defence in depth.
+- **Also fixed:** the tests' hand-back of the shared tab now waits until the tab is really back. An aborted navigation
+  had come back without an error and stranded the next test; this explains the earlier cascades.
+
+**The dropout fix, measured.**
+- The three-file combination that failed about 1 in 14 before ran 29 times after the fix (the 30th was still
+  running at this writing), with 0 beep-count failures. Part of it ran under extra load from bridge runs.
+- If the fix had changed nothing, 29 clean runs would happen about 12% of the time ((13/14)^29). This is evidence,
+  not proof.
+- The same loop had one other failure: `test_network.py:397`, Chromium's own Google requests among the hostnames
+  handed to the SOCKS proxy (Next item 4).
