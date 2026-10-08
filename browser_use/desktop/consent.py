@@ -70,12 +70,13 @@ async def ask(display: str, wanted: dict[str, Tier], reason: str, timeout: float
 	rows = ''.join(ROW.format(app=html.escape(app), what=WHAT[tier]) for app, tier in sorted(asked.items()))
 	page = PAGE.format(reason=html.escape(reason or 'No reason was given.'), rows=rows)
 
+	own_origin: list[str] = []
+
 	async def show(request: web.Request) -> web.Response:
 		return web.Response(text=page, content_type='text/html')
 
 	async def answer(request: web.Request) -> web.Response:
-		port = request.app['port']
-		if request.headers.get('Origin') != f'http://127.0.0.1:{port}':
+		if not own_origin or request.headers.get('Origin') != own_origin[0]:
 			raise web.HTTPForbidden(text='answers come from the request window only')
 		allow = (await request.json()).get('allow', [])
 		if not answered.done():
@@ -90,7 +91,7 @@ async def ask(display: str, wanted: dict[str, Tier], reason: str, timeout: float
 	site = web.TCPSite(runner, '127.0.0.1', 0)
 	await site.start()
 	port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
-	app['port'] = port
+	own_origin.append(f'http://127.0.0.1:{port}')  # answers are taken from this page only
 
 	profile = tempfile.mkdtemp(prefix='retinat-consent-')
 	args = [chrome, f'--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check', f'--class={CONSENT_CLASS}']

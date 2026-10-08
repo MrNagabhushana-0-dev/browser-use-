@@ -2449,3 +2449,166 @@ only the first block) and in `structuredContent`.
    retries? What does it cost?
 5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 46 (owner's request): computer use, the browsers re-verified, and what Anthropic's surfaces do
+
+**Items.** The owner asked for:
+- the unverified points verified;
+- Anthropic's three surfaces (Claude in Chrome, the desktop app's built-in browser and its computer use) studied
+  "at code level", with ours made better than them;
+- computer use built, which had been discussed but never built.
+
+**Research.** One workflow, subagents on the cheapest model at the owner's request. Six sweeps ran, each from primary
+sources:
+1. **Anthropic's computer-use reference code:** anthropic-quickstarts and the tool docs.
+2. **Claude in Chrome:** read statically from the public extension package (1.0.99) and the Claude Code binary.
+3. **The desktop app's computer use and browser pane:** from the docs.
+4. **Open-source desktop agents:** UFO2, Agent S3, Cua, Bytebot and others.
+5. **Linux/X11 primitives:** XTest, XInput2, RECORD, AT-SPI and OCR.
+6. **A map of our own code.**
+
+Findings, each sourced, are in the workflow's results. The most useful:
+- **Anthropic's desktop computer use:**
+  - It runs on macOS and Windows only.
+  - Apps are granted per session at tiers: view, click or full.
+  - It hides other windows while acting, and Esc aborts.
+  - Its screenshots are sized per model: 1568 px on the long edge for earlier models, 2576 px for newer ones.
+- **Claude in Chrome:**
+  - per-site permissions, once or always, with a force-prompt category;
+  - every tool confined to one tab group, re-checking the domain before acting;
+  - console and network readers, and a GIF recorder;
+  - each navigation's URL sent off the machine for classification.
+- **Open-source desktop agents:** their weak layers are grounding and verification, not input. The improvements
+  that run on a CPU are reading the accessibility tree (AT-SPI), OCR, and settle detection in place of fixed sleeps.
+- **X11:** XInput2 raw events name each event's source device. So the person's mouse and keyboard can be told from
+  XTest input exactly. That was verified here, with a second XInput2 master standing in for the person.
+- **Not tried live:** none of Anthropic's three surfaces is attached to this session.
+
+**Verified this round:**
+- **Bridge suite with the pill, the consent gate and the leak fixes:**
+
+  | Browser | Result |
+  |---|---|
+  | Edge 154 | 21/21 |
+  | Brave 1.97 | 21/21 |
+  | Vivaldi 8.2 | 20/20, plus the Cancel skip (no debugging bar) |
+  | Chrome 155 | 21/21, in three invocations |
+  | Chromium 141 | the full suite |
+
+  - Brave's first run had one failure. It was mine: the run imported a server file I was halfway through editing.
+  - Vivaldi's first run had one failure in the test's own pixel search: Vivaldi's blue zoom slider pulled the click
+    off the pill's button. The pill was drawn correctly, as a screenshot showed. The pill tests now look for a wide
+    band of the pill's colour.
+- **Chrome 155 ran a stale service worker.** Its first full run had four failures: no pill, no consent gate, and
+  the doctor's policy warning. Chrome was still running the extension's old service worker from before this round,
+  although the files on disk were new; the doctor caught it.
+- **Fixed: the extension now reloads itself when it is out of date.**
+  - The relay asks an extension running older code to reload, once per version and policy.
+  - The worker reloads only if its files on disk differ from the code it is running. Chromium unloads an extension
+    loaded with `--load-extension` when it reloads, which was seen here, so a reload that changes nothing must not
+    happen.
+  - It also wakes on `onInstalled` and `onStartup`.
+  - **Tests:** on Chrome 155 with Load unpacked, a stale worker heals within a second, and without the relay's
+    request the test fails. On Chromium, old files that are the ones running leave the extension connected.
+
+**Built: computer use on the X desktop** (`browser_use/desktop`, Retinat's `retinat_desktop_*`).
+- **Consent:**
+  - It is off unless `BROWSER_USE_DESKTOP_CONTROL=1`.
+  - It acts only in apps listed in `BROWSER_USE_DESKTOP_APPS`, at Anthropic's tiers.
+  - The tier is checked against the app the action reaches: the window under the pointer for a click, the focused
+    app for typing.
+- **The person comes first:** their input is told apart by device, and the AI waits while they have used the mouse
+  or keyboard in the last 8 s.
+- **Input:** XTest through ctypes, with no xdotool. Any character can be typed, by remapping a spare keycode;
+  combinations work.
+- **Feedback:** each action says which app it reached and whether, and roughly where, the screen changed. Zoom is
+  available, and coordinates are in the pixels of the look image.
+- **Errors:** refusals are effect `none`. A `Refused` is now always `none`, since it is raised only before anything
+  is sent.
+- **Tests:** real Xvfb with Chromium app windows given their app identity with `--class`; CDP serves only as the
+  test's oracle. Three mutations each fail a test:
+  - turning off the person check;
+  - letting a click-tier app be typed into;
+  - counting the AI's own device as the person.
+
+**Also fixed:** MCP failures returned as text, such as "Error: ...", are now error results with effect `none`, and
+an unknown `browser_*` tool no longer starts a browser.
+
+**Known gaps in computer use, from the research and its review of this code:**
+- look, watch and zoom show apps that weren't granted;
+- a cancelled click, or an error while modifiers are held, can leave a button or key down;
+- AltGr (level-3) characters come out wrong;
+- there is no approval step, only the environment variable;
+- there is no `expect` guard on desktop clicks;
+- hover, wait, cursor position and hold are missing;
+- WM_CLASS is client-set, so the tiers are a convenience boundary, not a security one;
+- a person who drives the desktop through another XTest tool (x11vnc, xdotool) counts as the AI.
+
+- **Full `tests/ci` on `b82cde9`, with `loopwatch`, skip reasons and the whole log kept: green, 1,633 passed, 30
+  skipped, 0 failed** (31m36s). One stall: 1.4 s in a beta-agent cleanup. Every skip has an old, named reason (TODOs,
+  missing API keys, no Tor).
+
+## Round 47: computer use, second slice
+
+**Item.** The research round's gap list for computer use, from its sweeps and its review of the Round 46 code.
+
+**Built** (`d393f32`):
+- **Asking for access.** `retinat_desktop_request_access` opens a window on the person's screen (Chromium in app
+  mode, app identity `retinat-consent`) with the apps, the tier each would get and the AI's reason. Only the person
+  can answer it:
+  - its app can never be granted, so the AI's clicks there are refused, and the AI's view covers it;
+  - the answer travels over a loopback server, and the window's address carries a random token the AI never sees.
+    The server accepts answers only from its own page's Origin.
+- **Hidden windows.** With computer use on, look, watch and zoom cover every window of an app that wasn't granted
+  (after Anthropic hiding other windows while acting). Unnamed popups, such as menus, stay visible.
+- **Halts mid-action.** The person check repeats before every typed character and every pointer step. If the person
+  takes over, or the keyboard focus moves, typing stops there and says how far it got. Stopping after something was
+  sent is effect `unknown` (`Halted`); before anything was sent it is `Refused` (`none`).
+- **Escape is the person's stop key.** PersonWatch notes Escape presses that come from the person's devices. The stop
+  holds whatever the idle time, until the person approves an access request, which counts as their go-ahead. The AI
+  cannot lift it.
+- **Guards:** `expect` on click, type and key; and refusal of keys that lock, end or switch away from the session.
+- **Robustness:**
+  - buttons and modifiers are released in `finally` blocks;
+  - AltGr and other key levels go through a spare keycode;
+  - XInput 2.2 is required;
+  - strings Xlib allocates are freed;
+  - hover (`retinat_desktop_move`), and the pointer position in status.
+- **Keyboard focus, found in testing.**
+  - On Xvfb with no window manager, clicking a Chromium window didn't reliably move the keyboard focus to it. The
+    test's text meant for the terminal-like app went into the notes app, which still had the focus.
+  - The tier check was right, since that app was granted in full, but the text went where the AI didn't mean it.
+  - Two fixes. Under PointerRoot focus, keys go to the window under the pointer, so that is the app now reported.
+    And with no window manager (no `_NET_SUPPORTING_WM_CHECK`), a click on a granted app gives it the focus, as
+    click-to-focus would.
+  - Each click's result now names the app with the keyboard focus, and `expect` on typing refuses if it is the wrong
+    one.
+
+**Tests:** 12 in `test_desktop_control.py`, 12/12 three runs in a row. They cover:
+- covered windows;
+- `expect` refusals that send nothing;
+- a click cancelled while the button is down, which leaves no button held (the test reads the pointer's button mask);
+- the AI's own click on Allow being refused, and the person's click granting the apps, with a terminal capped at
+  click;
+- session keys refused;
+- Escape holding past the idle window until resumed.
+
+**Observed, not explained.**
+- `test_retinat.py::test_the_server_hears_a_muted_video_with_no_gesture_even_when_asked_late` counted 4 beeps where
+  the percept listed 5 onsets.
+- It failed twice in a row: once with several suites running together, once in the Retinat file run straight after.
+  It then passed in four runs with this round's changes, and in one run without them.
+- No code on its path changed this round. It joins the eyes' intermittent audio failures (task 43), with this log as
+  evidence.
+
+**Not done:**
+- The research's critique agent returned nothing useful; this slice was reviewed by hand.
+- A probe of `chrome.management.getSelf().installType` (whether the extension can tell `--load-extension` from Load
+  unpacked) hit its time limit without a result. The reload guard doesn't depend on it.
+
+- **Full `tests/ci` on `d393f32`, with `loopwatch` and the whole log kept: green, 1,639 passed, 30 skipped, 0 failed**
+  (41m13s, against about 31 minutes before).
+  - It logged 20 stalls of 1.1-2.0 s, against 1-3 normally, spread over unrelated tests. No stray browser or Xvfb
+    was running; the session's two MCP servers were idle. The cause is not known.
+  - The one warning was aiohttp's: app state set on an application that had already started, in `consent.py`. The
+    page's origin is now kept in a closure, and the test passes with warnings as errors.
