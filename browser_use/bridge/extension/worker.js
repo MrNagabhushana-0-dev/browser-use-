@@ -183,6 +183,17 @@ async function handle(msg) {
 	switch (msg.op) {
 		case 'ping':
 			return {};
+		case 'reload': {
+			// The relay saw an older copy running: Chrome keeps the old service worker after the files change until
+			// the extension is reloaded. Reload only if the files on disk differ from the code running: otherwise it
+			// changes nothing, and Chromium unloads an extension loaded with --load-extension when it reloads.
+			const read = async (name) => (await fetch(C.runtime.getURL(name), { cache: 'no-store' })).json();
+			const [disk, policy] = await Promise.all([read('manifest.json'), read('policy.json')]);
+			const same = disk.version === C.runtime.getManifest().version && JSON.stringify(policy.passive) === JSON.stringify(POLICY);
+			if (same) throw new Error('the files on disk are the ones running, so a reload would not change them');
+			setTimeout(() => C.runtime.reload(), 100); // answer first; the person shares their tabs again afterwards
+			return { reloading: true };
+		}
 		case 'tabs': {
 			const infos = await Promise.all([...state.shared].map((id) => targetInfo(id).catch(() => null)));
 			return { tabs: infos.filter(Boolean), holder: state.holder };
@@ -471,5 +482,9 @@ if (C.alarms) {
 	C.alarms.create('reconnect', { periodInMinutes: 1 });
 	C.alarms.onAlarm.addListener(() => connect());
 }
+// These wake the worker straight after an install, an update or a reload (the relay may have asked for one) and when
+// the browser starts, rather than at the next alarm.
+C.runtime.onInstalled.addListener(() => state.ready.then(connect));
+if (C.runtime.onStartup) C.runtime.onStartup.addListener(() => state.ready.then(connect));
 
 state.ready = boot();

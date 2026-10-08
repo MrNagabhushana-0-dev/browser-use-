@@ -31,6 +31,7 @@ MAX_MESSAGE = 200 * 1024 * 1024
 # An MV3 service worker is stopped after 30 s without extension events; a message its own JS handles resets that
 # (Chrome 116+), protocol-level pings do not. Measured: without this, an idle worker dropped off at 30 s.
 KEEPALIVE_S = 20.0
+EXPECTED_VERSION: str = json.loads((POLICY_FILE.parent / 'manifest.json').read_text())['version']
 # Cookie reads any tab can make; their results are cut down to the shared sites (see _only_shared_sites).
 COOKIE_READS = frozenset({'Network.getCookies', 'Network.getAllCookies', 'Storage.getCookies'})
 COOKIE_HEADERS = frozenset({'cookie', 'set-cookie', 'cookie2', 'set-cookie2'})
@@ -92,6 +93,7 @@ class BridgeRelay:
 		self._ids = itertools.count(1)
 		self._runner: web.AppRunner | None = None
 		self._tasks: set[asyncio.Task] = set()
+		self._reload_asked: set[tuple[str, str]] = set()  # (version, policy) an extension was asked to reload from
 
 	# -- lifecycle ---------------------------------------------------------------------------------
 
@@ -164,7 +166,7 @@ class BridgeRelay:
 			'relay': 'retinat-bridge',
 			'url': self.cdp_url,
 			'clients': len(self._clients),
-			'expected_version': json.loads((POLICY_FILE.parent / 'manifest.json').read_text())['version'],
+			'expected_version': EXPECTED_VERSION,
 			'expected_policy': list(PASSIVE_GLOBS),
 			'extension': extension,
 			'policy': self.hello.get('policy') if extension else None,
@@ -276,6 +278,28 @@ class BridgeRelay:
 			self.stopped = bool(msg.get('stopped'))
 			self._ext_ready.set()
 			self._log_extension(msg)
+			self._reload_if_outdated(msg)
+
+	def _reload_if_outdated(self, hello: dict[str, Any]) -> None:
+		"""Ask an extension running older code than this relay ships to reload itself, once per (version, policy),
+		so files on disk that really are old cannot make it reload forever."""
+		version, policy = hello.get('extension'), hello.get('policy')
+		if version == EXPECTED_VERSION and policy == list(PASSIVE_GLOBS):
+			return
+		key = (str(version), json.dumps(policy))
+		if key in self._reload_asked:
+			return
+		self._reload_asked.add(key)
+		task = asyncio.create_task(self._ask_reload(hello))
+		self._tasks.add(task)
+		task.add_done_callback(self._tasks.discard)
+
+	async def _ask_reload(self, hello: dict[str, Any]) -> None:
+		try:
+			await asyncio.wait_for(self._ext_call('reload'), 5)
+			self._log_reload(hello, None)
+		except (BridgeError, TimeoutError) as e:
+			self._log_reload(hello, e)  # an extension from before 'reload' existed: the person reloads it once
 
 	async def _ext_call(self, op: str, **kwargs: Any) -> dict[str, Any]:
 		ws = self._ext
@@ -569,6 +593,15 @@ class BridgeRelay:
 
 	def _log_offered(self, msg: dict[str, Any]) -> None:
 		logger.info(f'🔗 A tab opened from a shared tab waits for the person to share it ({msg.get("why", "")})')
+
+	def _log_reload(self, hello: dict[str, Any], error: BaseException | None) -> None:
+		if error is None:
+			logger.info(f'🔗 The extension ran older code ({hello.get("extension")}); it is reloading itself')
+		else:
+			logger.warning(
+				f'🔗 The extension runs older code ({hello.get("extension")}) and cannot reload itself ({error}); '
+				'press the reload arrow on its card at chrome://extensions once'
+			)
 
 	def _log_extension(self, hello: dict[str, Any]) -> None:
 		logger.info(f'🔗 Bridge extension connected from {_product(hello.get("userAgent", ""))} (MV{hello.get("manifest")})')

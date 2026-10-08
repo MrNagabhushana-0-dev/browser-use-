@@ -754,6 +754,20 @@ def _near(rgb, target, tolerance: int = 40) -> bool:
 	return all(abs(a - b) <= tolerance for a, b in zip(rgb, target))
 
 
+def _pill_button(shot, colour: tuple[int, int, int]) -> tuple[int, int]:
+	"""Screen point of the button at the right end of the pill drawn in `colour`. The pill is a wide band of that
+	colour in the lower half; browser chrome in a similar colour (Vivaldi's zoom slider) is thin, so only rows where
+	the colour runs wide count."""
+	rows: dict[int, list[int]] = {}
+	for y in range(shot.height // 2, shot.height, 2):
+		xs = [x for x in range(0, shot.width, 2) if _near(shot.getpixel((x, y)), colour)]
+		if len(xs) > 60:
+			rows[y] = xs
+	assert len(rows) > 3, 'the pill is not on screen'
+	right = max(max(xs) for xs in rows.values())
+	return right - 50, (min(rows) + max(rows)) // 2  # its button sits at the right end
+
+
 async def _pill(cdp: RawCDP, sid: str) -> dict | None:
 	"""The sharing pill's box in the page, or None when it is not there."""
 	expr = "(() => { const h = document.querySelector('retinat-bridge-pill'); if (!h) return null;"
@@ -868,17 +882,7 @@ async def test_a_shared_tab_says_the_ai_is_working_and_one_click_takes_the_wheel
 		assert relay.holder == 'agent'
 
 		# Find it on screen as the person sees it: the page's own geometry lags the debugging bar's arrival.
-		shot = ImageGrab.grab(xdisplay=display).convert('RGB')
-		green = [
-			(x, y)
-			for y in range(shot.height // 2, shot.height, 2)
-			for x in range(0, shot.width, 2)
-			if _near(shot.getpixel((x, y)), (26, 127, 55))
-		]
-		assert len(green) > 200, 'the pill is not on screen'
-		right = max(x for x, _ in green)
-		middle = (min(y for _, y in green) + max(y for _, y in green)) // 2
-		button = (right - 50, middle)  # its button sits at the right end
+		button = _pill_button(ImageGrab.grab(xdisplay=display).convert('RGB'), (26, 127, 55))
 		x_click(display, *button)
 
 		async def held():
@@ -932,17 +936,7 @@ async def test_a_tab_the_person_opens_from_a_shared_tab_waits_for_their_say_so(b
 		await asyncio.sleep(2.5)
 		assert not await listed('/opened/me'), 'a tab the person opened was handed to the AI without asking'
 
-		shot = ImageGrab.grab(xdisplay=display).convert('RGB')
-		blue = [
-			(x, y)
-			for y in range(shot.height // 2, shot.height, 2)
-			for x in range(0, shot.width, 2)
-			if _near(shot.getpixel((x, y)), (57, 73, 171))
-		]
-		assert len(blue) > 200, 'the new tab does not offer to share itself'
-		right = max(x for x, _ in blue)
-		middle = (min(y for _, y in blue) + max(y for _, y in blue)) // 2
-		x_click(display, right - 50, middle)  # "Share this tab", at the right end
+		x_click(display, *_pill_button(ImageGrab.grab(xdisplay=display).convert('RGB'), (57, 73, 171)))  # Share this tab
 		await until(lambda: listed('/opened/me'), timeout=5)
 		mine = next(t for t in (await get(relay, '/json/list')).json() if t['url'].endswith('/opened/me'))
 		await cdp.call('Target.closeTarget', {'targetId': mine['id']})
@@ -953,3 +947,60 @@ async def test_a_tab_the_person_opens_from_a_shared_tab_waits_for_their_say_so(b
 		await until(resumed)  # the person's clicks paused the AI; quiet hands it back
 	finally:
 		await http.close()
+
+
+async def test_an_outdated_extension_reloads_itself_once_its_files_are_current(own_display, tmp_path):
+	"""Branded Chrome keeps running an unpacked extension's old service worker after its files change, until someone
+	presses reload on chrome://extensions. Features then go missing without a word. A relay that sees an older
+	extension asks it to reload itself, once per version; it reloads only if its files on disk differ from the code
+	running, so old files cannot make it loop.
+
+	Chromium unloads an extension loaded with --load-extension when it reloads, so the healing half needs one added
+	through Load unpacked: it runs with BRIDGE_TEST_PROFILE and BRIDGE_TEST_EXTENSION (branded Chrome). With
+	--load-extension, the test checks the guard: old files that are the ones running leave the extension connected."""
+	port = _free_port()
+	relay = await BridgeRelay(port=port).start()
+	loaded = os.environ.get('BRIDGE_TEST_EXTENSION')  # a folder added through Load unpacked in BRIDGE_TEST_PROFILE
+	ext = write_extension(Path(loaded) if loaded else tmp_path / 'ext', relay=f'ws://127.0.0.1:{port}/extension')
+	manifest = json.loads((ext / 'manifest.json').read_text())
+	current = manifest['version']
+	(ext / 'manifest.json').write_text(json.dumps({**manifest, 'version': '0.0.1'}))  # an older copy
+	chrome = os.environ.get('BRIDGE_TEST_BROWSER') or LocalBrowserWatchdog._find_installed_browser_path()
+	assert chrome
+	if loaded:
+		profile = tmp_path / 'profile'
+		shutil.copytree(os.environ['BRIDGE_TEST_PROFILE'], profile, ignore=shutil.ignore_patterns('Singleton*'))
+		args = [chrome, f'--user-data-dir={profile}']
+	else:
+		args = [
+			chrome,
+			f'--user-data-dir={tmp_path / "profile"}',
+			f'--load-extension={ext}',
+			f'--disable-extensions-except={ext}',
+		]
+	args += ['--no-first-run', '--no-default-browser-check', 'about:blank']
+	if os.geteuid() == 0:
+		args[1:1] = ['--no-sandbox', '--test-type']
+	proc = _launch(args, own_display)
+	try:
+		assert (await relay.wait_for_extension(timeout=30)).get('extension') == '0.0.1'
+		await asyncio.sleep(3)  # asked once; its files are the ones running, so it stays as it is
+		assert relay.hello.get('extension') == '0.0.1' and relay._ext is not None, 'it must not loop or unload itself'
+		if not loaded:
+			return  # Chromium would unload a --load-extension extension on reload: the healing half needs Load unpacked
+		await relay.stop()
+
+		write_extension(ext, relay=f'ws://127.0.0.1:{port}/extension')  # the files become current
+		relay = await BridgeRelay(port=port).start()
+
+		async def healed():
+			return relay.hello.get('extension') == current and relay.hello.get('policy') is not None
+
+		await until(healed, timeout=30)
+	finally:
+		await relay.stop()
+		proc.terminate()
+		try:
+			proc.wait(timeout=10)
+		except subprocess.TimeoutExpired:
+			proc.kill()
