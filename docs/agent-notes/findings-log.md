@@ -2108,3 +2108,66 @@ plain space.
 3. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 4. A blind fine-print run where `scan` can't read the DOM text (an off-screen scrollable panel), so `find` alone is
    measured.
+
+## Round 41 (unattended loop): the bridge on Brave and Vivaldi
+
+**Item.** Round 40's Next list, item 2. Item 1 (`loopwatch`) applies to this round's full run.
+
+**Setup.** Downloaded through the network policy from each vendor's apt repository and unpacked, not installed:
+- **Brave** 1.97.56 (Chromium 155);
+- **Vivaldi** 8.2.4133.80 (Chromium 152).
+
+Both still honour `--load-extension`. Both send a plain Chrome user agent, Brave by design, so the relay reports them
+as "Chrome".
+
+**Results** (bridge suite, 11 tests):
+
+| Browser | Result |
+|---|---|
+| Chromium 141 | 11/11, five runs this round |
+| Microsoft Edge 154 | 11/11 |
+| Brave 1.97 | 11/11 |
+| Vivaldi 8.2 | 10/10, plus the Cancel test skipped (below) |
+| Google Chrome 155 (Load unpacked) | 11/11, in three invocations |
+
+**Found.**
+1. **Vivaldi shows no "started debugging this browser" bar.**
+   - Vivaldi draws its own browser UI as a web app and doesn't render Chromium's infobars. Screenshots with a shared,
+     attached tab show none.
+   - So in Vivaldi the person gets no browser-level disclosure and no Cancel. Their consent is still the explicit
+     share, and they stop with the popup or the shortcuts. The extension's badge is hidden in the extensions menu
+     unless pinned.
+   - The Cancel test now skips there with that reason, not a silent pass; on default Chromium a missing bar still
+     fails.
+   - AI.md says this. A visible indicator that doesn't depend on the bar is on the Next list.
+2. **Vivaldi opens only its welcome page on a fresh profile,** ignoring the URL on the command line, so nothing was
+   shared.
+   - Its tabs do carry a normal `tabId` in `chrome.debugger.getTargets()` (checked with a debug op in a scratch copy
+     of the worker), so sharing works once a page is open.
+   - The tests take `BRIDGE_TEST_PROFILE` (a profile past first run) for it.
+3. **Brave farbles window geometry:** `outerHeight - innerHeight` read 4 px.
+   - The tests aimed their real XTest clicks from `screenX/outerHeight`, so on Brave the Cancel search looked off
+     screen. (The pause test passed on Brave only because the farbled numbers still landed inside the page.)
+   - Now the page carries a 6 px magenta corner marker. The tests find it in a real screenshot; it renders as about
+     (211, 14, 213), not #f0f, hence a tolerant match.
+   - The scan stops at the window's edge, where the bare black X screen begins, and takes only filled buttons, not
+     the 1 px underline of a "Learn more" link.
+4. **Brave puts its own notices in the same bar slot** (an analytics notice with "Got it"), and the debugging bar
+   queues behind them, as it would for the person. The Cancel test presses through whichever bar is showing until
+   the stop arrives (at most 3).
+- **The Cancel test still measures the fix:** with the stop disabled in the worker it fails (stuck waiting for the
+  stop); with it, it passes.
+
+**Not measured.**
+- Opera and Arc.
+- Windows and macOS.
+- Whether Vivaldi offers any other built-in sign that an extension is debugging a tab. None was seen.
+
+- Full `tests/ci` on `d34ba59` with `loopwatch`: in progress when this was written; the result follows below.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. An indicator of sharing that doesn't rely on the browser's debugging bar (Vivaldi has none), honest and outside
+   the page so the page isn't changed.
+3. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+4. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
