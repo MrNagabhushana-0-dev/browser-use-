@@ -176,6 +176,11 @@ class BridgeRelay:
 			'tabs': [{'title': t.get('title', ''), 'url': t.get('url', '')} for t in self.tabs.values()],
 		}
 
+	async def forget(self, site: str) -> dict[str, Any]:
+		"""Take a site (an origin) back: no longer allowed, always allowed or declined, and a shared tab on it stops
+		being shared. It only ever takes access away. Returns the sites as they are now."""
+		return (await self._ext_call('forget', site=site)).get('sites') or {}
+
 	def set_holder(self, holder: str) -> None:
 		"""Who drives the shared tabs. The extension's popup and shortcut set this too."""
 		assert holder in ('agent', 'human'), holder

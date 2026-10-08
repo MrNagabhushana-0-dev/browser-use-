@@ -1029,7 +1029,7 @@ ALLOW, ALWAYS, NO = (106, 27, 154), (0, 105, 92), (198, 40, 40)  # the ask windo
 def elsewhere():
 	"""Sites the person has not shared, each on its own loopback address (so each is its own site)."""
 	servers = []
-	for host in ('127.0.0.2', '127.0.0.3', '127.0.0.4', '127.0.0.5', '127.0.0.6', '127.0.0.7', '127.0.0.8'):
+	for host in ('127.0.0.2', '127.0.0.3', '127.0.0.4', '127.0.0.5', '127.0.0.6', '127.0.0.7', '127.0.0.8', '127.0.0.9'):
 		server = HTTPServer(host=host)
 		server.start()
 		server.expect_request('/page').respond_with_data(
@@ -1308,6 +1308,98 @@ async def test_frames_of_sites_the_person_has_not_allowed_stay_out_of_the_ais_re
 	finally:
 		await _back_to_shared(cdp, sid, site)
 		await http.close()
+
+
+SITES, REMOVE = (249, 168, 37), (173, 20, 87)  # the pill's "Sites" button; a site's "Remove" in the list
+
+
+async def test_the_person_can_take_a_site_back_and_its_tab_stops_being_shared(bridge, display, site, elsewhere):
+	""" "Always" used to last until the person edited the extension's settings. Now the pill's "Sites" opens the list of
+	sites the AI may use, each with Remove; the relay can take one back too (it only ever takes access away)."""
+
+	relay, _ = bridge
+	again = elsewhere[7]
+	origin = f'http://127.0.0.9:{again.port}'
+	http, cdp, sid = await _shared_session(relay, site)
+
+	async def sites() -> dict:
+		return (await relay.status())['extension']['sites']
+
+	async def tab_on(host: str) -> dict | None:
+		return next((t for t in (await get(relay, '/json/list')).json() if host in t['url']), None)
+
+	try:
+		await cdp.call('Page.navigate', {'url': again.url_for('/page')}, sid)
+		x_click(display, *await _asked(display, ALWAYS))  # the person allows it always
+		await _until_ok(cdp, 'Page.navigate', {'url': again.url_for('/page')}, sid)
+		await until(lambda: tab_on('127.0.0.9'))
+		assert origin in (await sites())['always']
+		there = await tab_on('127.0.0.9')
+		assert there is not None
+		await cdp.call('Target.activateTarget', {'targetId': there['id']})  # the tab the person is looking at
+
+		now = await relay.forget(origin)
+		assert origin not in now['always'] and origin not in now['allowed'], now
+		await until(lambda: _absent(tab_on, '127.0.0.9'), timeout=10)  # its tab is no longer the AI's
+		x_click(display, *await _pill_shown(display, (57, 73, 171)))  # the person shares it back
+		await until(lambda: tab_on('127.0.0.9'))
+		back = await tab_on('127.0.0.9')
+		assert back is not None
+		sid = (await cdp.call('Target.attachToTarget', {'targetId': back['id'], 'flatten': True}))['result']['sessionId']
+		await _back_to_shared(cdp, sid, site)
+
+		before = await sites()
+		count = len(set(before['allowed']) | set(before['always'])) + len(before['declined'])
+		await asyncio.sleep(1.0)
+		x_click(display, *await _asked(display, SITES))  # the person opens the list
+		x_click(display, *await _topmost(display, REMOVE))  # and removes one site from it
+
+		async def one_fewer() -> bool:
+			now = await sites()
+			return len(set(now['allowed']) | set(now['always'])) + len(now['declined']) == count - 1
+
+		await until(one_fewer)
+		shared_site = f'http://localhost:{site.port}'
+		assert shared_site in (await sites())['allowed'], 'the list put the shared site first and the person removed it'
+	finally:
+		listed = (await get(relay, '/json/list')).json()
+		shared = next((t for t in listed if '/shared' in t['url']), None)
+		if shared:
+			await cdp.call('Target.activateTarget', {'targetId': shared['id']})  # in front of the list tab again
+		await http.close()
+
+
+async def _pill_shown(display: str, colour: tuple[int, int, int], timeout: float = 10.0) -> tuple[int, int]:
+	from PIL import ImageGrab
+
+	for _ in range(int(timeout / 0.25)):
+		try:
+			return _pill_button(ImageGrab.grab(xdisplay=display).convert('RGB'), colour)
+		except AssertionError:
+			await asyncio.sleep(0.25)
+	return _pill_button(ImageGrab.grab(xdisplay=display).convert('RGB'), colour)
+
+
+async def _absent(probe, host: str) -> bool:
+	return await probe(host) is None
+
+
+async def _topmost(display: str, colour: tuple[int, int, int], timeout: float = 10.0) -> tuple[int, int]:
+	"""The middle of the topmost solid button of `colour` on screen (a list has one per row)."""
+	from PIL import ImageGrab
+
+	for _ in range(int(timeout / 0.25)):
+		shot = ImageGrab.grab(xdisplay=display).convert('RGB')
+		points = [
+			(x, y) for y in range(0, shot.height, 3) for x in range(0, shot.width, 3) if _near(shot.getpixel((x, y)), colour, 24)
+		]
+		if len(points) >= 30:
+			top = min(y for _, y in points)
+			row = [(x, y) for x, y in points if y <= top + 18]
+			xs, ys = sorted(x for x, _ in row), sorted(y for _, y in row)
+			return xs[len(xs) // 2], ys[len(ys) // 2]
+		await asyncio.sleep(0.25)
+	raise AssertionError('no such button on screen')
 
 
 def test_the_servers_know_the_words_the_extension_refuses_a_site_with():

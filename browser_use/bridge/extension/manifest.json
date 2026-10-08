@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Retinat bridge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Lets an AI assistant you run on this computer use tabs you share with it, in your own browser.",
   "minimum_chrome_version": "88",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiuWNWWHM0z5k0947MKZhCj4XUPcexenBzjj2E9+D1XUjp6jl1XosNBwcoev76qKMOengWvSZUspBjexb6YeUxpm60TgLxNO/XlAFzpDOY4rl7SNYJPwXZknMjPFDjdmlFiibgyrY/9SPMGTZ6tBTuIAmDNRZ0yMXnuEUtCalbiPOgZcVRt4s6AZZIRXts9qwVElCwd15ftTZK77DWft2ToW5qN8qGHco1vLsWkWwRdLDP+1TLWKZ6tKOlOH9BDMfmpattasikjR/q4a9E6BXagVACWa6NUyM7zKfVi/IBQkqLkZCO2JaNkRc4S3OP0k6h0sq6YlcQgAMjloMBwSHuQIDAQAB",

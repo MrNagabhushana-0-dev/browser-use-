@@ -14,6 +14,11 @@
 	button.hold { background: var(--warn); border-color: var(--warn); color: white; }
 	small { color: var(--mute); }
 	details input { width: 100%; box-sizing: border-box; font: inherit; padding: 4px; }
+	body.page { width: auto; max-width: 560px; margin: 24px auto; font-size: 15px; }
+	ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+	li { display: flex; align-items: center; gap: 8px; }
+	li span { flex: 1; overflow-wrap: anywhere; }
+	button.forget { padding: 3px 10px; background: #ad1457; border-color: #ad1457; color: white; }
 </style>
 </head>
 <body>
@@ -22,6 +27,11 @@
 	<button id="share" class="primary">Share this tab with the AI</button>
 	<button id="hold">Take the wheel</button>
 	<small id="note"></small>
+	<section>
+		<small>Sites the AI may use</small>
+		<ul id="sites"></ul>
+		<small id="nosites">None yet: it asks before using a site you haven't shared.</small>
+	</section>
 	<details>
 		<summary><small>Relay address</small></summary>
 		<input id="relay" spellcheck="false">

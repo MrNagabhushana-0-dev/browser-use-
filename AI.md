@@ -61,7 +61,10 @@ Then:
     page reaches you, and its pill asks the person "Let it work here?". The same happens when they take a shared tab
     to another site themselves.
   - `relay.status()` lists the allowed, always-allowed and declined sites. Allowed sites last until the browser
-    closes; Always lasts until the person removes it. `python -m browser_use.bridge extension DIR --always-allow SITE`
+    closes; Always lasts until the person removes it.
+  - **Taking a site back:** the pill's **Sites** button (and the extension's toolbar popup) lists the sites with a
+    Remove each. A removed site is asked about again, and a shared tab on it stops being shared at once.
+    `relay.forget(site)` does the same from code; it only ever takes access away. `python -m browser_use.bridge extension DIR --always-allow SITE`
     (`https://*.example.com` for subdomains, `*` for every site, as before this check) writes them in advance.
   - **Frames of other sites** inside an allowed page (a sign-in widget, a payment form, an embed) are shown to you
     only when their site is allowed too. Otherwise their own sessions never reach you: no attach, no events, no

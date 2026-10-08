@@ -115,12 +115,18 @@
 			button.quiet { background: transparent; color: #fff; text-decoration: underline; padding: 6px 4px; }
 			button { font: inherit; border: 0; border-radius: 999px; padding: 6px 12px; cursor: pointer;
 				background: #fff; color: #222; }
+			button.sites { background: #f9a825; color: #222; padding: 6px 10px; }
 		</style><div class="pill"><span class="text"></span><button type="button" class="quiet"></button>` +
-			`<button type="button" class="main"></button></div>`;
+			`<button type="button" class="sites">Sites</button><button type="button" class="main"></button></div>`;
 		const pill = root.querySelector('.pill');
 		const text = root.querySelector('.text');
 		const button = root.querySelector('button.main');
 		const quiet = root.querySelector('button.quiet');
+		const sites = root.querySelector('button.sites');
+		sites.addEventListener('click', (e) => {
+			e.stopPropagation();
+			if (e.isTrusted) ask({ ask: 'sites' }); // the person's list of sites, opened in a tab of its own
+		});
 		const ask = (msg, then) => {
 			try {
 				chrome.runtime.sendMessage(msg, (s) => s && !s.error && then && then(s));
@@ -141,6 +147,7 @@
 		});
 		host.paint = () => {
 			const human = state.holder === 'human';
+			sites.hidden = !!state.offered;
 			if (state.offered) {
 				pill.className = 'pill offer';
 				const site = state.moved && state.moved.site;

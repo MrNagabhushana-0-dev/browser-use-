@@ -235,6 +235,29 @@ async function answer(reply, windowId) {
 	emit({ event: 'site', origin: asked.origin, answer: reply.answer });
 }
 
+// Take a site back: no longer allowed (this session or always) and no longer declined. A shared tab on it stops being
+// shared, as if it had just moved there. This only ever takes access away, so the relay may ask for it too.
+async function forgetSite(site) {
+	state.allowed.delete(site);
+	state.declined.delete(site);
+	if (state.settings.alwaysAllow.includes(site)) {
+		state.settings.alwaysAllow = state.settings.alwaysAllow.filter((s) => s !== site);
+		await keepSettings({ alwaysAllow: state.settings.alwaysAllow });
+	}
+	for (const g of [...state.clickDeclined]) if (g.startsWith(site + '|')) state.clickDeclined.delete(g);
+	await save();
+	for (const tabId of [...state.shared]) {
+		const url = state.urls.get(tabId) || (await call(C.tabs, 'get', tabId).catch(() => ({}))).url;
+		if (url && siteOf(url) === site && !allowedUrl(url)) await moved(tabId, url);
+	}
+	emit({ event: 'site', origin: site, answer: 'forgotten' });
+}
+
+function sitesNow() {
+	const asking = state.asking ? state.asking.origin : null;
+	return { allowed: [...state.allowed], always: state.settings.alwaysAllow, declined: [...state.declined], asking };
+}
+
 async function keepSettings(changes) {
 	// settings the person changed here, kept across restarts on top of the packaged ones
 	const local = (await call(C.storage.local, 'get', 'settings')).settings || {};
@@ -507,13 +530,13 @@ function needShared(tabId) {
 }
 
 async function handle(msg) {
-	if (state.stopped && msg.op !== 'ping' && msg.op !== 'tabs') throw new Error(STOPPED);
+	if (state.stopped && !['ping', 'tabs', 'forget'].includes(msg.op)) throw new Error(STOPPED); // forgetting only takes access away
 	switch (msg.op) {
-		case 'ping': {
-			const asking = state.asking ? state.asking.origin : null;
-			const sites = { allowed: [...state.allowed], always: state.settings.alwaysAllow, declined: [...state.declined], asking };
-			return { sites };
-		}
+		case 'ping':
+			return { sites: sitesNow() };
+		case 'forget':
+			await forgetSite(String(msg.site || ''));
+			return { sites: sitesNow() };
 		case 'reload': {
 			// The relay saw an older copy running: Chrome keeps the old service worker after the files change until
 			// the extension is reloaded. Reload only if the files on disk differ from the code running: otherwise it
@@ -689,6 +712,7 @@ async function status(tabId) {
 		holder: state.holder,
 		shared: state.shared.has(tabId),
 		count: state.shared.size,
+		sites: sitesNow(),
 	};
 }
 
@@ -899,7 +923,7 @@ C.runtime.onMessage.addListener((msg, sender, reply) => {
 	// The popup (an extension page) may share any tab and change the relay; content scripts in pages may only act on
 	// their own tab through its pill.
 	const fromExtension = sender.id === C.runtime.id && (sender.url || '').startsWith(C.runtime.getURL(''));
-	if (['share', 'unshare', 'relay'].includes(msg.ask) && !fromExtension) return false;
+	if (['share', 'unshare', 'relay', 'forget'].includes(msg.ask) && !fromExtension) return false;
 	(async () => {
 		await state.ready;
 		if (msg.ask === 'share') await share(msg.tabId, 'shared by the person');
@@ -907,6 +931,11 @@ C.runtime.onMessage.addListener((msg, sender, reply) => {
 		else if (msg.ask === 'holder') await setHolder(msg.holder);
 		else if (msg.ask === 'pill') return pillState(sender.tab ? sender.tab.id : -1);
 		else if (msg.ask === 'share-here' && sender.tab) await share(sender.tab.id, 'shared by the person');
+		else if (msg.ask === 'forget') await forgetSite(String(msg.site || ''));
+		else if (msg.ask === 'sites' && sender.tab) {
+			// from the pill: the person's list of sites, in a tab of its own that is never shared
+			await call(C.tabs, 'create', { url: C.runtime.getURL('popup.html') + '#page', active: true });
+		}
 		else if (msg.ask === 'decline-here' && sender.tab) {
 			state.offered.delete(sender.tab.id);
 			state.moved.delete(sender.tab.id);
