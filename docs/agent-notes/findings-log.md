@@ -2921,3 +2921,41 @@ never could: the frame's DOM, its script context, its non-HttpOnly cookies.
     requests (Google sign-in, component checks) also go through that proxy, and sometimes came last.
   - It now asks what it meant: the proxy got the name, never the address the name resolves to. This was a test
     bug; the routing was right.
+- **Full `tests/ci` on `2f0bb99`: green, 1,652 passed, 30 skipped, 0 failed** (40m47s, `loopwatch` on, 19 stalls).
+
+## Round 52: the person can take a site back
+
+**Item.** Next item 3. "Always" lasted until the person edited the extension's settings by hand. Claude in Chrome
+lets people manage site permissions.
+
+**Built** (`2042b3a`):
+- The pill has a **Sites** button. It opens the extension's list of the sites the AI may use, in a tab of its own
+  that is never shared, and the toolbar popup shows the same list.
+  - The list covers this session's sites, the Always ones and the ones the person said no to, sorted, each with
+    Remove.
+  - The AI can press Sites (CDP clicks are trusted), but that only opens a page it can't reach.
+- **Removing a site:**
+  - takes it out of all three lists, with Always persisted;
+  - forgets the person's "no"s to held clicks on it;
+  - stops sharing any tab on that site at once, as if the tab had just moved there. The AI asks again next time.
+- `relay.forget(site)` does the same from code. It only ever takes access away, so the relay may ask for it, and it
+  works even after Cancel.
+- Extension 0.4.0.
+
+**Tests:**
+- A new bridge test, through the relay and through the person's own clicks (Sites, then Remove).
+- **Mutation check:** 4 of 4 mutants fail it: Always kept, tab kept shared, Sites does nothing, Remove does nothing.
+- Bridge file 34/34 twice on Chromium.
+- **Found by the full file, not alone:** the test's Remove took the top row of the list. In the full file that was
+  the shared site itself, which left the later tests with no shared tab. The list is now sorted, and the test
+  asserts the shared site survives.
+
+**Not done:** a force-ask category, sites that ask every time with no Always, as Claude in Chrome has for some
+categories.
+
+**Next, in order:**
+1. A force-ask category: listed sites (banks, health, government) ask every time, with no Always.
+2. Rerun the branded browsers with the frame gating and the Sites list (Edge, Brave, Vivaldi, Chrome).
+3. The A/B test of sheet vs recall vs journal, with blind agents (open since Round 10).
+4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+5. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
