@@ -2073,3 +2073,35 @@ off-screen text in a scrollable panel).
 2. Make `find`'s context snippet stop at block boundaries, as matching already does.
 3. Brave and Vivaldi through the bridge's Load-unpacked path (both Linux packages are reachable).
 4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+
+## Round 40 (unattended loop): `find` keeps a match and its context inside one block
+
+**Item.** Round 39's Next list, item 2. Item 1 (`loopwatch`) is applied to this round's full run.
+
+**The defect.** `retinat_find` flattens the page's composed tree into one string and recorded a block boundary as a
+plain space.
+- **Snippet:** the context printed around a match ran on into the neighbouring paragraph. In Round 39's blind runs
+  this produced "two, pick the larger. Terms apply...".
+- **Matching:** a query could match across two paragraphs. Chrome's own find-in-page doesn't do that.
+- **A dropped boundary:** where the text before the boundary ended in whitespace, the boundary wasn't recorded at all.
+
+**Fix (`00fd2be`).**
+- A block break is now a newline in the flattened text, also after trailing whitespace. Queries fold whitespace to
+  spaces, so they never contain it, and a match can't cross a block.
+- The context is cut at the nearest break on either side.
+- Inline joins ("Check<b>out</b>") and shadow-root/slot handling are unchanged (the Round 34 tests still pass).
+
+**Measured.**
+- The new test fails on the old code: the context read "bon Sizes run true, so pick the larger. Terms apply to
+  every order.". It passes now: "Terms apply to every order.", and "larger. terms" is not found.
+- Retinat tests: 13/13.
+- On the way, a JS string in a Python triple-quoted literal needed `\\n`, not `\n`. The first attempt broke `find` with
+  a syntax error, and the existing test caught it before commit.
+- Full `tests/ci` on `00fd2be` with `loopwatch`: in progress when this was written; the result follows below.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. Brave and Vivaldi through the bridge's Load-unpacked path (both Linux packages are reachable).
+3. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+4. A blind fine-print run where `scan` can't read the DOM text (an off-screen scrollable panel), so `find` alone is
+   measured.
