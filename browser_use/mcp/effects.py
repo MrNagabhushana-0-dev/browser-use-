@@ -14,7 +14,7 @@ It fails closed. A tool that only looks reports `none`. An acting tool reports `
 import json
 from collections.abc import Awaitable
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 if TYPE_CHECKING:
 	import mcp.types as types
@@ -47,6 +47,14 @@ def refused(message: str) -> Refused:
 	"""A handler said, in its answer, that it refused before doing anything: whatever was marked, nothing was sent."""
 	_state.set('none')
 	return Refused(message)
+
+
+def check_arguments(schema: dict[str, Any] | None, arguments: dict[str, Any]) -> None:
+	"""Refuse a call that leaves out an argument its tool's schema requires, before its handler runs: a handler that
+	failed on it partway would report `unknown` for a call that could never have done anything."""
+	missing = [name for name in (schema or {}).get('required', []) if name not in arguments]
+	if missing:
+		raise Refused(f'missing required argument{"s" if len(missing) > 1 else ""}: {", ".join(missing)}')
 
 
 async def act(step: Awaitable[T]) -> T:

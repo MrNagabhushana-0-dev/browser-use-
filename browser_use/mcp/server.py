@@ -237,6 +237,7 @@ class BrowserUseServer:
 		self.browser_session: BrowserSession | None = None
 		self.tools: Tools | None = None
 		self._read_only_tools: set[str] = set()  # from the last tools/list: their failures changed nothing
+		self._schemas: dict[str, dict[str, Any]] = {}  # from the last tools/list: calls missing a required argument are refused
 		self.llm: ChatOpenAI | None = None
 		self.file_system: FileSystem | None = None
 		self._telemetry = ProductTelemetry()
@@ -559,6 +560,7 @@ class BrowserUseServer:
 				*self._eyes_tool_entries(),
 			]
 			self._read_only_tools = {t.name for t in tools if t.annotations and t.annotations.read_only_hint}
+			self._schemas = {t.name: t.input_schema for t in tools}
 			return types.ListToolsResult(tools=tools)
 
 		async def handle_list_resources(_context: Any, _params: types.PaginatedRequestParams) -> types.ListResourcesResult:
@@ -579,6 +581,7 @@ class BrowserUseServer:
 
 			token = effects.begin()
 			try:
+				effects.check_arguments(self._schemas.get(name), arguments or {})
 				result = await self._execute_tool(name, arguments or {})
 				if isinstance(result, list):
 					return types.CallToolResult(content=result)
@@ -1751,7 +1754,7 @@ class BrowserUseServer:
 	async def _close_session(self, session_id: str) -> str:
 		"""Close a specific browser session."""
 		if session_id not in self.active_sessions:
-			return f'Session {session_id} not found'
+			return f'Error: session {session_id} not found'
 
 		session_data = self.active_sessions[session_id]
 		session = session_data['session']

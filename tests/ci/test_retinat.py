@@ -45,6 +45,14 @@ REQUESTS = (
 	".then(() => { const i = new Image(); i.src = '/missing.png'; document.body.append(i); });"
 	'</script></body>'
 )
+CONSOLE = (
+	'<!doctype html><title>Console</title><body><h1>App</h1><img src="/no-such.png"><script>'
+	"console.log('app started');"
+	"console.warn('slow response from the cart service');"
+	"console.error('payment failed: api_key=sk_live_abcdefghijklmnop1234 rejected');"
+	"setTimeout(() => { throw new Error('cart is undefined at render'); }, 50);"
+	'</script></body>'
+)
 WALL = '<!doctype html><title>Just a moment...</title><body>Checking your browser before accessing the site.</body>'
 
 
@@ -58,6 +66,8 @@ def site():
 	server.expect_request('/find-deep').respond_with_data(FIND_DEEP, content_type='text/html')
 	server.expect_request('/click').respond_with_data(CLICK, content_type='text/html')
 	server.expect_request('/requests').respond_with_data(REQUESTS, content_type='text/html')
+	server.expect_request('/console').respond_with_data(CONSOLE, content_type='text/html')
+	server.expect_request('/no-such.png').respond_with_data('', status=404)
 	server.expect_request('/api/login', method='POST').respond_with_json(
 		{'user': {'name': 'Ada'}, 'session': 'sess-v4lue', 'note': JWT, 'greeting': 'hello Ada'}
 	)
@@ -363,3 +373,33 @@ async def test_effect_is_committed_when_the_act_went_through_and_only_what_follo
 		'effect_state': 'committed',
 	}
 	assert "don't repeat it" in result.content[0].text  # type: ignore[union-attr]
+
+
+async def test_console_shows_what_the_page_logged_and_threw_with_secrets_masked(retinat, site):
+	"""After Claude in Chrome's read_console_messages: errors, warnings, logs and uncaught exceptions, newest last,
+	filtered by level or pattern, with keys and tokens masked like retinat_requests masks them."""
+	import asyncio
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/console')})
+	everything = ''
+	for _ in range(50):
+		everything = _text(await _call(retinat, 'retinat_console', {}))
+		if 'cart is undefined' in everything:
+			break
+		await asyncio.sleep(0.1)
+	assert 'app started' in everything and 'slow response' in everything, everything
+	assert 'payment failed' in everything and 'sk_live_' not in everything and '[redacted]' in everything, everything
+	assert 'cart is undefined at render' in everything, 'uncaught exceptions are there too'
+	for _ in range(30):
+		if 'no-such.png' in everything:
+			break
+		await asyncio.sleep(0.1)
+		everything = _text(await _call(retinat, 'retinat_console', {}))
+	assert '[network]' in everything and 'no-such.png' in everything, "the browser's own entries (a failed load) too"
+	cursor = int(everything.split('since=')[1].split('.')[0])
+	assert _text(await _call(retinat, 'retinat_console', {'since': cursor})).startswith('0 console entries'), 'cursor'
+	errors = _text(await _call(retinat, 'retinat_console', {'level': 'error'}))
+	assert 'payment failed' in errors and 'cart is undefined' in errors and 'app started' not in errors, errors
+	assert 'slow response' not in errors
+	cart = _text(await _call(retinat, 'retinat_console', {'pattern': 'cart'}))
+	assert 'cart is undefined' in cart and 'slow response from the cart' in cart and 'payment failed' not in cart, cart

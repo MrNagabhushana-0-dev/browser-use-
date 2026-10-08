@@ -39,6 +39,7 @@ For a native desktop app rather than a web page, a server started with `BROWSER_
 4. **Check the result by looking again**, not by assuming it worked.
    - `retinat_requests(only="failed")` when something did nothing: the failing request and, with `body=#n`, what
      the server said (tokens and passwords masked).
+   - `retinat_console(level="error")` when the page breaks or goes blank: what it logged and threw.
 5. **Find bugs across a site:** `retinat_explore(url)` returns a report plus a sheet of every
    page. Present the findings with their evidence.
 

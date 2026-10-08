@@ -110,9 +110,15 @@ async def test_a_failed_call_says_whether_it_may_have_acted(server: BrowserUseSe
 
 	nonsense = await call('no_such_tool', {})  # (a browser_* name would launch a browser first)
 	assert (nonsense.structured_content or {}).get('effect_state') == 'none', 'an unknown tool did nothing'
-	acting = await call('browser_close_session', {})  # fails on its arguments, but nothing marks that as before sending
+	acting = await call('browser_close_session', {'session_id': ['a', 'list']})  # raises inside an acting handler
 	assert (acting.structured_content or {}).get('effect_state') == 'unknown'
 	assert any('effect: unknown' in getattr(block, 'text', '') for block in acting.content)
+	# Leaving out a required argument is refused before the handler runs: nothing started, and no browser launched.
+	forgot = await call('browser_navigate', {'new_tab': True})
+	assert (forgot.structured_content or {}).get('effect_state') == 'none', forgot
+	assert 'url' in forgot.content[0].text and server.browser_session is None  # type: ignore[union-attr]
+	gone = await call('browser_close_session', {'session_id': 'no-such-session'})  # was reported as success
+	assert (gone.structured_content or {}).get('effect_state') == 'none' and 'not found' in gone.content[0].text  # type: ignore[union-attr]
 
 
 async def test_failures_told_as_text_are_errors_and_an_unknown_tool_launches_nothing(server: BrowserUseServer) -> None:

@@ -163,6 +163,7 @@ continuous stream on disk rather than in your context.
 | What appeared, played or flashed since you last asked (toasts, sounds, cuts), for clients without the hook | `retinat_changes` | text only, a line per change |
 | Find everything broken on a site | `retinat_explore` | a report plus 1 sheet |
 | Know what the page fetched, which request failed, or what an API answered | `retinat_requests` (`only="failed"` or `"api"`; `body=#n` for one response, tokens and passwords masked) | text only, about 20 tokens a line |
+| Know what the page logged or threw: console errors and warnings, uncaught exceptions, failed loads | `retinat_console` (`level="error"` or `"warning"`, `pattern` a regex, `since` the cursor; keys and tokens masked) | text only, a line per entry |
 
 Token figures are estimates. Images are costed at about one token per 28×28 px patch.
 
@@ -209,7 +210,8 @@ would land on something else. Pages shift between a look and a click, and Delete
    Failures of tools that only look are always `none`. Retinat marks exactly when input starts going out.
    The browser-use server reports its pre-checks as errors with `none`: no session, element not found, bad
    arguments, an unknown tool (which no longer starts a browser). Its actions aren't marked that finely yet, so
-   an exception during one says `unknown`.
+   an exception during one says `unknown`. On both servers a call missing an argument its tool requires is
+   refused before anything runs, with `none` and the missing names.
 
 ## Python in 20 lines
 

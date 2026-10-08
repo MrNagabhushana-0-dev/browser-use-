@@ -13,6 +13,7 @@ turn at a time:
   `retinat_key`: real touch, mouse and keyboard input, with feed moves confirmed by sight.
 - `retinat_explore`: a whole site crawled and checked, with a bug report and a page sheet.
 - `retinat_now`: one line on what is on screen and audible right now.
+- `retinat_console`: what the page logged and threw, masked like the requests.
 - `retinat_requests`: what the page fetched (status, type, size, time, failures), and one response body,
   with tokens, passwords and keys masked.
 
@@ -463,6 +464,24 @@ def _browser_tools() -> list['types.Tool']:
 			annotations=ro,
 		),
 		types.Tool(
+			name='retinat_console',
+			description=(
+				"What the page logged since it opened: console messages, uncaught exceptions and the browser's own "
+				'entries (failed loads, blocked scripts), newest last, with a cursor. level="error" or "warning" to '
+				'narrow; pattern is a regular expression. Keys and tokens are masked. It only listens.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'since': {'type': 'integer', 'default': 0, 'description': 'Only entries after this #n (the cursor).'},
+					'level': {'type': 'string', 'enum': ['all', 'warning', 'error'], 'default': 'all'},
+					'pattern': {'type': 'string', 'description': 'A regular expression the text must match.'},
+					'limit': {'type': 'integer', 'default': 30, 'minimum': 1, 'maximum': 200},
+				},
+			},
+			annotations=ro,
+		),
+		types.Tool(
 			name='retinat_now',
 			description='One line on what is on screen and audible right now. No image; nearly free.',
 			input_schema={'type': 'object', 'properties': {}},
@@ -517,7 +536,10 @@ class RetinatServer(BrowserUseServer):
 			from browser_use.mcp import effects
 
 			token = effects.begin()
+			listed = {t.name: t for t in [*_tools(), *self._network_tool_entries('retinat')]}
 			try:
+				if params.name in listed:
+					effects.check_arguments(listed[params.name].input_schema, params.arguments or {})
 				result = await self._call_retinat(params.name, params.arguments or {})
 				if isinstance(result, str) and result.startswith(TEXT_FAILURES):  # shared handlers report checks as text
 					raise effects.refused(result.removeprefix('Error: '))
@@ -527,8 +549,8 @@ class RetinatServer(BrowserUseServer):
 				return types.CallToolResult(content=content)
 			except Exception as e:
 				# Every input and navigation below goes through effects.act, so a failure says if anything happened.
-				looking = {t.name for t in _tools() if t.annotations and t.annotations.read_only_hint}
-				return effects.failure(params.name, e, read_only=params.name in looking | {'retinat_network_status'})
+				looking = {name for name, t in listed.items() if t.annotations and t.annotations.read_only_hint}
+				return effects.failure(params.name, e, read_only=params.name in looking)
 			finally:
 				effects.end(token)
 
@@ -659,6 +681,18 @@ class RetinatServer(BrowserUseServer):
 				blocks.append(types.ImageContent(type='image', data=base64.b64encode(sheet).decode(), mime_type='image/jpeg'))
 			return blocks
 		eyes = await self._eyes()
+		if name == 'retinat_console':
+			from browser_use.eyes.console import render as render_console
+
+			log = eyes.console
+			since = int(args.get('since', 0))
+			picked = log.entries(
+				since=since,
+				level=str(args.get('level', 'all')),
+				pattern=str(args.get('pattern') or ''),
+				limit=int(args.get('limit', 30)),
+			)
+			return render_console(picked, since, log.last_seq)
 		if name == 'retinat_requests':
 			from browser_use.eyes.requests import render
 

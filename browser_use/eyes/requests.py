@@ -15,6 +15,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict
 
+from browser_use.eyes.listen import TabListener
+
 logger = logging.getLogger(__name__)
 
 MASK = '[redacted]'
@@ -161,66 +163,30 @@ class Request(BaseModel):
 		return self.type in API_TYPES or 'json' in self.mime
 
 
-class RequestLog:
+class RequestLog(TabListener):
 	"""Records what one tab requests, from Network events only. Bounded (oldest dropped); never intercepts."""
 
 	def __init__(self, browser_session: Any, limit: int = 400):
-		self.browser_session = browser_session
+		super().__init__(browser_session)
 		self.limit = limit
 		self._by_id: dict[str, Request] = {}
 		self._order: deque[Request] = deque()
 		self._seq = 0
-		self._session_id: str | None = None
-		self._cdp: Any = None
-		self._restore: list[tuple[str, Any, Any]] = []
-
-	@property
-	def running(self) -> bool:
-		return bool(self._restore)
 
 	@property
 	def last_seq(self) -> int:
 		return self._seq
 
-	async def start(self, target_id: str | None = None) -> None:
-		if self.running:
-			return
-		cdp = await self.browser_session.get_or_create_cdp_session(target_id, focus=False)
-		self._cdp, self._session_id = cdp, cdp.session_id
-		for method, fn in (
+	def events(self) -> list[tuple[str, Any]]:
+		return [
 			('Network.requestWillBeSent', self._sent),
 			('Network.responseReceived', self._response),
 			('Network.loadingFinished', self._finished),
 			('Network.loadingFailed', self._failed),
-		):
-			self._chain(method, fn)
-		await cdp.cdp_client.send.Network.enable(session_id=self._session_id)  # left on at stop: others use it too
+		]
 
-	async def stop(self) -> None:
-		registry = self.browser_session.cdp_client._event_registry
-		for method, incumbent, ours in reversed(self._restore):
-			if registry._handlers.get(method) is ours:
-				if incumbent is not None:
-					registry.register(method, incumbent)
-				else:
-					registry.unregister(method)
-		self._restore.clear()
-
-	def _chain(self, method: str, fn: Any) -> None:
-		# cdp-use keeps one callback per event (downloads and HAR watchdogs live on Network events): chain, don't take.
-		registry = self.browser_session.cdp_client._event_registry
-		incumbent = registry._handlers.get(method)
-
-		def both(event: Any, session_id: str | None = None) -> Any:
-			if session_id == self._session_id:
-				try:
-					fn(event)
-				except Exception as e:
-					logger.debug(f'request log: {method} failed: {e}')
-			return incumbent(event, session_id) if incumbent is not None else None
-
-		self._restore.append((method, incumbent, both))
-		registry.register(method, both)
+	async def enable(self, cdp: Any) -> None:
+		await cdp.cdp_client.send.Network.enable(session_id=self._session_id)
 
 	# -- events --------------------------------------------------------------------------
 
