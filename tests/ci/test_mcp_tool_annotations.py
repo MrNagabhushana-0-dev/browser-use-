@@ -94,3 +94,22 @@ async def test_unknown_tool_is_reported_as_mcp_error(server: BrowserUseServer) -
 	assert len(result.content) == 1
 	assert isinstance(result.content[0], types.TextContent)
 	assert 'Unknown tool: does_not_exist' in result.content[0].text
+
+
+async def test_a_failed_call_says_whether_it_may_have_acted(server: BrowserUseServer) -> None:
+	"""The same hint decides what a failure reports (browser_use/mcp/effects.py). These handlers don't mark when they
+	start sending, so a failing tool that isn't read-only fails closed: effect unknown, look before retrying."""
+	await _list_tools(server)
+	handler = server.server.get_request_handler('tools/call')
+	assert handler is not None
+
+	async def call(name: str, arguments: dict) -> types.CallToolResult:
+		result = await handler.handler(None, types.CallToolRequestParams(name=name, arguments=arguments))  # type: ignore[arg-type]
+		assert isinstance(result, types.CallToolResult) and result.is_error, result
+		return result
+
+	nonsense = await call('no_such_tool', {})  # (a browser_* name would launch a browser first)
+	assert (nonsense.structured_content or {}).get('effect_state') == 'none', 'an unknown tool did nothing'
+	acting = await call('browser_close_session', {})  # fails on its arguments, but nothing marks that as before sending
+	assert (acting.structured_content or {}).get('effect_state') == 'unknown'
+	assert any('effect: unknown' in getattr(block, 'text', '') for block in acting.content)

@@ -513,6 +513,7 @@ async def test_retinat_mcp_works_in_the_persons_browser_but_leaves_passwords_to_
 		finally:
 			relay.set_holder('agent')
 		assert 'the person is using the browser' in held, f'a checked click under a hold gives the real reason: {held}'
+		assert 'effect: none' in held, 'refused before anything was sent, so the AI knows a retry is safe'
 		assert server.browser_session is not None
 		cdp = await server.browser_session.get_or_create_cdp_session(focus=False)
 		value = await cdp.cdp_client.send.Runtime.evaluate(

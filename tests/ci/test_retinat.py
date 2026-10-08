@@ -320,3 +320,46 @@ async def test_requests_lists_what_the_page_fetched_with_its_secrets_masked(reti
 
 	last = int(re.search(r'since=(\d+)', listed).group(1))  # type: ignore[union-attr]
 	assert _text(await _call(retinat, 'retinat_requests', {'since': last})).startswith('0 requests after')
+
+
+async def test_a_failed_call_says_whether_anything_happened(retinat, site):
+	"""After BrowserSkill's effect_state. An agent retrying a failed action must know whether the first try already
+	did something: none (nothing was sent, retry freely), unknown (input or navigation had started: look first),
+	committed (it happened; only what followed failed)."""
+	import socket
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/click')})
+	refused = await _call(retinat, 'retinat_click', {'x': 320, 'y': 120, 'expect': 'Save'})
+	assert refused.is_error and (refused.structured_content or {}).get('effect_state') == 'none', _text(refused)
+	assert 'effect: none' in _text(refused)
+	backwards = await _call(retinat, 'retinat_recall', {'t0': 5, 't1': 1})
+	assert (backwards.structured_content or {}).get('effect_state') == 'none', 'a tool that only looks changed nothing'
+	nonsense = await _call(retinat, 'retinat_fly', {})
+	assert (nonsense.structured_content or {}).get('effect_state') == 'none'
+
+	with socket.socket() as sock:
+		sock.bind(('127.0.0.1', 0))
+		dead = sock.getsockname()[1]
+	gone = await _call(retinat, 'retinat_open', {'url': f'http://127.0.0.1:{dead}/'})
+	assert gone.is_error and (gone.structured_content or {}).get('effect_state') == 'unknown', _text(gone)
+	assert 'look' in _text(gone).split('effect: unknown', 1)[1], 'unknown says to look before trying again'
+
+
+async def test_effect_is_committed_when_the_act_went_through_and_only_what_followed_failed():
+	from browser_use.mcp import effects
+
+	async def press() -> str:
+		return 'pressed'
+
+	token = effects.begin()
+	try:
+		assert await effects.act(press()) == 'pressed'
+		result = effects.failure('retinat_key', RuntimeError('the reading after it failed'), read_only=False)
+	finally:
+		effects.end(token)
+	assert result.structured_content == {
+		'tool': 'retinat_key',
+		'error': 'the reading after it failed',
+		'effect_state': 'committed',
+	}
+	assert "don't repeat it" in result.content[0].text  # type: ignore[union-attr]

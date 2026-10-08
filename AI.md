@@ -146,6 +146,15 @@ would land on something else. Pages shift between a look and a click, and Delete
 6. **Report honestly.** Say what was measured and what was estimated. Say "blocked" when you
    were blocked, and "couldn't hear it" when there was no audio track. Never describe a
    challenge page as the site's content.
+7. **Read the effect of a failed call before retrying.** Every failed Retinat or browser-use call ends with
+   `effect: none`, `unknown` or `committed`, also given as JSON and as `structuredContent.effect_state`:
+   - `none`: nothing was sent. Fix the cause and try again.
+   - `unknown`: input or navigation had started. Look at the page first: the first try may have landed.
+   - `committed`: it happened, and only what followed failed. Don't repeat it.
+
+   Failures of tools that only look are always `none`. Retinat marks exactly when input starts going out. The
+   browser-use server's own actions aren't marked that finely yet, so their failures say `unknown` unless they
+   were refused outright.
 
 ## Python in 20 lines
 

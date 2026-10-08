@@ -40,6 +40,22 @@ if TYPE_CHECKING:
 	from browser_use.bridge import BridgeRelay
 
 TOOL_PREFIX = 'retinat_'
+# Tools that send input, navigate, scroll or play: refused up front while the person holds the wheel.
+ACTING = frozenset(
+	{
+		'retinat_open',
+		'retinat_explore',
+		'retinat_watch',
+		'retinat_scan',
+		'retinat_browse',
+		'retinat_next',
+		'retinat_tap',
+		'retinat_click',
+		'retinat_swipe',
+		'retinat_type',
+		'retinat_key',
+	}
+)
 
 # What a click at (x, y) lands on: the topmost element there (into open shadow roots), lifted to the control that owns
 # it, described as role plus the text a person would read on it.
@@ -381,7 +397,12 @@ class RetinatServer(BrowserUseServer):
 		async def list_tools(_context: Any, _params: 'types.PaginatedRequestParams') -> 'types.ListToolsResult':
 			return types.ListToolsResult(tools=[*_tools(), *self._network_tool_entries('retinat')])
 
+		looking = {t.name for t in _tools() if t.annotations and t.annotations.read_only_hint} | {'retinat_network_status'}
+
 		async def call_tool(_context: Any, params: 'types.CallToolRequestParams') -> 'types.CallToolResult':
+			from browser_use.mcp import effects
+
+			token = effects.begin()
 			try:
 				result = await self._call_retinat(params.name, params.arguments or {})
 				content: list[types.ContentBlock] = (
@@ -389,7 +410,10 @@ class RetinatServer(BrowserUseServer):
 				)
 				return types.CallToolResult(content=content)
 			except Exception as e:
-				return types.CallToolResult(content=[types.TextContent(type='text', text=f'Error: {e}')], is_error=True)
+				# Every input and navigation below goes through effects.act, so a failure says if anything happened.
+				return effects.failure(params.name, e, read_only=params.name in looking)
+			finally:
+				effects.end(token)
 
 		async def empty_resources(_context: Any, _params: 'types.PaginatedRequestParams') -> 'types.ListResourcesResult':
 			return types.ListResourcesResult(resources=[])
@@ -473,10 +497,12 @@ class RetinatServer(BrowserUseServer):
 		return value if isinstance(value, str) and value else None
 
 	async def _call_retinat(self, name: str, args: dict[str, Any]) -> str | list['types.ContentBlock']:
+		from browser_use.mcp.effects import Refused, act
+
 		if not name.startswith(TOOL_PREFIX):
-			raise ValueError(f'Unknown tool: {name}')
+			raise Refused(f'Unknown tool: {name}')
 		if name == 'retinat_network':
-			return await self._network_set(args)
+			return await act(self._network_set(args))
 		if name == 'retinat_network_status':
 			return await self.network.status()
 		if name in ('retinat_desktop_look', 'retinat_desktop_watch'):
@@ -490,17 +516,19 @@ class RetinatServer(BrowserUseServer):
 			return self._content(await desktop.watch(seconds=float(args.get('seconds', 8))))
 		await self._ensure_session()
 		assert self.browser_session is not None
+		if self.bridge is not None and name in ACTING:
+			self._check_wheel()
 		if name == 'retinat_open':
 			if not args.get('new_tab'):
 				await self._eyes()  # watch from the page's first moment: what appears right after load counts
-			note = await self._navigate_routed(args['url'], bool(args.get('new_tab')), strict=True)
+			note = await act(self._navigate_routed(args['url'], bool(args.get('new_tab')), strict=True))
 			await asyncio.sleep(1.0)
 			return await self._wall_note() + note
 		if name == 'retinat_explore':
 			from browser_use.explore import Explorer, render_markdown, render_sheet
 
 			explorer = Explorer(self.browser_session, max_pages=int(args.get('max_pages', 25)))
-			report = await explorer.run(args['url'])
+			report = await act(explorer.run(args['url']))
 			blocks: list[types.ContentBlock] = [types.TextContent(type='text', text=render_markdown(report))]
 			sheet = render_sheet(explorer.looks)
 			if sheet:
@@ -521,28 +549,32 @@ class RetinatServer(BrowserUseServer):
 			return self._content(await eyes.look(detail=detail if detail != 'glance' else 'look'))
 		if name == 'retinat_watch':
 			return self._content(
-				await eyes.watch(
-					seconds=float(args.get('seconds', 12)),
-					until=args.get('until', 'bored'),
-					detail=detail,
-					hold=bool(args.get('hold', True)),
+				await act(
+					eyes.watch(
+						seconds=float(args.get('seconds', 12)),
+						until=args.get('until', 'bored'),
+						detail=detail,
+						hold=bool(args.get('hold', True)),
+					)
 				)
 			)
 		if name == 'retinat_scan':
 			return self._content(
-				await eyes.scan(max_screens=int(args.get('max_screens', 25)), keyframes=int(args.get('keyframes', 6)))
+				await act(eyes.scan(max_screens=int(args.get('max_screens', 25)), keyframes=int(args.get('keyframes', 6))))
 			)
 		if name == 'retinat_browse':
 			return self._content(
-				await eyes.browse(
-					items=int(args.get('items', 5)),
-					max_seconds=float(args.get('max_seconds', 12)),
-					min_seconds=float(args.get('min_seconds', 3)),
-					detail=detail,
+				await act(
+					eyes.browse(
+						items=int(args.get('items', 5)),
+						max_seconds=float(args.get('max_seconds', 12)),
+						min_seconds=float(args.get('min_seconds', 3)),
+						detail=detail,
+					)
 				)
 			)
 		if name == 'retinat_next':
-			moved = await eyes.next(direction=args.get('direction', 'down'))
+			moved = await act(eyes.next(direction=args.get('direction', 'down')))
 			head = (
 				f'Moved by {moved.method} in {moved.seconds:.1f}s'
 				if moved.moved
@@ -554,41 +586,41 @@ class RetinatServer(BrowserUseServer):
 		if name == 'retinat_zoom':
 			return self._content(await eyes.zoom(float(args['x']), float(args['y']), float(args['width']), float(args['height'])))
 		if name == 'retinat_tap':
-			await eyes.tap(float(args['x']), float(args['y']))
+			await act(eyes.tap(float(args['x']), float(args['y'])))
 			return f'Tapped ({args["x"]}, {args["y"]}). {eyes.now_line()}'
 		if name == 'retinat_click':
 			x, y, expect = float(args['x']), float(args['y']), str(args.get('expect') or '').strip()
 			there = await self._what_is_at(x, y, strict=bool(expect))
 			if expect and (there is None or expect.casefold() not in there.casefold()):
-				raise ValueError(
+				raise Refused(
 					f'Not clicked: at ({args["x"]}, {args["y"]}) there is {there or "nothing the page will name"}, not '
 					f'"{expect}". Look again (retinat_look, or retinat_find "{expect}") and click where it is now.'
 				)
-			await eyes.hand.click(x, y)
+			await act(eyes.hand.click(x, y))
 			return f'Clicked ({args["x"]}, {args["y"]}){" on " + there if there else ""}.'
 		if name == 'retinat_swipe':
-			info = await eyes.swipe(args.get('direction', 'up'), float(args.get('fraction', 0.55)))
+			info = await act(eyes.swipe(args.get('direction', 'up'), float(args.get('fraction', 0.55))))
 			return f'Swiped {args.get("direction", "up")} {info["distance_px"]:.0f}px in {info["duration_ms"]:.0f}ms. {eyes.now_line()}'
 		if name == 'retinat_type':
 			if self.bridge and await self._secret_field_focused():
-				raise ValueError(
+				raise Refused(
 					"Refusing to type into a password, card or one-time-code field in the person's own browser: "
 					'they enter those themselves. Ask them to fill it in, then carry on.'
 				)
 			if self.network.uses_tor and await self._secret_field_focused():
-				raise ValueError(
+				raise Refused(
 					'Refusing to type into a password or payment field while routed through Tor: the exit relay is '
 					'on the path. Set the route to off (retinat_network), or ask the person to enter it themselves.'
 				)
-			await eyes.hand.type_text(str(args['text']))
+			await act(eyes.hand.type_text(str(args['text'])))
 			return f'Typed {len(str(args["text"]))} characters.'
 		if name == 'retinat_key':
-			await eyes.hand.press(str(args['key']))
+			await act(eyes.hand.press(str(args['key'])))
 			return f'Pressed {args["key"]}.'
 		if name == 'retinat_recall':
 			t0, t1 = float(args['t0']), float(args['t1'])
 			if t1 < t0:
-				raise ValueError('t1 must be at or after t0')
+				raise Refused('t1 must be at or after t0')
 			item = args.get('item')
 			return self._content(
 				await eyes.recall(t0, t1, frames=int(args.get('frames', 4)), item=int(item) if item is not None else None)
@@ -611,7 +643,19 @@ class RetinatServer(BrowserUseServer):
 		if name == 'retinat_now':
 			await eyes.retina.wait_for_data(1.0)
 			return eyes.now_line()
-		raise ValueError(f'Unknown tool: {name}')
+		raise Refused(f'Unknown tool: {name}')
+
+	def _check_wheel(self) -> None:
+		"""In the person's browser, refuse before sending anything while they hold the wheel or have stopped the AI,
+		so the failure is known to have done nothing (the relay would refuse the first event anyway)."""
+		from browser_use.bridge.policy import HOLDING, STOPPED
+		from browser_use.mcp.effects import Refused
+
+		assert self.bridge is not None
+		if self.bridge.stopped:
+			raise Refused(f'Not done: {STOPPED}.')
+		if self.bridge.human_driving:
+			raise Refused(f'Not done: {HOLDING}.')
 
 
 async def main(cdp_url: str | None = None, network: NetworkRouter | None = None, bridge_port: int | None = None) -> None:
