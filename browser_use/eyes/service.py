@@ -53,6 +53,7 @@ from browser_use.eyes.percept import (
 	page_text_note,
 	render_strip,
 )
+from browser_use.eyes.requests import RequestLog
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
 from browser_use.human.input import HumanInput
 from browser_use.human.touch import HumanTouch
@@ -120,6 +121,7 @@ class Eyes:
 		self.browser_session = browser_session
 		self.speech = asr.available() if speech is None else speech
 		self.retina = Retina(browser_session, fps=fps, audio=audio, pcm=bool(self.speech and audio))
+		self.requests = RequestLog(browser_session)  # what the page fetched; passive, redacted
 		self.touch = HumanTouch(browser_session, seed=seed)
 		self.hand = HumanInput(browser_session, seed=seed)
 		self.now_path = None if now_path is False else (now_path or default_now_path())
@@ -144,6 +146,7 @@ class Eyes:
 
 	async def open(self, target_id: str | None = None) -> dict[str, Any]:
 		state = await self.retina.start(target_id)
+		await self.requests.start(self.retina.target_id)
 		if self.now_path is not None and self._update_now not in self.retina._listeners:
 			self.retina.on_batch(self._update_now)
 		if self.archive is not None and (self._archiver is None or self._archiver.done()):
@@ -160,6 +163,7 @@ class Eyes:
 			self._archiver = None
 		if self._pages is not None:
 			await self._pages.stop()
+		await self.requests.stop()
 		await self.retina.stop()
 
 	# -- watching ------------------------------------------------------------------------

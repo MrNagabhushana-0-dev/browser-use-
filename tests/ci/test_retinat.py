@@ -36,6 +36,15 @@ CLICK = (
 	"<script>window.hits = {save: 0, del: 0}; for (const b of document.querySelectorAll('button'))"
 	' b.onclick = () => hits[b.id]++;</script></body>'
 )
+JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZGEifQ.c2lnbmF0dXJlLW5vdC1yZWFsLTEyMw'
+REQUESTS = (
+	'<!doctype html><title>Shop</title><body><h1>Shop</h1><script>'
+	"fetch('/api/login?access_token=qs-s3cret&lang=en', {method: 'POST', headers: {'content-type': 'application/json'},"
+	" body: JSON.stringify({user: 'ada', password: 'hunter2'})})"
+	".then(() => fetch('/api/broken'))"
+	".then(() => { const i = new Image(); i.src = '/missing.png'; document.body.append(i); });"
+	'</script></body>'
+)
 WALL = '<!doctype html><title>Just a moment...</title><body>Checking your browser before accessing the site.</body>'
 
 
@@ -48,6 +57,12 @@ def site():
 	server.expect_request('/find').respond_with_data(FIND, content_type='text/html')
 	server.expect_request('/find-deep').respond_with_data(FIND_DEEP, content_type='text/html')
 	server.expect_request('/click').respond_with_data(CLICK, content_type='text/html')
+	server.expect_request('/requests').respond_with_data(REQUESTS, content_type='text/html')
+	server.expect_request('/api/login', method='POST').respond_with_json(
+		{'user': {'name': 'Ada'}, 'session': 'sess-v4lue', 'note': JWT, 'greeting': 'hello Ada'}
+	)
+	server.expect_request('/api/broken').respond_with_json({'error': 'db down'}, status=500)
+	server.expect_request('/missing.png').respond_with_data('', status=404)
 	server.expect_request('/toast').respond_with_data(TOAST, content_type='text/html')
 	yield server
 	server.stop()
@@ -274,3 +289,34 @@ async def test_click_says_what_it_hit_and_refuses_when_it_is_not_what_was_expect
 		params={'expression': 'JSON.stringify(hits)', 'returnByValue': True}, session_id=cdp.session_id
 	)
 	assert json.loads(hits['result'].get('value', '{}')) == {'save': 2, 'del': 0}
+
+
+async def test_requests_lists_what_the_page_fetched_with_its_secrets_masked(retinat, site):
+	"""After BrowserSkill's network evidence: what the page asked for and got, failures first in mind, without handing
+	the AI the tokens in it. Masked by key name and by value (a JWT under an innocent key is still a JWT)."""
+	import asyncio
+	import re
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/requests')})
+	listed = ''
+	for _ in range(50):
+		listed = _text(await _call(retinat, 'retinat_requests', {}))
+		if '/missing.png' in listed and 'fetch /api/broken' in listed:
+			break
+		await asyncio.sleep(0.1)
+	assert 'POST 200 fetch /api/login?access_token=[redacted]&lang=en' in listed, listed
+	assert 'GET 500 fetch /api/broken' in listed and '404 image /missing.png' in listed, listed
+	assert 'qs-s3cret' not in listed
+
+	failed = _text(await _call(retinat, 'retinat_requests', {'only': 'failed'}))
+	assert '/api/broken' in failed and '/missing.png' in failed and '/api/login' not in failed, failed
+
+	login = int(re.search(r'#(\d+) POST', listed).group(1))  # type: ignore[union-attr]
+	body = _text(await _call(retinat, 'retinat_requests', {'body': login}))
+	assert '"name":"Ada"' in body and 'hello Ada' in body, body
+	assert 'sess-v4lue' not in body and JWT not in body and '[redacted]' in body, body
+	broken = int(re.search(r'#(\d+) GET 500 fetch /api/broken', listed).group(1))  # type: ignore[union-attr]
+	assert 'db down' in _text(await _call(retinat, 'retinat_requests', {'body': broken}))
+
+	last = int(re.search(r'since=(\d+)', listed).group(1))  # type: ignore[union-attr]
+	assert _text(await _call(retinat, 'retinat_requests', {'since': last})).startswith('0 requests after')

@@ -13,6 +13,8 @@ turn at a time:
   `retinat_key`: real touch, mouse and keyboard input, with feed moves confirmed by sight.
 - `retinat_explore`: a whole site crawled and checked, with a bug report and a page sheet.
 - `retinat_now`: one line on what is on screen and audible right now.
+- `retinat_requests`: what the page fetched (status, type, size, time, failures), and one response body,
+  with tokens, passwords and keys masked.
 
 It never runs page scripts on the model's behalf and has no Playwright anywhere. Bot walls are
 reported as walls. Run it with `python -m browser_use.retinat` (or `retinat`), add `--cdp-url`
@@ -310,6 +312,26 @@ def _browser_tools() -> list['types.Tool']:
 			annotations=ro,
 		),
 		types.Tool(
+			name='retinat_requests',
+			description=(
+				'What the page fetched since it opened: one line per request (method, status or failure, type, path, '
+				'size, time), newest last, plus a cursor. only="failed" for errors, "api" for fetch/XHR/JSON. '
+				'body=<#n> returns that response body. Passwords, tokens, keys and card numbers are masked by name and '
+				'by shape. It only listens: nothing is intercepted or changed.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'since': {'type': 'integer', 'default': 0, 'description': 'Only requests after this #n (the cursor).'},
+					'only': {'type': 'string', 'enum': ['all', 'failed', 'api'], 'default': 'all'},
+					'limit': {'type': 'integer', 'default': 30, 'minimum': 1, 'maximum': 200},
+					'body': {'type': 'integer', 'description': 'Return the response body of request #n instead.'},
+					'max_chars': {'type': 'integer', 'default': 3000, 'minimum': 200, 'maximum': 20000},
+				},
+			},
+			annotations=ro,
+		),
+		types.Tool(
 			name='retinat_now',
 			description='One line on what is on screen and audible right now. No image; nearly free.',
 			input_schema={'type': 'object', 'properties': {}},
@@ -485,6 +507,15 @@ class RetinatServer(BrowserUseServer):
 				blocks.append(types.ImageContent(type='image', data=base64.b64encode(sheet).decode(), mime_type='image/jpeg'))
 			return blocks
 		eyes = await self._eyes()
+		if name == 'retinat_requests':
+			from browser_use.eyes.requests import render
+
+			log = eyes.requests
+			if args.get('body') is not None:
+				return await log.body(int(args['body']), max_chars=int(args.get('max_chars', 3000)))
+			since = int(args.get('since', 0))
+			picked = log.entries(since=since, only=str(args.get('only', 'all')), limit=int(args.get('limit', 30)))
+			return render(picked, since, log.last_seq, await self.browser_session.get_current_page_url())
 		detail = args.get('detail', 'glance')
 		if name == 'retinat_look':
 			return self._content(await eyes.look(detail=detail if detail != 'glance' else 'look'))

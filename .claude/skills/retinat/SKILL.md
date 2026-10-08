@@ -33,6 +33,8 @@ logins, in the tabs they share through the bridge extension (setup in `AI.md`).
    `retinat_swipe`. For feeds, use `retinat_next` or `retinat_browse(items=N)`. Give `retinat_click` an `expect`
    (the target's words, like "Save") when a wrong click would cost something; it refuses to land elsewhere.
 4. **Check the result by looking again**, not by assuming it worked.
+   - `retinat_requests(only="failed")` when something did nothing: the failing request and, with `body=#n`, what
+     the server said (tokens and passwords masked).
 5. **Find bugs across a site:** `retinat_explore(url)` returns a report plus a sheet of every
    page. Present the findings with their evidence.
 

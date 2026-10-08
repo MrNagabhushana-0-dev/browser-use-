@@ -108,6 +108,7 @@ continuous stream on disk rather than in your context.
 | Know what's playing without an image | `retinat_now` | about 30 tokens |
 | What appeared, played or flashed since you last asked (toasts, sounds, cuts), for clients without the hook | `retinat_changes` | text only, a line per change |
 | Find everything broken on a site | `retinat_explore` | a report plus 1 sheet |
+| Know what the page fetched, which request failed, or what an API answered | `retinat_requests` (`only="failed"` or `"api"`; `body=#n` for one response, tokens and passwords masked) | text only, about 20 tokens a line |
 
 Token figures are estimates. Images are costed at about one token per 28×28 px patch.
 
