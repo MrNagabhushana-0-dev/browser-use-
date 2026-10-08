@@ -2653,3 +2653,101 @@ an unknown `browser_*` tool no longer starts a browser.
   - Without the tool, all three said they could not confirm the save. None claimed success, and none made up a code.
   - With the tool, all three named the endpoint, the 500 and the body.
   - **Not measured:** cost per run, and whether agents hold back on retrying after `unknown`.
+- **Full `tests/ci` on `f127c8e`: 1,638 passed, 31 skipped, 1 failed** (40m19s, `loopwatch` on, whole log kept).
+  - The failure was `test_an_idle_extension_stays_connected_past_the_service_worker_timeout`. Its assertion passed:
+    the idle extension stayed connected. Its teardown then waited 10 s for Chromium to exit after SIGTERM, and it
+    didn't. The test had no kill fallback, unlike the shared fixture.
+  - Fixed in the next commit: every browser and X server the bridge tests start is stopped by one helper that kills
+    after 10 s.
+
+## Round 49: the bridge asks before the AI uses a new site
+
+**Item.** The top gap from Round 46's comparison with Claude in Chrome: per-site grants, and re-consent when a shared
+tab moves to another site. Before this round, sharing a tab let the AI take it anywhere, signed in as the person.
+
+**Design, then review.**
+- The draft was written down and given to three reviewers on the cheapest model, each with a different lens:
+  ways around it, what it breaks, and whether the Chrome APIs behave as assumed. They read code only and ran nothing.
+- **The key finding, made by two reviewers and by me while drafting:** a consent button inside a shared tab can be
+  pressed by the AI itself. CDP's `Input.dispatchMouseEvent` produces trusted clicks, so the pill's `isTrusted`
+  check stops page script, not the AI.
+  - So asks live in a window of the extension's own (`ask.html`), which is never shared.
+  - The worker takes an answer only from the window it opened for that ask. Otherwise the AI could navigate a
+    shared tab to a copy of the ask page and click Allow there; that navigation is also refused, since only web
+    pages count as sites.
+- **Other findings taken up:**
+  - history navigation was unchecked;
+  - restored tabs skipped the check after a worker restart;
+  - events from the new page still reached the AI before the tab was unshared;
+  - session-level `Target.*` could open tabs past the check;
+  - `DOM.setFileInputFiles` could hand a page any file on the person's disk;
+  - changing the relay address wiped other settings;
+  - `browser_navigate` reported "Navigated to" for a refused navigation;
+  - the person's own navigation was blamed on the AI;
+  - the version wasn't bumped, so an old extension would never reload.
+- **Findings not taken up, written down as limits:**
+  - frames of other sites inside an allowed page;
+  - what that page's own script fetches, whose response bodies CDP can read;
+  - a request-level block through `Fetch` interception. It can't tell the person's own address-bar navigation from
+    the AI's, and would block the person.
+
+**Built** (`e5efe07`, `9ba65c9`), enforced in the extension's worker, which the person controls:
+- **Sites.** A site is an origin. Sharing a tab allows its site.
+- **Navigations the AI starts are checked before they are sent:** `Page.navigate`, history entries, and opening a
+  tab. One to a site that isn't allowed sends nothing.
+  - The ask window offers Allow (until the browser closes), Always, or No.
+  - One ask waits at a time, a No is remembered, and the call is refused with the site named.
+  - `browser_navigate` and `retinat_open` report the refusal as effect `none`.
+- **Navigations that can't be checked first** (a link, a redirect, a form, script, or the person's own): the tab is
+  unshared on the main-frame navigation event, before any of the new page is passed on. Its pill asks again, worded
+  by who caused the move.
+- **Also refused through the bridge:**
+  - session-level `Target.*` calls other than the tab's own;
+  - file inputs and the file chooser;
+  - `Page.setDownloadBehavior`.
+- **Settings and status:**
+  - settings writes merge;
+  - `--always-allow` and `write_extension(always_allow=...)` take sites, subdomain patterns that stop at a label
+    boundary, or `*`;
+  - relay status lists allowed, always-allowed and declined sites;
+  - the extension is now 0.2.0.
+
+**Tests**, on real browsers with the person's clicks made through XTest:
+- Five new tests:
+  - an AI navigation to a new site sends no request; the ask window isn't visible to the AI; a spoofed ask page is
+    refused; Allow lets the navigation through; No is remembered, with no second window;
+  - a link to a new site unshares the tab, with no `frameNavigated` or execution context of the new page reaching
+    the AI, and the person's Allow re-shares it, usable;
+  - an AI-opened tab asks, and Always is recorded;
+  - `browser_navigate` and `retinat_open` give errors with effect `none`, including a held wheel;
+  - the servers and the extension use the same refusal words.
+- **Mutation check:** 9 of 9 mutants fail a test. Each removes one guard: the navigation pre-check, the cut on
+  main-frame navigation, sharing allowing its site, the session `Target` refusal, the web-pages-only rule,
+  remembering a No, the file-input refusal, the `Refused` mapping, and strict navigation on the bridge.
+  - The third survived at first: the fixture's site is allowed at startup, so no test exercised a person's share
+    allowing a new site. The drift test now checks that the re-shared tab is usable and its site allowed.
+
+**Browsers:**
+
+| Browser | Result |
+|---|---|
+| Chromium 141 | 27/27, three runs |
+| Edge 154 | 27/27 |
+| Brave 1.97 | 27/27 |
+| Vivaldi 8.2 | 26/26, plus the known Cancel skip |
+| Chrome 155 (Load unpacked) | 27/27, in three invocations as in Round 46 |
+
+- **Edge** held the cross-site navigation for tens of seconds before sending it; meanwhile no request reached the
+  server. That fits a pre-navigation check of the address with no route out of this sandbox; not confirmed. The
+  wait is now 90 s.
+- **Brave:** `test_a_tab_the_person_opens_from_a_shared_tab_waits_for_their_say_so` failed 3 of 4 runs with the
+  code from before this round. The test's raw CDP press came with no pointer move, and on a fresh page it was
+  dropped. With a move first it passed 4 of 4.
+- **Unexplained:** the first run in a batch on each branded browser (Edge, Brave, Vivaldi, Chrome) once timed out
+  starting the shared fixture. Every retry passed.
+
+**Not done:**
+- frames and child sessions of other sites (OOPIFs);
+- revoking Always from a UI (the person edits the setting);
+- a force-ask category for sensitive sites;
+- the purchase and confirm-first action classes, the third P1 gap.
