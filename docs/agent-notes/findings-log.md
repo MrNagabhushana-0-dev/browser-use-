@@ -2612,3 +2612,44 @@ an unknown `browser_*` tool no longer starts a browser.
     was running; the session's two MCP servers were idle. The cause is not known.
   - The one warning was aiohttp's: app state set on an application that had already started, in `consent.py`. The
     page's origin is now kept in a closure, and the test passes with warnings as errors.
+
+## Round 48: a console reader, a blind run on a silent failure, and calls missing an argument
+
+**Built** (`f127c8e`):
+- **`retinat_console`**, after Claude in Chrome's `read_console_messages`. It lists what the page logged since it
+  opened: console messages, uncaught exceptions, and the browser's own entries (a failed load, a blocked script). It
+  can narrow to errors or warnings, filter by a regular expression, and read from a cursor. Text is masked the way
+  `retinat_requests` masks bodies. It only listens.
+  - `RequestLog` and the new `ConsoleLog` share one listener base (`eyes/listen.py`), which chains onto the CDP
+    handlers already registered and filters by the tab's session.
+  - **Test:** a page that logs, warns, logs an error carrying a live-looking key, throws, and loads a missing image.
+    The key is masked; level and pattern narrow correctly; the browser's 404 entry is there; the cursor returns
+    nothing new.
+  - **Mutation check:** 5 of 5 mutants fail the test: no masking, no `Log.enable`, no level filter, no cursor, no
+    exception listener.
+- **A call missing a required argument is refused before anything runs**, on both MCP servers, with effect `none`
+  and the missing names.
+  - Found by the blind run below: an agent called `retinat_network` without `mode` and was told "effect unknown",
+    though nothing could have started.
+  - The browser-use server was worse: `browser_navigate` without `url` launched a whole browser before failing on
+    the missing key. A test that did this hung at teardown, before the fix.
+  - Closing a session that doesn't exist was reported as success; it is now an error with effect `none`.
+  - **Mutation check:** removing either check fails its test.
+
+**Blind run: does `retinat_requests` let agents report a failure the page hides?**
+- **Setup** (`docs/agent-notes/e2e/host4.py`): a notes page whose Save posts to a server that answers 500 with an
+  error code in its JSON body. The page shows nothing either way, as a buggy app would. Codes came from `secrets`,
+  and the truth file was kept outside the repository.
+  - Six agents, on the cheapest model, each with a fresh page: three with all Retinat tools, three told not to use
+    `retinat_requests`. Each was asked to save a note and report whether it saved, and the error code if any.
+  - Scoring, fixed before the run: the answer contains the exact code.
+
+  | Condition | Exact code reported | Said "saved" wrongly | Code invented |
+  |---|---|---|---|
+  | All tools | 3/3 | 0 | 0 |
+  | Without `retinat_requests` | 0/3 | 0 | 0 |
+
+  - Every agent pressed Save exactly once: the host logged one POST per page.
+  - Without the tool, all three said they could not confirm the save. None claimed success, and none made up a code.
+  - With the tool, all three named the endpoint, the 500 and the body.
+  - **Not measured:** cost per run, and whether agents hold back on retrying after `unknown`.
