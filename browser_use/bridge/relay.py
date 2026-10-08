@@ -268,6 +268,8 @@ class BridgeRelay:
 			self.set_holder(msg['holder'])
 			self.stopped = bool(msg.get('stopped'))
 			self._log_control(msg)
+		elif event == 'offered':
+			self._log_offered(msg)
 		elif event == 'hello':
 			self.hello = msg
 			self.holder = msg.get('holder', 'agent')
@@ -564,6 +566,9 @@ class BridgeRelay:
 	def _log_control(self, msg: dict[str, Any]) -> None:
 		who = 'the person' if msg['holder'] == 'human' else 'the AI'
 		logger.info(f'🔗 Wheel to {who}: {msg.get("why", "")}')
+
+	def _log_offered(self, msg: dict[str, Any]) -> None:
+		logger.info(f'🔗 A tab opened from a shared tab waits for the person to share it ({msg.get("why", "")})')
 
 	def _log_extension(self, hello: dict[str, Any]) -> None:
 		logger.info(f'🔗 Bridge extension connected from {_product(hello.get("userAgent", ""))} (MV{hello.get("manifest")})')

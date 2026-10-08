@@ -21,13 +21,16 @@ const state = {
 	// resumeAfterMs: after the person's last input in a shared tab, how long until the AI may carry on (0: never)
 	settings: { relay: 'ws://127.0.0.1:9333/extension', alwaysShare: [], resumeAfterMs: 8000 },
 	shared: new Set(), // tab ids the person shared, or the AI opened
+	offered: new Set(), // tabs the person (or a page) opened from a shared tab: unshared until they press Share
 	attached: new Set(), // tab ids with a live chrome.debugger session
 	targets: new Map(), // tab id -> DevTools target id
 	holder: 'agent', // who drives shared tabs: 'agent' or 'human'
 	autoHeld: false, // the person took the wheel just by using a shared tab (resumes on its own)
 	stopped: false, // the person pressed Cancel on the debugging bar: nothing until they share a tab again
 	personAt: 0, // when the person last used a shared tab
+	personInputAt: new Map(), // tab id -> when the person last used it
 	aiInputAt: new Map(), // tab id -> when the AI last sent input there
+	aiActAt: new Map(), // tab id -> when the AI last sent anything but looking there (input, script, navigation)
 	aiWindow: null,
 	ws: null,
 	backoff: 500,
@@ -91,7 +94,8 @@ async function badge(tabId) {
 }
 
 function pillState(tabId) {
-	return { shared: state.shared.has(tabId), holder: state.holder, stopped: state.stopped };
+	const offered = state.offered.has(tabId) && !state.shared.has(tabId);
+	return { shared: state.shared.has(tabId), offered, holder: state.holder, stopped: state.stopped };
 }
 
 function pushPill(tabId) {
@@ -100,6 +104,7 @@ function pushPill(tabId) {
 }
 
 async function share(tabId, why) {
+	state.offered.delete(tabId);
 	const resuming = state.stopped && why === 'shared by the person'; // sharing again is the person's go-ahead
 	if (state.stopped && !resuming) throw new Error(STOPPED);
 	if (resuming) {
@@ -189,11 +194,16 @@ async function handle(msg) {
 			const input = msg.method.startsWith('Input.');
 			if (input && !msg.sessionId) await bringToFront(msg.tabId);
 			const target = msg.sessionId ? { tabId: msg.tabId, sessionId: msg.sessionId } : { tabId: msg.tabId };
-			if (input) state.aiInputAt.set(msg.tabId, Date.now());
+			const acting = acts(msg.method);
+			const mark = () => {
+				if (input) state.aiInputAt.set(msg.tabId, Date.now());
+				if (acting) state.aiActAt.set(msg.tabId, Date.now());
+			};
+			mark();
 			try {
 				return (await call(C.debugger, 'sendCommand', target, msg.method, msg.params || {})) || {};
 			} finally {
-				if (input) state.aiInputAt.set(msg.tabId, Date.now());
+				mark();
 			}
 		}
 		case 'open':
@@ -282,6 +292,7 @@ const AI_ECHO_MS = 600;
 async function onPersonInput(tabId, type) {
 	if (Date.now() - (state.aiInputAt.get(tabId) || 0) < AI_ECHO_MS) return;
 	state.personAt = Date.now();
+	state.personInputAt.set(tabId, state.personAt);
 	if (state.holder !== 'agent') return;
 	await setHolder('human', `the person used a shared tab (${type})`);
 	state.autoHeld = true;
@@ -371,12 +382,35 @@ C.debugger.onDetach.addListener(async (source, reason) => {
 	}
 });
 
-C.tabs.onRemoved.addListener((tabId) => unshare(tabId, 'tab closed'));
+C.tabs.onRemoved.addListener((tabId) => {
+	state.offered.delete(tabId);
+	unshare(tabId, 'tab closed');
+});
+
+// A tab opened from a shared tab (target=_blank, window.open) follows whoever opened it. The AI's, opened by its
+// own click or script there, is part of what it was doing and is shared. The person's (a middle-click from a shared
+// mail to their bank) or one a page opened on its own stays unshared; its pill offers to share it.
+const OPENED_BY_AI_MS = 2500;
+const INPUT_ARRIVES_MS = 300; // the page reports the person's click a moment after the tab may already exist
 
 C.tabs.onCreated.addListener((tab) => {
-	// A tab a shared page opens (target=_blank, window.open) is part of what the AI was doing.
-	if (tab.openerTabId !== undefined && state.shared.has(tab.openerTabId)) share(tab.id, 'opened from a shared tab').catch(() => {});
+	const opener = tab.openerTabId;
+	if (opener === undefined || !state.shared.has(opener)) return;
+	const created = Date.now();
+	const ai = state.aiActAt.get(opener) || 0;
+	setTimeout(() => adoptOrOffer(tab.id, opener, created, ai), INPUT_ARRIVES_MS);
 });
+
+async function adoptOrOffer(tabId, opener, created, ai) {
+	const person = state.personInputAt.get(opener) || 0;
+	if (created - ai < OPENED_BY_AI_MS && person < ai) {
+		return share(tabId, 'opened by the AI from a shared tab').catch(() => {});
+	}
+	state.offered.add(tabId);
+	pushPill(tabId);
+	const why = person >= ai && created - person < OPENED_BY_AI_MS ? 'the person opened it' : 'the page opened it';
+	emit({ event: 'offered', tabId, why });
+}
 
 C.tabs.onUpdated.addListener(async (tabId, change) => {
 	if (state.shared.has(tabId)) {
@@ -406,6 +440,11 @@ C.runtime.onMessage.addListener((msg, sender, reply) => {
 		else if (msg.ask === 'unshare') await unshare(msg.tabId, 'unshared by the person');
 		else if (msg.ask === 'holder') await setHolder(msg.holder);
 		else if (msg.ask === 'pill') return pillState(sender.tab ? sender.tab.id : -1);
+		else if (msg.ask === 'share-here' && sender.tab) await share(sender.tab.id, 'shared by the person');
+		else if (msg.ask === 'decline-here' && sender.tab) {
+			state.offered.delete(sender.tab.id);
+			pushPill(sender.tab.id);
+		}
 		else if (msg.ask === 'relay') {
 			state.settings.relay = msg.relay;
 			await call(C.storage.local, 'set', { settings: { relay: msg.relay } });

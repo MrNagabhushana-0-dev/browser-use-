@@ -36,6 +36,14 @@ SHARED = (
 	"<script>window.clicks = []; addEventListener('click', e => clicks.push(e.isTrusted))</script></body>"
 )
 
+OPENER = (
+	'<!doctype html><title>Opener</title><body style="margin:0;height:100vh">'
+	'<div style="position:fixed;left:0;top:0;width:6px;height:6px;background:#f0f"></div>'
+	'<a id="ai" target="_blank" href="/opened/ai" style="position:fixed;left:40px;top:40px;width:220px;height:60px;'
+	'display:block;background:#ddd">The AI opens this</a>'
+	'<a id="me" target="_blank" href="/opened/me" style="position:fixed;left:40px;top:160px;width:220px;height:60px;'
+	'display:block;background:#ddd">I open this</a></body>'
+)
 LOGIN = (
 	'<!doctype html><title>Sign in</title><body style="margin:0">'
 	'<input id="p" type="password" style="position:fixed;left:40px;top:40px;width:240px;height:40px">'
@@ -79,6 +87,12 @@ def site():
 	)
 	server.expect_request('/shared/next').respond_with_data('<title>Next page</title>next', content_type='text/html')
 	server.expect_request('/shared/login').respond_with_data(LOGIN, content_type='text/html')
+	server.expect_request('/shared/opener').respond_with_data(OPENER, content_type='text/html')
+	for who in ('ai', 'me'):
+		server.expect_request(f'/opened/{who}').respond_with_data(
+			f'<!doctype html><title>Opened by {who}</title><body style="margin:0;height:100vh;background:#fff">',
+			content_type='text/html',
+		)
 	yield server
 	server.clear()
 	if server.is_running():
@@ -881,4 +895,60 @@ async def test_a_shared_tab_says_the_ai_is_working_and_one_click_takes_the_wheel
 		await until(back, timeout=5)
 	finally:
 		relay.set_holder('agent')
+		await http.close()
+
+
+async def test_a_tab_the_person_opens_from_a_shared_tab_waits_for_their_say_so(bridge, display, site):
+	"""After BrowserSkill's confirmed tab borrow. A tab opened from a shared tab used to be shared outright, so a
+	person middle-clicking from a shared mail to their bank handed the bank to the AI. Now a tab the AI opened
+	follows the AI, and one the person opened stays theirs until they press Share on its pill."""
+	from PIL import ImageGrab
+
+	relay, _ = bridge
+	http, cdp, sid = await _shared_session(relay, site)
+
+	async def listed(path: str) -> bool:
+		return any(t['url'].endswith(path) for t in (await get(relay, '/json/list')).json())
+
+	try:
+		await cdp.call('Page.navigate', {'url': site.url_for('/shared/opener')}, sid)
+
+		async def loaded():
+			r = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, sid)
+			return r.get('result', {}).get('result', {}).get('value') == 'Opener'
+
+		await until(loaded)
+		for kind in ('mousePressed', 'mouseReleased'):  # the AI clicks its link
+			await cdp.call('Input.dispatchMouseEvent', {'type': kind, 'x': 150, 'y': 70, 'button': 'left', 'clickCount': 1}, sid)
+		await until(lambda: listed('/opened/ai'))
+		ai_tab = next(t for t in (await get(relay, '/json/list')).json() if t['url'].endswith('/opened/ai'))
+		await cdp.call('Target.closeTarget', {'targetId': ai_tab['id']})
+		await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 1, 'y': 1}, sid)  # opener to the front
+		await asyncio.sleep(1.0)
+
+		ox, oy = _page_origin(ImageGrab.grab(xdisplay=display).convert('RGB'))
+		x_click(display, ox + 150, oy + 190)  # the person clicks theirs
+		await asyncio.sleep(2.5)
+		assert not await listed('/opened/me'), 'a tab the person opened was handed to the AI without asking'
+
+		shot = ImageGrab.grab(xdisplay=display).convert('RGB')
+		blue = [
+			(x, y)
+			for y in range(shot.height // 2, shot.height, 2)
+			for x in range(0, shot.width, 2)
+			if _near(shot.getpixel((x, y)), (57, 73, 171))
+		]
+		assert len(blue) > 200, 'the new tab does not offer to share itself'
+		right = max(x for x, _ in blue)
+		middle = (min(y for _, y in blue) + max(y for _, y in blue)) // 2
+		x_click(display, right - 50, middle)  # "Share this tab", at the right end
+		await until(lambda: listed('/opened/me'), timeout=5)
+		mine = next(t for t in (await get(relay, '/json/list')).json() if t['url'].endswith('/opened/me'))
+		await cdp.call('Target.closeTarget', {'targetId': mine['id']})
+
+		async def resumed():
+			return relay.holder == 'agent'
+
+		await until(resumed)  # the person's clicks paused the AI; quiet hands it back
+	finally:
 		await http.close()

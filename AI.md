@@ -48,6 +48,10 @@ They then:
 
 Then:
 - You see and act only in shared tabs. Tabs you open yourself go to a separate window of theirs.
+- A tab opened from a shared tab follows whoever opened it. When your click or script there opened it, it is shared
+  with you. When the person opened it (a middle-click from a shared mail to their bank), or the page did on its own,
+  it stays theirs: its pill asks them "Share this one too?". You can't answer for them, because you have no input in
+  an unshared tab. If you expected a tab and it doesn't appear, ask the person to share it.
 - When the person clicks, types or scrolls in a shared tab, you are paused. Everything but looking is refused, with a
   message saying so: input, navigation and page script alike. Script can click and submit too, and nobody can tell
   a read from a write in it. Screenshots, the DOM and the accessibility tree still work. You carry on 8 s after their
