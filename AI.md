@@ -65,6 +65,19 @@ Then:
     (`https://*.example.com` for subdomains, `*` for every site, as before this check) writes them in advance.
   - **Not covered:** frames of other sites inside an allowed page, and what that page's own script fetches. Those
     reach what the page itself can reach.
+- A click that would place an order, pay, move money, delete an account or grant access waits for the person, on
+  any site (after Claude in Chrome's "ask first" classes). While you act, the extension holds a press, click, Enter,
+  touch or form submit on a control labelled so ("Place order", "Pay now", "Delete my account", "Authorize": the
+  list is in the extension's `policy.json`), in the page, before the page sees it.
+  - It holds your click however it is made: input, the library's script fallback, or `el.click()` and
+    `requestSubmit()` from script. Your call comes back "held through the extension bridge" with the page's label.
+    It did not happen.
+  - A window asks the person: **Allow** lets that one click through, once, in the next minute. Click again after
+    they answer. **No** is remembered. Allowing a site is never consent to pay on it.
+  - **Not covered:** controls whose label doesn't say so (an icon, another language, text in an image), and script
+    that calls the site's API directly or uses `form.submit()`. Tell the person before anything like that.
+- The page's own questions are the person's. You may dismiss a `confirm()` or `prompt()` and close an `alert()`,
+  but accepting a `confirm()` or `prompt()` is refused: the person answers it in their tab.
 - A tab opened from a shared tab follows whoever opened it. When your click or script there opened it, it is shared
   with you. When the person opened it (a middle-click from a shared mail to their bank), or the page did on its own,
   it stays theirs: its pill asks them "Share this one too?". You can't answer for them, because you have no input in
@@ -383,6 +396,8 @@ tests for them skip elsewhere.
     choosing where downloads go, is refused; they pick files themselves.
   - **Other tabs from a tab's session:** `Target.*` calls inside a shared tab's session (opening, closing or
     attaching to other tabs) are refused; the tab tools do that, under the person's consent.
+  - **Input past the page's own input path:** tap synthesis and touch emulation, ignoring input (which would freeze
+    the person's own mouse and keys) and dragging files in are refused.
   - **Browser shortcuts** (Ctrl+T, Ctrl+W, Ctrl+L) don't fire from AI keys; open, close and switch tabs with the tab tools.
   - **Hidden tabs:** a hidden shared tab is brought to the front of its own window before any click or key, as a
     person would.

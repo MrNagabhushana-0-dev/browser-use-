@@ -691,7 +691,9 @@ async def test_cancel_on_the_debugging_bar_stops_the_ai_until_the_person_shares_
 async def _shared_session(relay: BridgeRelay, site: HTTPServer):
 	"""A raw CDP client attached to the shared tab, on a fresh copy of the shared page."""
 	http, cdp = await raw_cdp(relay)
-	target = next(i['targetId'] for i in (await cdp.call('Target.getTargets'))['result']['targetInfos'] if '/shared' in i['url'])
+	infos = (await cdp.call('Target.getTargets'))['result']['targetInfos']
+	target = next((i['targetId'] for i in infos if '/shared' in i['url']), None)
+	assert target is not None, f'no shared tab on the shared site: {[i["url"] for i in infos]}'
 	sid = (await cdp.call('Target.attachToTarget', {'targetId': target, 'flatten': True}))['result']['sessionId']
 	await cdp.call('Page.navigate', {'url': site.url_for('/shared')}, sid)
 
@@ -1068,6 +1070,12 @@ async def _until_ok(cdp: RawCDP, method: str, params: dict, sid: str | None = No
 	raise AssertionError(f'still refused: {reply}')
 
 
+async def _back_to_shared(cdp: RawCDP, sid: str, site: HTTPServer) -> None:
+	"""Hand the shared tab back on the shared page for the tests after this one. A navigation can be refused for a
+	moment (the person's click on an ask window pauses the AI), so retry until it goes."""
+	await _until_ok(cdp, 'Page.navigate', {'url': site.url_for('/shared')}, sid)
+
+
 async def test_the_ai_asks_before_taking_a_shared_tab_to_a_site_the_person_has_not_allowed(bridge, display, site, elsewhere):
 	"""A shared tab used to go anywhere the AI sent it, with the person's cookies. Now a navigation to a site they
 	haven't allowed sends nothing: a window asks them. Allow lets it through; No is remembered."""
@@ -1108,7 +1116,7 @@ async def test_the_ai_asks_before_taking_a_shared_tab_to_a_site_the_person_has_n
 		assert _button(ImageGrab.grab(xdisplay=display).convert('RGB'), ALLOW) is None, 'asked again after a no'
 		assert not unwanted.log
 	finally:
-		await cdp.call('Page.navigate', {'url': site.url_for('/shared')}, sid)
+		await _back_to_shared(cdp, sid, site)
 		await http.close()
 
 
@@ -1168,7 +1176,7 @@ async def test_a_shared_tab_a_link_takes_to_a_new_site_stops_being_shared_until_
 		back = await tab_on('127.0.0.3')
 		if back:  # hand the tab back on the shared page for the tests after this one
 			sid2 = (await cdp.call('Target.attachToTarget', {'targetId': back['id'], 'flatten': True}))['result']['sessionId']
-			await cdp.call('Page.navigate', {'url': site.url_for('/shared')}, sid2)
+			await _back_to_shared(cdp, sid2, site)
 		await http.close()
 
 
@@ -1280,7 +1288,7 @@ async def _click(cdp: RawCDP, sid: str, x: int, y: int) -> list[dict]:
 
 
 def _held(replies: list[dict]) -> str:
-	return ' '.join(r.get('error', {}).get('message', '') for r in replies)
+	return ' '.join(r.get('error', {}).get('message', '') for r in replies).strip()
 
 
 async def _enter(cdp: RawCDP, sid: str) -> list[dict]:
@@ -1355,6 +1363,11 @@ async def test_enter_and_form_submits_that_pay_are_held_and_a_no_is_remembered(b
 		implicit = _held(await _enter(cdp, sid))  # Enter in the text field submits the form through "Pay now"
 		assert HELD in implicit and 'said no' in implicit, implicit
 		assert await _value(cdp, sid, 'paid') == 0, 'the payment went through'
+		script = await cdp.call(  # page script submitting the form: a submit event, and no click at all
+			'Runtime.evaluate', {'expression': "document.getElementById('f').requestSubmit(document.getElementById('pay'))"}, sid
+		)
+		assert HELD in script.get('error', {}).get('message', ''), f'a script submit is held too: {script}'
+		assert await _value(cdp, sid, 'paid') == 0, 'the payment went through'
 		await asyncio.sleep(0.5)
 		assert _button(ImageGrab.grab(xdisplay=display).convert('RGB'), ALLOW) is None, 'asked again after a no'
 
@@ -1398,12 +1411,12 @@ async def test_browser_click_through_the_library_is_held_too(bridge, site, shop)
 		state = json.loads(await _call(server, 'browser_get_state', {}))
 		order = next(e['index'] for e in state['interactive_elements'] if 'Place order' in json.dumps(e))
 		clicked = await _call(server, 'browser_click', {'index': order})
-		assert HELD in clicked, clicked
 		http, cdp, sid = await _shared_session_on(relay, '/shared/shop')
 		try:
-			assert await _value(cdp, sid, 'ordered') == 0, 'a fallback click placed the order'
+			assert await _value(cdp, sid, 'ordered') == 0, f'the library click placed the order: {clicked}'
 		finally:
 			await http.close()
+		assert HELD in clicked, clicked
 	finally:
 		await server._close_all_sessions()
 

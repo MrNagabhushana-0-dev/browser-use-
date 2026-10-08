@@ -1258,6 +1258,7 @@ class BrowserUseServer:
 				ClickCoordinateEvent(coordinate_x=coordinate_x, coordinate_y=coordinate_y)
 			)
 			await event
+			await event.event_result(raise_if_any=True, raise_if_none=False)  # a failed click is not "Clicked"
 			return f'Clicked at coordinates ({coordinate_x}, {coordinate_y})'
 
 		# Index-based clicking
@@ -1297,6 +1298,7 @@ class BrowserUseServer:
 
 				event = self.browser_session.event_bus.dispatch(ClickElementEvent(node=element))
 				await event
+				await event.event_result(raise_if_any=True, raise_if_none=False)
 				return f'Clicked element {index} (new tab not supported for non-link elements)'
 		else:
 			# Normal click
@@ -1304,6 +1306,7 @@ class BrowserUseServer:
 
 			event = self.browser_session.event_bus.dispatch(ClickElementEvent(node=element))
 			await event
+			await event.event_result(raise_if_any=True, raise_if_none=False)
 			return f'Clicked element {index}'
 
 	async def _type_text(self, index: int, text: str) -> str:
