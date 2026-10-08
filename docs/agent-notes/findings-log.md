@@ -2842,3 +2842,26 @@ tab moves to another site. Before this round, sharing a tab let the AI take it a
   - The reviewers' sound option for the API case, a request gate through `Fetch`, can't tell the person's own
     requests from the AI's, so it isn't built.
 - **Not run:** the branded browsers with the click gate.
+- **Full `tests/ci` on `db7d6f5`: green, 1,651 passed, 30 skipped, 0 failed** (39m56s, `loopwatch` on,
+  18 stalls).
+- **Bridge suite with the click gate** (`db7d6f5`):
+
+  | Browser | Result |
+  |---|---|
+  | Chromium 141 | 32/32 |
+  | Edge 154 | 32/32, twice |
+  | Brave 1.97 | 26/32 once, then 32/32 three times in a row |
+  | Vivaldi 8.2 | 31/31, plus the known Cancel skip |
+  | Chrome 155 (Load unpacked) | 32/32, in three invocations |
+
+  - Brave's 6 failures included the grant and click tests. Their log was lost to my output filter, and they didn't
+    come back in three runs with full logs kept. Unexplained.
+
+**Next, in order:**
+1. Measure the dropout fix on the intermittent: 30 runs of the three-file combination that failed about 1 in 14.
+2. Frames and child sessions of other sites (OOPIFs) through the bridge: the per-site check covers only the tab's
+   top frame.
+3. A revoke for Always and for held clicks in the extension's popup, and a force-ask category for sensitive sites.
+4. The `test_network.py:397` intermittent: Chromium's own Google requests reach the SOCKS proxy's hostname log.
+5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
