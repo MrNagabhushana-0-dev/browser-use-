@@ -74,10 +74,11 @@ def own_display():
 def site():
 	server = HTTPServer()
 	server.start()
-	server.expect_request('/shared').respond_with_data(SHARED, content_type='text/html')
+	server.expect_request('/shared').respond_with_data(
+		SHARED, content_type='text/html', headers={'Set-Cookie': 'shared_pref=1; Path=/'}
+	)
 	server.expect_request('/shared/next').respond_with_data('<title>Next page</title>next', content_type='text/html')
 	server.expect_request('/shared/login').respond_with_data(LOGIN, content_type='text/html')
-	server.expect_request('/private').respond_with_data('<title>Private page</title>mail', content_type='text/html')
 	yield server
 	server.clear()
 	if server.is_running():
@@ -85,14 +86,31 @@ def site():
 
 
 @pytest.fixture(scope='module')
-async def bridge(display, site, tmp_path_factory):
-	"""A relay plus a person's browser that shares /shared* (by the always-share setting) and not /private."""
+def mail():
+	"""Another site the person is signed in to, never shared with the AI. On another host than `site` (localhost):
+	cookies are kept per host, not per port."""
+	server = HTTPServer(host='127.0.0.1')
+	server.start()
+	server.expect_request('/private').respond_with_data(
+		'<title>Private page</title>mail',
+		content_type='text/html',
+		headers={'Set-Cookie': 'mail_session=s3cr3t; Path=/; HttpOnly'},
+	)
+	yield server
+	server.clear()
+	if server.is_running():
+		server.stop()
+
+
+@pytest.fixture(scope='module')
+async def bridge(display, site, mail, tmp_path_factory):
+	"""A relay plus a person's browser that shares /shared* (by the always-share setting) and not the mail tab."""
 	relay = await BridgeRelay(port=0).start()
 	proc = _person_browser(
 		tmp_path_factory.mktemp('person'),
 		relay,
 		display,
-		[site.url_for('/private'), site.url_for('/shared')],
+		[mail.url_for('/private'), site.url_for('/shared')],
 		always_share=[site.url_for('/shared') + '*'],
 		resume_after_ms=1500,
 	)
@@ -223,11 +241,17 @@ async def test_web_pages_and_other_extensions_cannot_use_the_relay(bridge):
 	relay, _ = bridge
 	assert (await get(relay, '/json/version', Origin='https://evil.test')).status_code == 403
 	assert (await get(relay, '/json/version', Host='evil.test')).status_code == 403
+	# Another extension is not a CDP client either: only the pinned one may talk to the relay, and on its own channel.
+	other = 'chrome-extension://' + 'b' * 32
+	assert (await get(relay, '/json/version', Origin=other)).status_code == 403
+	ws_url = (await get(relay, '/json/version')).json()['webSocketDebuggerUrl']
 	async with aiohttp.ClientSession() as http:
 		with pytest.raises(aiohttp.WSServerHandshakeError):
 			await http.ws_connect(f'ws://127.0.0.1:{relay.port}/extension', origin='chrome-extension://' + 'a' * 32)
 		with pytest.raises(aiohttp.WSServerHandshakeError):
 			await http.ws_connect(f'ws://127.0.0.1:{relay.port}/cdp/not-the-token')
+		with pytest.raises(aiohttp.WSServerHandshakeError):
+			await http.ws_connect(ws_url, origin=other)
 	assert EXTENSION_ID == 'lcdhfliibkimhbimdfhogcmjedlkoemg'
 
 
@@ -287,7 +311,7 @@ async def test_relay_refuses_what_a_person_cannot_do(bridge):
 		relay.set_holder('human')
 		held = await cdp.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': 5, 'y': 5}, sid)
 		assert 'the person is using the browser' in held['error']['message']
-		looked = await cdp.call('Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True}, sid)
+		looked = await cdp.call('DOM.getDocument', {'depth': 1}, sid)
 		assert 'result' in looked, 'looking stays allowed while the person drives'
 	finally:
 		relay.set_holder('agent')
@@ -312,6 +336,18 @@ async def test_ai_opens_and_closes_its_own_tab(bridge, site):
 		await until(closed)
 	finally:
 		await http.close()
+
+
+def test_one_policy_file_says_what_only_looks_for_both_the_relay_and_the_extension(tmp_path):
+	from browser_use.bridge import EXTENSION_DIR
+	from browser_use.bridge.policy import acts
+
+	worker = (EXTENSION_DIR / 'worker.js').read_text()
+	assert "getURL('policy.json')" in worker and 'ACTING' not in worker, 'the worker reads the shared list, keeps none of its own'
+	assert (write_extension(tmp_path / 'ext') / 'policy.json').exists()
+	assert not acts('DOM.getDocument') and not acts('Page.captureScreenshot') and not acts('Accessibility.getFullAXTree')
+	for method in ('Runtime.evaluate', 'Runtime.callFunctionOn', 'Input.dispatchKeyEvent', 'Page.navigate', 'Made.upMethod'):
+		assert acts(method), method
 
 
 def test_manifest_v2_variant_for_old_chromium(tmp_path):
@@ -505,3 +541,71 @@ async def test_cancel_on_the_debugging_bar_stops_the_ai_until_the_person_shares_
 		await relay.stop()
 		proc.terminate()
 		proc.wait(timeout=10)
+
+
+async def _shared_session(relay: BridgeRelay, site: HTTPServer):
+	"""A raw CDP client attached to the shared tab, on a fresh copy of the shared page."""
+	http, cdp = await raw_cdp(relay)
+	target = next(i['targetId'] for i in (await cdp.call('Target.getTargets'))['result']['targetInfos'] if '/shared' in i['url'])
+	sid = (await cdp.call('Target.attachToTarget', {'targetId': target, 'flatten': True}))['result']['sessionId']
+	await cdp.call('Page.navigate', {'url': site.url_for('/shared')}, sid)
+
+	async def fresh():
+		r = await cdp.call(
+			'Runtime.evaluate', {'expression': 'document.title + Array.isArray(window.clicks)', 'returnByValue': True}, sid
+		)
+		return r.get('result', {}).get('result', {}).get('value') == 'Shared pagetrue'
+
+	await until(fresh)
+	return http, cdp, sid
+
+
+async def test_while_the_person_holds_the_wheel_page_script_cannot_act_either(bridge, site):
+	"""Script can click, type and navigate as well as input can, and nobody can tell a read from a write in it.
+
+	So while the person drives (or after Cancel) only looking passes: screenshots, the DOM, the accessibility tree.
+	"""
+	relay, _ = bridge
+	http, cdp, sid = await _shared_session(relay, site)
+	try:
+		relay.set_holder('human')
+		for method, params in [
+			('Runtime.evaluate', {'expression': "document.getElementById('b').click()"}),
+			('Runtime.callFunctionOn', {'functionDeclaration': 'function () { this.click() }', 'executionContextId': 1}),
+			('Page.addScriptToEvaluateOnNewDocument', {'source': 'document.title = 1'}),
+			('DOM.focus', {'nodeId': 1}),
+			('Made.upMethod', {}),
+		]:
+			reply = await cdp.call(method, params, sid)
+			assert 'the person is using the browser' in reply.get('error', {}).get('message', ''), (method, reply)
+		for method, params in [
+			('Page.captureScreenshot', {}),
+			('DOM.getDocument', {'depth': 1}),
+			('Accessibility.getFullAXTree', {}),
+		]:
+			assert 'result' in await cdp.call(method, params, sid), method
+	finally:
+		relay.set_holder('agent')
+	try:
+		clicks = await cdp.call('Runtime.evaluate', {'expression': 'clicks.length', 'returnByValue': True}, sid)
+		assert clicks['result']['result']['value'] == 0, 'nothing was clicked while the person held the wheel'
+	finally:
+		await http.close()
+
+
+async def test_cookies_of_sites_that_are_not_shared_stay_hidden(bridge, site, mail):
+	relay, _ = bridge
+	http, cdp, sid = await _shared_session(relay, site)
+	try:
+		for method, params, session in [
+			('Network.getAllCookies', {}, sid),
+			('Network.getCookies', {'urls': [mail.url_for('/private'), site.url_for('/shared')]}, sid),
+			('Storage.getCookies', {}, sid),
+			('Storage.getCookies', {}, None),
+		]:
+			reply = await cdp.call(method, params, session)
+			names = {c['name'] for c in reply['result']['cookies']}
+			assert 'mail_session' not in names, f'{method} handed over a cookie of a site the person did not share'
+			assert 'shared_pref' in names, f"{method} should still show the shared site's own cookie: {names}"
+	finally:
+		await http.close()

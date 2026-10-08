@@ -48,8 +48,10 @@ They then:
 
 Then:
 - You see and act only in shared tabs. Tabs you open yourself go to a separate window of theirs.
-- When the person clicks, types or scrolls in a shared tab, you are paused: input and navigation are refused, with a
-  message saying so. You carry on 8 s after their last input. Alt+Shift+Z takes or hands back the wheel explicitly,
+- When the person clicks, types or scrolls in a shared tab, you are paused. Everything but looking is refused, with a
+  message saying so: input, navigation and page script alike. Script can click and submit too, and nobody can tell
+  a read from a write in it. Screenshots, the DOM and the accessibility tree still work. You carry on 8 s after their
+  last input. Alt+Shift+Z takes or hands back the wheel explicitly,
   and an explicit hold lasts until they hand it back.
 - Their browser shows "Retinat bridge started debugging this browser" while a tab is shared. **Cancel** on that bar
   (or closing it) is their stop button. Every tab is unshared, and you may not open a tab of your own either, until they
@@ -268,6 +270,11 @@ tests for them skip elsewhere.
     - writing or clearing cookies directly;
     - switching off protections (bypassing CSP, ignoring certificate errors);
     - anything browser-wide (`Browser.*`, browser contexts).
+  - **Cookies:** cookie reads (`Network.getCookies`, `Network.getAllCookies`, `Storage.getCookies`) return only the
+    cookies of shared tabs' sites. Through CDP, any tab can otherwise read every cookie in the browser, HttpOnly ones
+    included.
+  - **The relay's CDP endpoints** answer only clients with no Origin header. That refuses web pages and every
+    extension, the bridge's own included: the bridge's extension uses its own channel.
   - **Password, card and one-time-code fields** are left to the person.
   - **Browser shortcuts** (Ctrl+T, Ctrl+W, Ctrl+L) don't fire from AI keys; open, close and switch tabs with the tab tools.
   - **Hidden tabs:** a hidden shared tab is brought to the front of its own window before any click or key, as a

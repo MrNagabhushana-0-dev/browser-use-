@@ -4,9 +4,16 @@ Looking, reading, scrolling, clicking, typing, navigating, screenshots and runni
 and input arrives as ordinary trusted events. Refused are the things a person sitting at the browser cannot do
 from a tab: changing what the browser says it is or where it is, rewriting traffic, writing cookies behind the
 site's back, switching off protections, and reaching past the shared tabs into the browser itself.
+
+While the person holds the wheel, or after they press Cancel, only looking passes: the methods listed in
+extension/policy.json, which the extension's worker reads too. Everything else counts as acting, including page
+script (script can click, type and navigate, and nobody can tell a read from a write in it) and any method the list
+does not know, so a new CDP method cannot slip through by being unlisted.
 """
 
+import json
 import re
+from pathlib import Path
 
 DISGUISE = 'it would change what the browser says it is or where it is, which the person cannot do from a tab'
 TRAFFIC = 'it would rewrite or inject network traffic instead of letting the site see what the browser really sends'
@@ -56,18 +63,26 @@ REFUSED: dict[str, str] = {
 }
 REFUSED_DOMAINS: dict[str, str] = {'Fetch': TRAFFIC, 'Browser': BROWSER, 'SystemInfo': BROWSER}
 
-# Methods that act on the page; refused while the person holds the wheel. Keep in step with worker.js.
-ACTING = re.compile(
-	r'^(Input\.|Page\.(navigate|navigateToHistoryEntry|reload|close)$'
-	r'|DOM\.(setFileInputFiles|setAttributeValue|setAttributesAsText|setOuterHTML|setNodeValue|removeNode|removeAttribute)$'
-	r'|Target\.(createTarget|closeTarget|activateTarget)$)'
-)
+POLICY_FILE = Path(__file__).parent / 'extension' / 'policy.json'
+
+
+def _glob(pattern: str) -> str:
+	return '.*'.join(re.escape(part) for part in pattern.split('*'))
+
+
+PASSIVE_GLOBS: tuple[str, ...] = tuple(json.loads(POLICY_FILE.read_text())['passive'])
+PASSIVE = re.compile('|'.join(f'(?:{_glob(g)})' for g in PASSIVE_GLOBS))
+
+
+def acts(method: str) -> bool:
+	"""Whether `method` does more than look (everything not on the passive list does)."""
+	return PASSIVE.fullmatch(method) is None
 
 
 def refusal(method: str, human_driving: bool = False, stopped: bool = False) -> str | None:
 	"""Why `method` is refused through the bridge, or None when it is allowed."""
 	assert '.' in method, f'not a CDP method: {method!r}'
 	why = REFUSED.get(method) or REFUSED_DOMAINS.get(method.split('.', 1)[0])
-	if why is None and (human_driving or stopped) and ACTING.match(method):
+	if why is None and (human_driving or stopped) and acts(method):
 		why = STOPPED if stopped else HOLDING
 	return f'{method} is refused through the extension bridge: {why}' if why else None

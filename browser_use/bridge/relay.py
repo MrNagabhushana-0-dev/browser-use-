@@ -15,6 +15,7 @@ import logging
 import secrets
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 from aiohttp import WSMsgType, web
 
@@ -30,6 +31,8 @@ MAX_MESSAGE = 200 * 1024 * 1024
 # An MV3 service worker is stopped after 30 s without extension events; a message its own JS handles resets that
 # (Chrome 116+), protocol-level pings do not. Measured: without this, an idle worker dropped off at 30 s.
 KEEPALIVE_S = 20.0
+# Cookie reads any tab can make; their results are cut down to the shared sites (see _only_shared_sites).
+COOKIE_READS = frozenset({'Network.getCookies', 'Network.getAllCookies', 'Storage.getCookies'})
 BROWSER_TARGET = {'targetId': 'browser', 'type': 'browser', 'title': '', 'url': '', 'attached': True, 'canAccessOpener': False}
 
 
@@ -142,13 +145,13 @@ class BridgeRelay:
 	# -- HTTP discovery ----------------------------------------------------------------------------
 
 	def _local_only(self, request: web.Request) -> None:
-		# Host check defeats DNS rebinding; web pages always send Origin, CDP clients do not.
+		# Host check defeats DNS rebinding. Browsers send Origin from web pages and extensions alike; CDP clients
+		# (BrowserSession, Retinat) do not. Our own extension never uses these endpoints: it has /extension.
 		host = (request.host or '').rsplit(':', 1)[0]
 		if host not in LOCAL_HOSTS:
 			raise web.HTTPForbidden(text='the bridge only answers on loopback')
-		origin = request.headers.get('Origin')
-		if origin and not origin.startswith('chrome-extension://'):
-			raise web.HTTPForbidden(text='web pages may not use the bridge')
+		if request.headers.get('Origin'):
+			raise web.HTTPForbidden(text='web pages and other extensions may not use the bridge')
 
 	async def _version(self, request: web.Request) -> web.Response:
 		self._local_only(request)
@@ -239,8 +242,8 @@ class BridgeRelay:
 		msg_id = next(self._ids)
 		fut: asyncio.Future = asyncio.get_running_loop().create_future()
 		self._pending[msg_id] = fut
-		await ws.send_str(json.dumps({'id': msg_id, 'op': op, **kwargs}))
 		try:
+			await ws.send_str(json.dumps({'id': msg_id, 'op': op, **kwargs}))  # a failed send must not leave it pending
 			return await asyncio.wait_for(fut, self.command_timeout)
 		finally:
 			self._pending.pop(msg_id, None)
@@ -347,7 +350,10 @@ class BridgeRelay:
 		if method == 'Target.getTargetInfo' and child is None:
 			return {'targetInfo': self.tabs[tab_id]}
 		self._check(method)
-		return await self._ext_call('send', tabId=tab_id, sessionId=child, method=method, params=params)
+		result = await self._ext_call('send', tabId=tab_id, sessionId=child, method=method, params=params)
+		if method in COOKIE_READS:
+			result = {**result, 'cookies': self._only_shared_sites(result.get('cookies', []))}
+		return result
 
 	async def _browser_call(self, client: _Client, method: str, params: dict[str, Any]) -> dict[str, Any]:
 		if method == 'Browser.getVersion':
@@ -424,7 +430,20 @@ class BridgeRelay:
 		if not urls:
 			return {'cookies': []}
 		tab_id = next(iter(self.tabs))
-		return await self._ext_call('send', tabId=tab_id, method='Network.getCookies', params={'urls': urls})
+		result = await self._ext_call('send', tabId=tab_id, method='Network.getCookies', params={'urls': urls})
+		return {**result, 'cookies': self._only_shared_sites(result.get('cookies', []))}
+
+	def _only_shared_sites(self, cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+		"""The cookies a shared tab's own site would send. Any tab can read every cookie in the browser through
+		CDP (HttpOnly ones too); the person shared tabs, not their whole cookie jar."""
+		hosts = {urlparse(info['url']).hostname for info in self.tabs.values() if info['url'].startswith(('http://', 'https://'))}
+		hosts.discard(None)
+
+		def sent_to_a_shared_site(cookie: dict[str, Any]) -> bool:
+			domain = str(cookie.get('domain', '')).lstrip('.')
+			return bool(domain) and any(h == domain or h.endswith('.' + domain) for h in hosts if h)
+
+		return [c for c in cookies if sent_to_a_shared_site(c)]
 
 	def _emit(self, client: _Client, method: str, params: dict[str, Any], session_id: str | None = None) -> None:
 		if client.ws.closed:

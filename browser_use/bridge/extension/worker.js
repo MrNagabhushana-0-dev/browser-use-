@@ -8,9 +8,13 @@ const C = globalThis.chrome;
 const action = C.action || C.browserAction;
 const store = C.storage.session || C.storage.local;
 
-// What the AI may not do while the person holds the wheel (the relay enforces the same list).
-const ACTING =
-	/^(Input\.|Page\.(navigate|navigateToHistoryEntry|reload|close)$|DOM\.(setFileInputFiles|setAttributeValue|setAttributesAsText|setOuterHTML|setNodeValue|removeNode|removeAttribute)$)/;
+// The methods that only look (policy.json, shared with the relay). While the person holds the wheel, or after
+// Cancel, anything else is refused, page script included. Until the list is loaded nothing counts as looking.
+let PASSIVE = [];
+
+function acts(method) {
+	return !PASSIVE.some((re) => re.test(method));
+}
 
 const state = {
 	// resumeAfterMs: after the person's last input in a shared tab, how long until the AI may carry on (0: never)
@@ -168,7 +172,7 @@ async function handle(msg) {
 		}
 		case 'send': {
 			needShared(msg.tabId);
-			if (state.holder === 'human' && ACTING.test(msg.method)) throw new Error('the person is using the browser right now');
+			if (state.holder === 'human' && acts(msg.method)) throw new Error('the person is using the browser right now');
 			await ensureAttached(msg.tabId);
 			const input = msg.method.startsWith('Input.');
 			if (input && !msg.sessionId) await bringToFront(msg.tabId);
@@ -293,6 +297,12 @@ async function status(tabId) {
 
 async function boot() {
 	try {
+		const policy = await (await fetch(C.runtime.getURL('policy.json'))).json();
+		PASSIVE = policy.passive.map(globToRegExp);
+	} catch (e) {
+		// no policy: nothing counts as looking, so a held wheel refuses everything
+	}
+	try {
 		const packaged = await (await fetch(C.runtime.getURL('settings.json'))).json();
 		Object.assign(state.settings, packaged);
 	} catch (e) {
@@ -325,7 +335,10 @@ C.debugger.onDetach.addListener(async (source, reason) => {
 		if (state.stopped) return; // Chrome detaches every tab at once; the first one does the work
 		state.stopped = true;
 		state.autoHeld = false;
-		for (const id of [...state.shared]) await unshare(id, 'the person pressed Cancel on the debugging bar');
+		for (const id of [...state.shared]) {
+			// one tab failing to let go must not leave the others shared
+			await unshare(id, 'the person pressed Cancel on the debugging bar').catch(() => state.shared.delete(id));
+		}
 		await save();
 		state.holder = 'human';
 		await save();
