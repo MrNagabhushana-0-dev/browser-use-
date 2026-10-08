@@ -2173,3 +2173,165 @@ as "Chrome".
    the page so the page isn't changed.
 3. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 4. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 42 (owner's request): Tencent BrowserSkill, taken apart and compared with the bridge
+
+**Item.** Not from the Next list. The owner asked: see how BrowserSkill (github.com/Tencent/BrowserSkill) works,
+reverse-engineer it, compare it with ours, and take the best parts.
+
+**Method.** One workflow, with subagents on the cheapest model at the owner's request:
+- 7 readers of their source (transport, sessions, tools, trust, VOM observe, debugging, agent UX) and 1 map of ours.
+- 1 live run: built the `bsk` CLI and the extension from source and connected them to a Chromium.
+- A comparison gave 15 candidates, each checked by two verifiers: one against their code, one against ours. The
+  verifiers ran code, not only read it. Most candidates came back "real gap, wrong details"; the details are fixed
+  below before anything was built.
+
+**What BrowserSkill is.** A Rust CLI and daemon plus a WXT MV3 extension.
+- `observe` gives a compact role tree with `@eN` refs.
+- AI tabs live in an Agent Window. A person's tab is borrowed only after they confirm it.
+- `request_help` hands a step to the person with completion criteria.
+- It also has network debug evidence with redaction, an operation audit, `bsk doctor`, and an error envelope with
+  hints.
+- Every RPC method has an effect class in one exhaustive Rust match: PassiveRead, TransientInput, BrowserMutation
+  and ControlPlane. `evaluate` counts as a mutation, because nobody can tell a read from a write in script.
+
+**Defects in ours that the verifiers found by running our code** (fixed in `0556f21`, each test fails on the old
+code):
+1. While the person held the wheel, `Runtime.evaluate` and `callFunctionOn` still ran. Page script, and the
+   library's `this.click()` fallback when real input was refused, clicked anyway.
+   - Fixed by adopting their effect rule: `extension/policy.json` lists the methods that only look, and both the
+     relay and the worker read it.
+   - While the person drives, or after Cancel, everything else is refused, unknown methods included.
+2. The relay's and the worker's lists had drifted: `Target.closeTarget` was in one and not the other. One file now
+   feeds both.
+3. `Network.getAllCookies`, `Network.getCookies` and `Storage.getCookies` returned HttpOnly cookies of sites the
+   person never shared. The relay now cuts every cookie read down to shared tabs' hosts.
+4. `/json/version` and `/cdp` accepted any `chrome-extension://` Origin, so another extension could drive shared
+   tabs. Any Origin is refused now.
+5. A failed send left its call pending, and one failing unshare could stop Cancel half way.
+
+**Adopted** (`1cf8c18`):
+- **A sharing pill** (after their in-page overlay). Each shared tab shows "An AI is working in this tab" with
+  **Take the wheel**, which turns into **Hand back** while the person holds it.
+  - It sits in a closed shadow root marked `data-browser-use-exclude`, so the DOM state the AI reads skips it.
+  - Its own clicks don't trigger the auto-pause. Without that rule, pressing "Take the wheel" first paused through
+    the pointerdown and then toggled the wheel straight back; the test caught it.
+  - It answers Round 41's Next item 2 (Vivaldi has no debugging bar), but not as that item asked: it is **in the
+    page**, not outside it.
+  - In the page means the page's own script can see the host element. A site can therefore tell that the tab is
+    shared with an AI, which is disclosure rather than disguise.
+  - Outside the page, the alternatives are a badge that is hidden until pinned, or the debugging bar, which Vivaldi
+    doesn't draw. Neither is always visible.
+  - Test: a real XTest click on the pill, found by its colour in a screenshot. The first click takes the wheel and
+    keeps it past the auto-pause window, because it is a hold, not a pause. The second click gives it back.
+- **Checked clicks** (after their hit-test verification, lighter). `retinat_click` reports what it landed on, for
+  example `button "Save"`.
+  - With `expect`, it refuses a click whose target doesn't carry that text.
+  - Under a held wheel it returns the bridge's reason, not a guess.
+  - Test: Save and Delete side by side. A click with `expect: "Save"` aimed at Delete is refused, and the page's
+    counters prove Delete was never pressed. Removing the guard fails the test.
+  - Not adopted: their capture-bound coordinates, where a click must cite the look it came from and expires.
+- **`python -m browser_use.bridge doctor [--json]`** (after `bsk doctor`). It checks six things, each ok, warn,
+  fail or na, with the fix in the person's words:
+  - the relay;
+  - the extension: its version, and the round trip of a ping;
+  - the browser's version floors: 125 for cross-site iframes, 116 for idle connections;
+  - whether both sides have the same policy list;
+  - the shared tabs;
+  - the wheel.
+
+  It exits 1 on any fail. The relay gains `/bridge/status`, which is loopback-only with no Origin allowed, and
+  `BridgeRelay.status()`. The extension reports its policy list in `hello`. Retinat's "not connected" error now
+  carries the doctor's fixes, so the AI can pass them on.
+  - Tests:
+    - live: nothing running, a relay alone, then the real extension with a shared tab, where all six checks read
+      ok;
+    - the judgement on states that are slow to stage: old Chromium, a held wheel, Cancel, a stale or silent
+      extension, and a looser or stricter policy;
+    - the command's exit code.
+
+    Four mutations of the judgement each fail the test.
+
+**Not adopted, and why.**
+- **Remote pairing and device grants (C15).** The bridge is loopback-only by design.
+- **One arbitration state for everything (C2).** For the bridge, the claim is wrong: the relay and the worker
+  already refuse Retinat's and the eyes' input while the person holds the wheel. The library's own `ControlLock`
+  outside the bridge remains separate. That is unchanged and is noted here, not built.
+- **Occlusion folding (C6).** It is mostly covered already: paint-order filtering drops fully covered controls from
+  the index. Transparent covers and partly covered controls are not handled.
+- **A document-revision guard before input (C4).** `expect` covers the costly case, a click landing on the wrong
+  control. A per-target revision is not built.
+
+**Not measured.**
+- The pill on Brave, Edge, Vivaldi and branded Chrome. This round's pill test ran on Chromium 141 only.
+- Whether any site breaks on an extra element under `<html>`. None of the test pages did.
+- Speed against BrowserSkill. Nothing here was compared on time or tokens.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. A consent gate for tabs opened from a shared tab (C8): watch them, but don't share them until the person
+   confirms.
+3. Passive, redacted network evidence for a shared tab (C10): read only, no interception. Redact by value as well as
+   by key name, which theirs doesn't.
+4. A fail-closed `effect_state` in tool errors (C12): `none`, `committed` or `unknown`, defaulting to `unknown`, so
+   an AI never retries an action that may already have happened.
+5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 43: two more ways around the cookie scoping, and a consent gate for opened tabs
+
+**Items.** Round 42's Next list, item 2 (the consent gate). While building it, a reading of the relay found the two
+leaks below, which came first.
+
+**Full `tests/ci` on `1cf8c18` (Round 42's code) with `loopwatch`: green, 1,618 passed, 30 skipped, 0 failed**
+(30m04s). One stall: 1.4 s, in an MCP launch-retry test.
+
+**Found and fixed: the shared page's traffic carried other sites' sessions.**
+- Round 42 cut the *cookie reads* down to shared sites. The relay still forwarded every Network event unchanged,
+  though.
+- `Network.responseReceivedExtraInfo` and `requestWillBeSentExtraInfo` carry the raw `Set-Cookie` and `Cookie`
+  headers of every request a shared page makes, to any host.
+- **Test:** a shared page embeds a pixel from the person's mail site, never shared. The pixel's response refreshes
+  an HttpOnly session cookie. Before the fix, the token reached the AI in the event stream.
+- **The fix:** raw cookie headers (and the raw `headersText`) never leave the relay. Parsed cookie lists in events
+  (`associatedCookies`, `blockedCookies`, `exemptedCookies`) are cut to shared sites, as the reads are. The request
+  itself stays visible.
+
+**Found and fixed: `Network.loadNetworkResource` fetched any address with the person's cookies.**
+- Through one shared tab, it read the person's unshared mail page: status 200 and a readable stream, past CORS.
+- A page can't do that, and neither can a person from a tab, so it is refused now.
+
+**Probed, not leaking on Chromium 141:**
+- `DOMStorage` and `IndexedDB` are not exposed to extensions at all ("wasn't found").
+- `CacheStorage` refuses a storage key whose frame isn't in the tab.
+- The relay now holds the same line itself: site-data calls (`DOMStorage`, `IndexedDB`, `CacheStorage` and
+  `Storage`) are refused when the origin they name isn't a shared tab's. This guards builds that expose more; it is
+  tested directly, since Chromium 141 never lets such a call through to fail on.
+
+**Built: a consent gate for tabs opened from a shared tab** (after BrowserSkill's confirmed tab borrow).
+- **Before:** any tab a shared tab opened was shared. So a person's middle-click from a shared mail to their bank
+  handed the bank to the AI.
+- **Now the tab follows whoever opened it.** The worker compares, for the opener tab, the AI's last acting command
+  with the person's last input:
+  - If the AI acted last, within 2.5 s, the tab is shared.
+  - Otherwise, the person opened it, or the page did on its own. The tab stays unshared, and its pill (indigo) asks
+    "Share this one too?" with **Share this tab** and **Not now**.
+- **Only the person can answer:**
+  - The buttons act only on trusted clicks.
+  - The page can't reach into the closed shadow root.
+  - The AI has no input in an unshared tab.
+- **Test:**
+  - The AI clicks a `target=_blank` link, and the new tab is shared.
+  - The person clicks another, with a real XTest click. Its tab is not shared until a real click on the pill's Share.
+  - Forcing the decision either way fails the test: shared means the person's tab is handed over, and never shared
+    means the AI's tab never arrives.
+- **Known limit:** the person's input is told from the AI's by the AI's own dispatch times (600 ms). A person's
+  click inside that window after an AI input on the same tab counts as the AI's.
+
+**Next, in order:**
+1. Keep `loopwatch` on for full runs until a red one is caught with it.
+2. Passive, redacted network evidence for a shared tab (C10): read only, redacted by value as well as by key name.
+3. A fail-closed `effect_state` in tool errors (C12).
+4. Run the bridge suite, with the pill and the new gate, on Edge, Brave, Vivaldi and branded Chrome.
+5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
