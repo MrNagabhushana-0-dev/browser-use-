@@ -2097,7 +2097,10 @@ plain space.
 - Retinat tests: 13/13.
 - On the way, a JS string in a Python triple-quoted literal needed `\\n`, not `\n`. The first attempt broke `find` with
   a syntax error, and the existing test caught it before commit.
-- Full `tests/ci` on `00fd2be` with `loopwatch`: in progress when this was written; the result follows below.
+- **Full `tests/ci` with `loopwatch`: green, 1,610 passed, 30 skipped, 0 failed** (30m34s).
+  - It ran on `b464120`, which has the same code as `00fd2be` plus notes. The first run was killed halfway by a
+    container restart, with no failures before that.
+  - Two stalls: 2.6 s in the screen-recording test and 1.2 s in a beta-agent cleanup test. No `keyframes:` warnings.
 
 **Next, in order:**
 1. Keep `loopwatch` on for full runs until a red one is caught with it.
