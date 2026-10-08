@@ -2335,3 +2335,52 @@ leaks below, which came first.
 4. Run the bridge suite, with the pill and the new gate, on Edge, Brave, Vivaldi and branded Chrome.
 5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 44: `retinat_requests`, and a red full run on `b33eb1c`
+
+**Item.** Round 43's Next list, item 2 (C10, network evidence).
+
+**Full `tests/ci` on `b33eb1c` (Round 43's code) with `loopwatch`: red.**
+- `test_eyes.py::test_cuts_and_sounds_are_found_where_they_are` failed after 973 passed, and the run stops at the
+  first failure. No stalls were logged.
+- Round 43 changed no eyes code: its diff is the bridge relay, worker, pill and tests. The test passed 3/3 alone,
+  and the whole eyes file passed later in this round.
+- The assertion text was lost, because only the log's tail was kept. That is a harness mistake: full runs now keep
+  the whole log, so the next red one says which sub-check (cuts, segment kinds, tone, beats) gave way.
+- It is not called a flake here: the cause is unknown.
+
+**Built: `retinat_requests`, what the page fetched** (after BrowserSkill's network evidence).
+- **The log:** the eyes keep a passive log of the tab's requests, from Network events only. Nothing is intercepted,
+  and Network is never disabled, since the downloads and HAR watchdogs use it. The log starts before `retinat_open`
+  navigates, so the page load is in it.
+- **The tool:** one line per request (method, status or failure, type, path, size, time) and a cursor. `only` can
+  be `failed` or `api`, and `body=#n` returns one response body.
+- **Redaction:**
+  - It runs before any cut, so a secret is never half kept. JSON over 512 KB is withheld rather than cut.
+  - By key name, like BrowserSkill's: password, token, api_key, session, and so on, with camelCase names and
+    `a.b[c]` paths split.
+  - By value, which theirs doesn't do: JWTs, bearer tokens, API-key shapes (`sk-`, `ghp_`, `AKIA`, `AIza`, `xox`),
+    private keys and Luhn-valid card numbers are masked wherever they sit. A 13-digit order number that fails Luhn
+    stays.
+- **Test:** a page logs in with a secret in its query string, and the response hides a JWT under an innocent key
+  ("note"). Then an API fails with 500, and an image is missing.
+  - The listing shows all three requests with the query secret masked.
+  - `failed` shows the two failures.
+  - The login body shows the user's name with the session and the JWT masked.
+  - The 500's body shows its error.
+  - Removing either redaction layer fails the test.
+- **Not measured:** whether agents use it unprompted, and what it costs per task.
+
+- **Full `tests/ci` on `5a92a09` with `loopwatch` and the whole log kept: green, 1,622 passed, 30 skipped, 0
+  failed** (30m36s). One stall: 1.4 s, in a beta-agent cleanup test. The cuts-and-sounds test passed, so of the last
+  three full runs, one was red on it, and its cause is still unknown.
+
+**Next, in order:**
+1. Keep `loopwatch` on, with the whole log kept, until a red one is caught with it. The cuts-and-sounds test comes
+   first if it fails again: the log will say which sub-check gave way.
+2. A fail-closed `effect_state` in tool errors (C12): `none`, `committed` or `unknown`, defaulting to `unknown`.
+3. Run the bridge suite, with the pill, the consent gate and the leak fixes, on Edge, Brave, Vivaldi and branded
+   Chrome.
+4. A blind run: do agents reach for `retinat_requests` when a click seems to do nothing, and what does it cost?
+5. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+6. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
