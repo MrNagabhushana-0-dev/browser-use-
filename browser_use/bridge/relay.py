@@ -33,6 +33,11 @@ MAX_MESSAGE = 200 * 1024 * 1024
 KEEPALIVE_S = 20.0
 # Cookie reads any tab can make; their results are cut down to the shared sites (see _only_shared_sites).
 COOKIE_READS = frozenset({'Network.getCookies', 'Network.getAllCookies', 'Storage.getCookies'})
+COOKIE_HEADERS = frozenset({'cookie', 'set-cookie', 'cookie2', 'set-cookie2'})
+COOKIE_LISTS = ('associatedCookies', 'blockedCookies', 'exemptedCookies')
+# Domains whose calls name the site whose data they read (securityOrigin, storageKey, ...), for any site at all.
+SITE_DATA_DOMAINS = frozenset({'DOMStorage', 'IndexedDB', 'CacheStorage', 'Storage'})
+SITE_KEYS = ('securityOrigin', 'storageKey', 'origin', 'ownerOrigin')
 BROWSER_TARGET = {'targetId': 'browser', 'type': 'browser', 'title': '', 'url': '', 'attached': True, 'canAccessOpener': False}
 
 
@@ -325,6 +330,8 @@ class BridgeRelay:
 			self._children[params['sessionId']] = tab_id
 		elif method == 'Target.detachedFromTarget':
 			self._children.pop(params.get('sessionId', ''), None)
+		if method.startswith('Network.'):
+			params = self._without_cookies(params)
 		for client in self._clients:
 			sid = client.by_tab.get(tab_id)
 			if sid is not None:
@@ -385,6 +392,7 @@ class BridgeRelay:
 		if method == 'Target.getTargetInfo' and child is None:
 			return {'targetInfo': self.tabs[tab_id]}
 		self._check(method)
+		self._check_site(method, params)
 		result = await self._ext_call('send', tabId=tab_id, sessionId=child, method=method, params=params)
 		if method in COOKIE_READS:
 			result = {**result, 'cookies': self._only_shared_sites(result.get('cookies', []))}
@@ -467,6 +475,66 @@ class BridgeRelay:
 		tab_id = next(iter(self.tabs))
 		result = await self._ext_call('send', tabId=tab_id, method='Network.getCookies', params={'urls': urls})
 		return {**result, 'cookies': self._only_shared_sites(result.get('cookies', []))}
+
+	def _shared_origins(self) -> set[tuple[str, str, int | None]]:
+		origins = set()
+		for info in self.tabs.values():
+			url = urlparse(info['url'])
+			if url.scheme in ('http', 'https') and url.hostname:
+				origins.add((url.scheme, url.hostname, url.port or (443 if url.scheme == 'https' else 80)))
+		return origins
+
+	def _check_site(self, method: str, params: dict[str, Any]) -> None:
+		"""Site data (local storage, IndexedDB, caches, ...) of shared tabs' own sites only. These calls take any
+		origin, so through one shared tab they would read every site the person uses."""
+		if method.split('.', 1)[0] not in SITE_DATA_DOMAINS:
+			return
+		named = [params.get(k) for k in SITE_KEYS]
+		for holder in ('storageId', 'storageBucket'):
+			inner = params.get(holder)
+			if isinstance(inner, dict):
+				named += [inner.get(k) for k in SITE_KEYS]
+		if isinstance(params.get('cacheId'), str):
+			named.append(params['cacheId'].split('|', 1)[0])
+		shared = self._shared_origins()
+		for value in named:
+			if not isinstance(value, str) or not value:
+				continue
+			url = urlparse(value.split('^', 1)[0])  # a storage key may carry a partition after ^
+			site = (url.scheme, url.hostname or '', url.port or (443 if url.scheme == 'https' else 80))
+			if site not in shared:
+				raise BridgeError(
+					f'{method} is refused through the extension bridge: it reads the data of {value}, a site the person'
+					" has not shared; only the shared tabs' own sites can be read"
+				)
+
+	def _without_cookies(self, params: dict[str, Any]) -> dict[str, Any]:
+		"""Network events carry raw Cookie and Set-Cookie headers for every request a shared page makes, to any host.
+		Raw cookie headers never leave the relay (a shared site's cookies stay readable through the cookie reads),
+		and parsed cookie lists are cut down to shared sites, as those reads are."""
+
+		def headers(h: Any) -> Any:
+			return {k: v for k, v in h.items() if k.lower() not in COOKIE_HEADERS} if isinstance(h, dict) else h
+
+		out = dict(params)
+		out.pop('headersText', None)
+		if 'headers' in out:
+			out['headers'] = headers(out['headers'])
+		for part in ('request', 'response', 'redirectResponse'):
+			if isinstance(out.get(part), dict):
+				inner = {k: v for k, v in out[part].items() if k not in ('headersText', 'requestHeadersText')}
+				for key in ('headers', 'requestHeaders'):
+					if key in inner:
+						inner[key] = headers(inner[key])
+				out[part] = inner
+		for key in COOKIE_LISTS:
+			if isinstance(out.get(key), list):
+				out[key] = [
+					e
+					for e in out[key]
+					if isinstance(e, dict) and isinstance(e.get('cookie'), dict) and self._only_shared_sites([e['cookie']])
+				]
+		return out
 
 	def _only_shared_sites(self, cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
 		"""The cookies a shared tab's own site would send. Any tab can read every cookie in the browser through

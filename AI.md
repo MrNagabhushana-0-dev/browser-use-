@@ -275,12 +275,19 @@ tests for them skip elsewhere.
   - **Refused, with a reason:**
     - spoofing identity or location (user agent, geolocation, timezone, locale, viewport, touch emulation);
     - rewriting traffic (`Fetch`, extra headers);
+    - fetching an address with the person's cookies from outside a page (`Network.loadNetworkResource`), past the
+      cross-site checks every page is held to;
     - writing or clearing cookies directly;
     - switching off protections (bypassing CSP, ignoring certificate errors);
     - anything browser-wide (`Browser.*`, browser contexts).
   - **Cookies:** cookie reads (`Network.getCookies`, `Network.getAllCookies`, `Storage.getCookies`) return only the
     cookies of shared tabs' sites. Through CDP, any tab can otherwise read every cookie in the browser, HttpOnly ones
     included.
+    - Network events never carry raw `Cookie` or `Set-Cookie` headers: a shared page's requests go to other sites
+      too (pixels, sign-in checks), and those headers would carry their sessions. Requests and responses are still
+      seen, and a shared site's own cookies stay readable through the cookie reads.
+  - **Other sites' data:** local storage, IndexedDB, caches and other site data are readable only for shared tabs'
+    own sites. Chromium already keeps most of this from extensions; the relay refuses the rest by origin.
   - **The relay's CDP endpoints** answer only clients with no Origin header. That refuses web pages and every
     extension, the bridge's own included: the bridge's extension uses its own channel.
   - **Password, card and one-time-code fields** are left to the person.

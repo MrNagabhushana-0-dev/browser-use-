@@ -2,8 +2,9 @@
 
 Looking, reading, scrolling, clicking, typing, navigating, screenshots and running script in the page all pass,
 and input arrives as ordinary trusted events. Refused are the things a person sitting at the browser cannot do
-from a tab: changing what the browser says it is or where it is, rewriting traffic, writing cookies behind the
-site's back, switching off protections, and reaching past the shared tabs into the browser itself.
+from a tab: changing what the browser says it is or where it is, rewriting traffic, fetching with their cookies
+from outside any page, writing cookies behind the site's back, switching off protections, and reaching past the
+shared tabs into the browser itself. (Reading other sites' cookies and data is cut off in the relay, by site.)
 
 While the person holds the wheel, or after they press Cancel, only looking passes: the methods listed in
 extension/policy.json, which the extension's worker reads too. Everything else counts as acting, including page
@@ -19,6 +20,7 @@ DISGUISE = 'it would change what the browser says it is or where it is, which th
 TRAFFIC = 'it would rewrite or inject network traffic instead of letting the site see what the browser really sends'
 STORAGE = "it would write cookies or site data directly instead of through the site's own pages"
 PROTECTION = 'it would switch off a browser protection'
+CREDENTIALED = "it fetches any address with the person's cookies, past the cross-site checks every page is held to"
 BROWSER = 'it reaches past the shared tabs into the browser itself'
 HOLDING = (
 	'the person is using the browser right now; wait a few seconds and try again, or ask them to hand back the wheel'
@@ -59,6 +61,7 @@ REFUSED: dict[str, str] = {
 		STORAGE,
 	),
 	**dict.fromkeys(('Page.setBypassCSP', 'Security.setIgnoreCertificateErrors'), PROTECTION),
+	'Network.loadNetworkResource': CREDENTIALED,
 	**dict.fromkeys(('Target.createBrowserContext', 'Target.disposeBrowserContext', 'Target.exposeDevToolsProtocol'), BROWSER),
 }
 REFUSED_DOMAINS: dict[str, str] = {'Fetch': TRAFFIC, 'Browser': BROWSER, 'SystemInfo': BROWSER}

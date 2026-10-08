@@ -19,7 +19,7 @@ import httpx
 import pytest
 from pytest_httpserver import HTTPServer
 
-from browser_use.bridge import EXTENSION_ID, BridgeRelay, bridge_session_kwargs, write_extension
+from browser_use.bridge import EXTENSION_ID, BridgeError, BridgeRelay, bridge_session_kwargs, write_extension
 from browser_use.browser import BrowserSession
 from browser_use.browser.profile import BrowserProfile
 from browser_use.browser.watchdogs.local_browser_watchdog import LocalBrowserWatchdog
@@ -92,9 +92,19 @@ def mail():
 	server = HTTPServer(host='127.0.0.1')
 	server.start()
 	server.expect_request('/private').respond_with_data(
-		'<title>Private page</title>mail',
+		'<title>Private page</title>mail<script>'  # what a mail client keeps on the device
+		"localStorage.mail_token = 'l0cal-t0k3n';"
+		"caches.open('mail').then(c => c.put('/inbox', new Response('cached-inb0x')));"
+		"const o = indexedDB.open('mail', 1); o.onupgradeneeded = () => o.result.createObjectStore('msgs');"
+		"o.onsuccess = () => o.result.transaction('msgs', 'readwrite').objectStore('msgs').put('idb-m3ssage', 1);"
+		'</script>',
 		content_type='text/html',
 		headers={'Set-Cookie': 'mail_session=s3cr3t; Path=/; HttpOnly'},
+	)
+	server.expect_request('/pixel').respond_with_data(  # a tracking pixel that also refreshes the session
+		b'GIF89a\x01\x00\x01\x00\x00\x00\x00;',
+		content_type='image/gif',
+		headers={'Set-Cookie': 'mail_refresh=r3fr3sh-t0k3n; Path=/; HttpOnly'},
 	)
 	yield server
 	server.clear()
@@ -736,6 +746,91 @@ async def _pill(cdp: RawCDP, sid: str) -> dict | None:
 	expr += " exclude: h.getAttribute('data-browser-use-exclude')}; })()"
 	reply = await cdp.call('Runtime.evaluate', {'expression': expr, 'returnByValue': True}, sid)
 	return reply.get('result', {}).get('result', {}).get('value')
+
+
+async def test_network_events_do_not_carry_cookies_of_sites_that_are_not_shared(bridge, site, mail):
+	"""Cookie reads were cut down to shared sites, but Network events carry raw Cookie and Set-Cookie headers for
+	every request a shared page makes, to any host. A shared page that embeds a pixel from the person's mail must not
+	hand the AI the mail's session through the event stream either."""
+	relay, _ = bridge
+	site.expect_request('/shared/embeds').respond_with_data(
+		f'<!doctype html><title>Embeds</title><img id="px" src="{mail.url_for("/pixel")}">', content_type='text/html'
+	)
+	http, cdp, sid = await _shared_session(relay, site)
+	try:
+		await cdp.call('Network.enable', {}, sid)
+		cdp.events.clear()
+		await cdp.call('Page.navigate', {'url': site.url_for('/shared/embeds')}, sid)
+
+		async def pixel_loaded():
+			r = await cdp.call(
+				'Runtime.evaluate', {'expression': "document.getElementById('px')?.complete === true", 'returnByValue': True}, sid
+			)
+			return r.get('result', {}).get('result', {}).get('value') is True
+
+		await until(pixel_loaded)
+		await asyncio.sleep(0.5)
+		await cdp.call('Runtime.evaluate', {'expression': '1'}, sid)  # drain what arrived meanwhile
+		seen = json.dumps(cdp.events)
+		assert any(e.get('method') == 'Network.responseReceivedExtraInfo' for e in cdp.events), 'no extra info to check'
+		assert 'r3fr3sh-t0k3n' not in seen and 's3cr3t' not in seen, 'the mail session leaked through Network events'
+		assert '/pixel' in seen, 'the request itself is still visible; only its cookies are withheld'
+		assert (await cdp.call('Network.disable', {}, sid)).get('result') == {}
+	finally:
+		await http.close()
+
+
+async def test_storage_of_sites_that_are_not_shared_stays_hidden(bridge, site, mail):
+	"""DOMStorage, IndexedDB and CacheStorage take any origin, and Network.loadNetworkResource fetches any address
+	with the person's cookies past CORS: through one shared tab, each could read a site the person never shared."""
+	relay, _ = bridge
+	http, cdp, sid = await _shared_session(relay, site)
+	theirs = mail.url_for('/').rstrip('/')
+	ours = site.url_for('/').rstrip('/')
+	try:
+		frame = (await cdp.call('Page.getFrameTree', {}, sid))['result']['frameTree']['frame']['id']
+		await cdp.call('DOMStorage.enable', {}, sid)
+		await cdp.call('IndexedDB.enable', {}, sid)
+		asks = {
+			'DOMStorage': ('DOMStorage.getDOMStorageItems', {'storageId': {'securityOrigin': theirs, 'isLocalStorage': True}}),
+			'IndexedDB': (
+				'IndexedDB.requestData',
+				{
+					'securityOrigin': theirs,
+					'databaseName': 'mail',
+					'objectStoreName': 'msgs',
+					'indexName': '',
+					'skipCount': 0,
+					'pageSize': 10,
+				},
+			),
+			'CacheStorage': ('CacheStorage.requestCacheNames', {'securityOrigin': theirs}),
+			'loadNetworkResource': (
+				'Network.loadNetworkResource',
+				{
+					'frameId': frame,
+					'url': mail.url_for('/private'),
+					'options': {'disableCache': True, 'includeCredentials': True},
+				},
+			),
+		}
+		leaked = {}
+		for name, (method, params) in asks.items():
+			reply = await cdp.call(method, params, sid)
+			if 'error' not in reply:
+				leaked[name] = reply['result']
+		assert not leaked, f'read a site that is not shared: {leaked}'
+		# Chromium 141 keeps DOMStorage and IndexedDB from extensions and CacheStorage to the tab's frames; the relay
+		# holds the same line itself, for builds that don't.
+		storage = {'storageId': {'securityOrigin': theirs, 'isLocalStorage': True}}
+		with pytest.raises(BridgeError, match='has not shared'):
+			relay._check_site('DOMStorage.getDOMStorageItems', storage)
+		with pytest.raises(BridgeError, match='has not shared'):
+			relay._check_site('CacheStorage.requestEntries', {'cacheId': f'{theirs}/|mail'})
+		relay._check_site('DOMStorage.getDOMStorageItems', {'storageId': {'securityOrigin': ours, 'isLocalStorage': True}})
+		relay._check_site('IndexedDB.requestDatabaseNames', {'storageKey': ours + '/'})
+	finally:
+		await http.close()
 
 
 async def test_a_shared_tab_says_the_ai_is_working_and_one_click_takes_the_wheel(bridge, display, site):
