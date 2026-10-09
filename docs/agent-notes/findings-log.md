@@ -3087,6 +3087,9 @@ gets its own round.
   - The helper was checked against the saved screenshots before any run, including Brave's toolbar.
 - Bridge file 36/36 twice on Chromium and once on Brave.
 
+**Full `tests/ci` on `b8d3646`** with the loop watchdog: 1,655 passed, 30 skipped, 0 failed (31m13s). The bridge file
+passed 36/36 inside it. There were 3 stalls, the longest 1.5 s.
+
 **Next, in order:**
 1. Confine the AI's page script to the page's own world and the worlds it creates (see Round 54). Also restrict the
    extension's local storage to its own pages.
