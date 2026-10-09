@@ -3040,6 +3040,9 @@ Always isn't offered. Here, Allow lasted until the browser closed, and any site 
   tests among them. The log was not kept (only the summary), and two reruns with the log kept passed 35/35. It is
   recorded, not explained. Earlier rounds saw first-run timeouts on branded browsers too.
 
+**Full `tests/ci` on `2dcf78d`** with the loop watchdog: 1,654 passed, 30 skipped, 0 failed (31m31s). The bridge file
+passed 35/35 inside it. There were 4 stalls, the longest 3.0 s.
+
 **Next, in order:**
 1. Confine the AI's page script to the page's own world and the worlds it creates. Found while drafting item 2: the
    bridge does not check CDP calls that name an execution context, so a call can name the extension's own
@@ -3048,3 +3051,45 @@ Always isn't offered. Here, Allow lasted until the browser closed, and any site 
 3. The A/B test of sheet vs recall vs journal, with blind agents (open since Round 10).
 4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 5. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 55 (unattended loop): marking a site "ask every time" from the Sites list
+
+**Item.** Next item 2. Item 1 stays at the top for the owner: it is a change to what the bridge forwards, and it
+gets its own round.
+
+**Built** (`03d8544`, committed as WIP before its browser test ran; the test's button finder was fixed after):
+- **In the Sites list, each site has Every time beside Remove.** It moves the site to a new section, "Asked about on
+  every visit". There each site has Stop asking.
+- **Marking only takes access away:**
+  - the site leaves this session's list and Always;
+  - a shared tab already there keeps its current visit;
+  - the relay may mark a site too (`relay.ask_every_time(site)`, an origin or `https://*.example.com`).
+- **Stopping can give access back** (under Always `*`), so it is the person's alone, from the extension's own pages.
+  The relay's op ignores any request to stop.
+- A string that is neither an origin nor a `*.` pattern is refused. Extension 0.5.1.
+
+**Tests:**
+- **A new bridge test on a ninth loopback site (`127.0.0.11`):**
+  - an ordinary Allow;
+  - the person's Every time;
+  - the AI's next navigation asks on every visit;
+  - the relay can't stop asking;
+  - the person's Stop asking;
+  - the relay marks the site again;
+  - a bad site string is refused.
+- **Mutation check:** 4 of 4 mutants fail it: the relay can stop asking, no Every time button, Stop asking marks
+  instead, marking keeps the session grant.
+- **The test's own button finder failed twice:**
+  - It merged two adjacent Stop asking buttons into one row and clicked between them.
+  - In the full file it took dark tab-title text for a button, before the page had drawn.
+  - Both button finders now share one helper. It accepts only solid blocks: 30 or more sampled dots filling at least
+    half their box, split from text on the same row. It also waits until two shots 0.3 s apart agree.
+  - The helper was checked against the saved screenshots before any run, including Brave's toolbar.
+- Bridge file 36/36 twice on Chromium and once on Brave.
+
+**Next, in order:**
+1. Confine the AI's page script to the page's own world and the worlds it creates (see Round 54). Also restrict the
+   extension's local storage to its own pages.
+2. The A/B test of sheet vs recall vs journal, with blind agents (open since Round 10).
+3. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+4. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.

@@ -1409,29 +1409,52 @@ async def _absent(probe, host: str) -> bool:
 	return await probe(host) is None
 
 
-async def _topmost(display: str, colour: tuple[int, int, int], timeout: float = 10.0) -> tuple[int, int]:
-	"""The middle of the topmost solid button of `colour` on screen (a list has one per row)."""
+def _blocks(shot, colour: tuple[int, int, int]) -> list[tuple[int, int]]:
+	"""The middles of the solid blocks of `colour` in a screenshot, top to bottom, one per row. A button fills its box;
+	text of the same hue (a tab title) and small icons (Brave's toolbar) don't, so they are left out."""
+	points = [
+		(x, y) for y in range(0, shot.height, 3) for x in range(0, shot.width, 3) if _near(shot.getpixel((x, y)), colour, 24)
+	]
+	bands: list[list[tuple[int, int]]] = []
+	for x, y in sorted(points, key=lambda p: p[1]):
+		if bands and y - bands[-1][-1][1] <= 3:  # the next sampled row: the same block
+			bands[-1].append((x, y))
+		else:
+			bands.append([(x, y)])
+	blocks = []
+	for band in bands:
+		pieces: list[list[tuple[int, int]]] = []  # side by side in one band: a row's text, then its button
+		for x, y in sorted(band):
+			if pieces and x - pieces[-1][-1][0] <= 6:
+				pieces[-1].append((x, y))
+			else:
+				pieces.append([(x, y)])
+		for piece in pieces:
+			xs, ys = sorted(x for x, _ in piece), sorted(y for _, y in piece)
+			box = ((xs[-1] - xs[0]) // 3 + 1) * ((ys[-1] - ys[0]) // 3 + 1)
+			if len(piece) >= 30 and len(piece) >= box / 2:
+				blocks.append((xs[len(xs) // 2], ys[len(ys) // 2]))
+	return sorted(blocks, key=lambda b: (b[1], b[0]))
+
+
+async def _settled_blocks(display: str, colour: tuple[int, int, int], timeout: float = 10.0) -> list[tuple[int, int]]:
+	"""`_blocks` on screen once two shots 0.3 s apart agree: a page still drawing, or the debugging bar sliding in,
+	moves them."""
 	from PIL import ImageGrab
 
-	for _ in range(int(timeout / 0.25)):
-		shot = ImageGrab.grab(xdisplay=display).convert('RGB')
-		points = [
-			(x, y) for y in range(0, shot.height, 3) for x in range(0, shot.width, 3) if _near(shot.getpixel((x, y)), colour, 24)
-		]
-		# rows of the colour, top to bottom; a button is a solid block, an icon of the same hue (Brave's toolbar has
-		# one) only a few dots
-		bands: list[list[tuple[int, int]]] = []
-		for x, y in sorted(points, key=lambda p: p[1]):
-			if bands and y - bands[-1][-1][1] <= 6:
-				bands[-1].append((x, y))
-			else:
-				bands.append([(x, y)])
-		row = next((b for b in bands if len(b) >= 30), None)
-		if row:
-			xs, ys = sorted(x for x, _ in row), sorted(y for _, y in row)
-			return xs[len(xs) // 2], ys[len(ys) // 2]
-		await asyncio.sleep(0.25)
+	last: list[tuple[int, int]] = []
+	for _ in range(int(timeout / 0.3)):
+		now = _blocks(ImageGrab.grab(xdisplay=display).convert('RGB'), colour)
+		if now and now == last:
+			return now
+		last = now
+		await asyncio.sleep(0.3)
 	raise AssertionError('no such button on screen')
+
+
+async def _topmost(display: str, colour: tuple[int, int, int], timeout: float = 10.0) -> tuple[int, int]:
+	"""The middle of the topmost solid button of `colour` on screen (a list has one per row)."""
+	return (await _settled_blocks(display, colour, timeout))[0]
 
 
 async def test_a_site_the_person_wants_asked_about_every_time_is_allowed_for_one_visit_only(bridge, display, site, bank):
@@ -1487,27 +1510,7 @@ EVERY, STOP = (2, 119, 189), (69, 90, 100)  # a site's "Every time" and "Stop as
 
 async def _rows(display: str, colour: tuple[int, int, int], timeout: float = 10.0) -> list[tuple[int, int]]:
 	"""The middles of the solid buttons of `colour` on screen, one per list row, top to bottom."""
-	from PIL import ImageGrab
-
-	for _ in range(int(timeout / 0.25)):
-		shot = ImageGrab.grab(xdisplay=display).convert('RGB')
-		ys = sorted(
-			{y for y in range(0, shot.height, 3) for x in range(0, shot.width, 3) if _near(shot.getpixel((x, y)), colour, 24)}
-		)
-		bands: list[list[int]] = []
-		for y in ys:
-			if bands and y - bands[-1][-1] <= 6:
-				bands[-1].append(y)
-			else:
-				bands.append([y])
-		rows = []
-		for band in (b for b in bands if len(b) >= 3):
-			xs = sorted(x for x in range(0, shot.width, 3) if _near(shot.getpixel((x, band[len(band) // 2])), colour, 24))
-			rows.append((xs[len(xs) // 2], band[len(band) // 2]))
-		if rows:
-			return rows
-		await asyncio.sleep(0.25)
-	raise AssertionError('no such button on screen')
+	return await _settled_blocks(display, colour, timeout)
 
 
 async def test_the_person_marks_a_site_to_be_asked_about_every_time_and_only_they_can_stop_it(
