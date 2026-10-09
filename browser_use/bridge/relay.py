@@ -181,6 +181,12 @@ class BridgeRelay:
 		being shared. It only ever takes access away. Returns the sites as they are now."""
 		return (await self._ext_call('forget', site=site)).get('sites') or {}
 
+	async def ask_every_time(self, site: str) -> dict[str, Any]:
+		"""Have the person asked about `site` (an origin, or `https://*.example.com`) on every visit from now on, with no
+		Always: it leaves the allowed and Always lists. It only ever takes access away; only the person can stop it, from
+		the extension's Sites list. Returns the sites as they are now."""
+		return (await self._ext_call('everyTime', site=site)).get('sites') or {}
+
 	def set_holder(self, holder: str) -> None:
 		"""Who drives the shared tabs. The extension's popup and shortcut set this too."""
 		assert holder in ('agent', 'human'), holder

@@ -6,15 +6,29 @@ function ask(msg) {
 	return new Promise((resolve) => C.runtime.sendMessage({ ...msg, tabId }, resolve));
 }
 
-function siteRow(site, what) {
+function button(className, text, msg) {
+	const b = document.createElement('button');
+	b.className = className;
+	b.textContent = text;
+	b.onclick = async () => render(await ask(msg));
+	return b;
+}
+
+function siteRow(site, what, everyTime) {
 	const li = document.createElement('li');
 	const name = document.createElement('span');
 	name.textContent = what ? `${site} (${what})` : site;
-	const forget = document.createElement('button');
-	forget.className = 'forget';
-	forget.textContent = 'Remove';
-	forget.onclick = async () => render(await ask({ ask: 'forget', site }));
-	li.append(name, forget);
+	li.append(name);
+	if (!everyTime) li.append(button('every', 'Every time', { ask: 'every-time', site, on: true }));
+	li.append(button('forget', 'Remove', { ask: 'forget', site }));
+	return li;
+}
+
+function everyRow(site) {
+	const li = document.createElement('li');
+	const name = document.createElement('span');
+	name.textContent = site;
+	li.append(name, button('stop', 'Stop asking', { ask: 'every-time', site, on: false }));
 	return li;
 }
 
@@ -23,9 +37,13 @@ function renderSites(sites) {
 	list.replaceChildren();
 	if (!sites) return;
 	const always = new Set(sites.always || []);
-	for (const site of [...new Set([...(sites.allowed || []), ...always])].sort()) list.append(siteRow(site, always.has(site) ? 'always' : ''));
-	for (const site of [...(sites.declined || [])].sort()) list.append(siteRow(site, 'you said no'));
+	const every = new Set(sites.everyTime || []);
+	for (const site of [...new Set([...(sites.allowed || []), ...always])].sort()) list.append(siteRow(site, always.has(site) ? 'always' : '', every.has(site)));
+	for (const site of [...(sites.declined || [])].sort()) list.append(siteRow(site, 'you said no', every.has(site)));
 	document.getElementById('nosites').hidden = list.children.length > 0;
+	const everyList = document.getElementById('every');
+	everyList.replaceChildren(...[...every].sort().map(everyRow));
+	document.getElementById('everysec').hidden = every.size === 0;
 }
 
 function render(s) {

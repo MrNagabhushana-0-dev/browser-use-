@@ -294,6 +294,35 @@ async function forgetSite(site) {
 	emit({ event: 'site', origin: site, answer: 'forgotten' });
 }
 
+// Have a site (or `scheme://*.domain` pattern) asked about on every visit, or stop. Marking only ever takes access
+// away: the site leaves this session's and the Always lists, and a shared tab there keeps only its current visit. So
+// the relay may mark a site too. Stopping can give access back (under Always "*"), so it is the person's alone.
+async function everyTime(site, on) {
+	const pattern = /^https?:\/\/\*\.[^/:*]+(:\d+)?$/.test(site) || (siteOf(site) === site && site !== '' && site !== 'null');
+	if (!pattern) throw new Error(`${site} is not a site: give an origin (https://bank.example) or https://*.bank.example`);
+	if (on) {
+		for (const tabId of [...state.shared]) {
+			const url = state.urls.get(tabId) || (await call(C.tabs, 'get', tabId).catch(() => ({}))).url;
+			const here = siteOf(url || '');
+			if (here && siteMatches(site, here) && !state.visits.has(tabId)) visit(tabId, here, true);
+		}
+		for (const s of [...state.allowed]) if (siteMatches(site, s)) state.allowed.delete(s);
+		if (!state.settings.askEveryTime.includes(site)) state.settings.askEveryTime = [...state.settings.askEveryTime, site];
+		state.settings.alwaysAllow = state.settings.alwaysAllow.filter((p) => p !== site);
+		await keepSettings({ askEveryTime: state.settings.askEveryTime, alwaysAllow: state.settings.alwaysAllow });
+	} else {
+		state.settings.askEveryTime = state.settings.askEveryTime.filter((p) => p !== site);
+		await keepSettings({ askEveryTime: state.settings.askEveryTime });
+		for (const [tabId, v] of [...state.visits]) if (siteMatches(site, v.site)) state.visits.delete(tabId);
+		for (const tabId of [...state.shared]) {
+			const url = state.urls.get(tabId) || (await call(C.tabs, 'get', tabId).catch(() => ({}))).url;
+			if (url && !allowedUrl(url, tabId)) await moved(tabId, url); // back to the usual rule: allowed, or asked
+		}
+	}
+	await save();
+	emit({ event: 'site', origin: site, answer: on ? 'every time' : 'not every time' });
+}
+
 function sitesNow() {
 	const asking = state.asking ? state.asking.origin : null;
 	const everyTime = state.settings.askEveryTime;
@@ -573,12 +602,16 @@ function needShared(tabId) {
 }
 
 async function handle(msg) {
-	if (state.stopped && !['ping', 'tabs', 'forget'].includes(msg.op)) throw new Error(STOPPED); // forgetting only takes access away
+	// forgetting a site and marking one to be asked about every time only take access away
+	if (state.stopped && !['ping', 'tabs', 'forget', 'everyTime'].includes(msg.op)) throw new Error(STOPPED);
 	switch (msg.op) {
 		case 'ping':
 			return { sites: sitesNow() };
 		case 'forget':
 			await forgetSite(String(msg.site || ''));
+			return { sites: sitesNow() };
+		case 'everyTime':
+			await everyTime(String(msg.site || ''), true); // the relay may only mark a site, never stop asking
 			return { sites: sitesNow() };
 		case 'reload': {
 			// The relay saw an older copy running: Chrome keeps the old service worker after the files change until
@@ -978,7 +1011,7 @@ C.runtime.onMessage.addListener((msg, sender, reply) => {
 	// The popup (an extension page) may share any tab and change the relay; content scripts in pages may only act on
 	// their own tab through its pill.
 	const fromExtension = sender.id === C.runtime.id && (sender.url || '').startsWith(C.runtime.getURL(''));
-	if (['share', 'unshare', 'relay', 'forget'].includes(msg.ask) && !fromExtension) return false;
+	if (['share', 'unshare', 'relay', 'forget', 'every-time'].includes(msg.ask) && !fromExtension) return false;
 	(async () => {
 		await state.ready;
 		if (msg.ask === 'share') await share(msg.tabId, 'shared by the person');
@@ -987,6 +1020,7 @@ C.runtime.onMessage.addListener((msg, sender, reply) => {
 		else if (msg.ask === 'pill') return pillState(sender.tab ? sender.tab.id : -1);
 		else if (msg.ask === 'share-here' && sender.tab) await share(sender.tab.id, 'shared by the person');
 		else if (msg.ask === 'forget') await forgetSite(String(msg.site || ''));
+		else if (msg.ask === 'every-time') await everyTime(String(msg.site || ''), msg.on === true);
 		else if (msg.ask === 'sites' && sender.tab) {
 			// from the pill: the person's list of sites, in a tab of its own that is never shared
 			await call(C.tabs, 'create', { url: C.runtime.getURL('popup.html') + '#page', active: true });

@@ -19,6 +19,8 @@
 	li { display: flex; align-items: center; gap: 8px; }
 	li span { flex: 1; overflow-wrap: anywhere; }
 	button.forget { padding: 3px 10px; background: #ad1457; border-color: #ad1457; color: white; }
+	button.every { padding: 3px 10px; background: #0277bd; border-color: #0277bd; color: white; }
+	button.stop { padding: 3px 10px; background: #455a64; border-color: #455a64; color: white; }
 </style>
 </head>
 <body>
@@ -31,6 +33,10 @@
 		<small>Sites the AI may use</small>
 		<ul id="sites"></ul>
 		<small id="nosites">None yet: it asks before using a site you haven't shared.</small>
+	</section>
+	<section id="everysec" hidden>
+		<small>Asked about on every visit (Every time: no Always, one visit at a time)</small>
+		<ul id="every"></ul>
 	</section>
 	<details>
 		<summary><small>Relay address</small></summary>

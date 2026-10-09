@@ -1044,7 +1044,17 @@ ALLOW, ALWAYS, NO = (106, 27, 154), (0, 105, 92), (198, 40, 40)  # the ask windo
 def elsewhere():
 	"""Sites the person has not shared, each on its own loopback address (so each is its own site)."""
 	servers = []
-	for host in ('127.0.0.2', '127.0.0.3', '127.0.0.4', '127.0.0.5', '127.0.0.6', '127.0.0.7', '127.0.0.8', '127.0.0.9'):
+	for host in (
+		'127.0.0.2',
+		'127.0.0.3',
+		'127.0.0.4',
+		'127.0.0.5',
+		'127.0.0.6',
+		'127.0.0.7',
+		'127.0.0.8',
+		'127.0.0.9',
+		'127.0.0.11',
+	):
 		server = HTTPServer(host=host)
 		server.start()
 		server.expect_request('/page').respond_with_data(
@@ -1470,6 +1480,98 @@ async def test_a_site_the_person_wants_asked_about_every_time_is_allowed_for_one
 	finally:
 		await _back_to_shared(cdp, sid, site)
 		await http.close()
+
+
+EVERY, STOP = (2, 119, 189), (69, 90, 100)  # a site's "Every time" and "Stop asking" in the Sites list
+
+
+async def _rows(display: str, colour: tuple[int, int, int], timeout: float = 10.0) -> list[tuple[int, int]]:
+	"""The middles of the solid buttons of `colour` on screen, one per list row, top to bottom."""
+	from PIL import ImageGrab
+
+	for _ in range(int(timeout / 0.25)):
+		shot = ImageGrab.grab(xdisplay=display).convert('RGB')
+		ys = sorted(
+			{y for y in range(0, shot.height, 3) for x in range(0, shot.width, 3) if _near(shot.getpixel((x, y)), colour, 24)}
+		)
+		bands: list[list[int]] = []
+		for y in ys:
+			if bands and y - bands[-1][-1] <= 6:
+				bands[-1].append(y)
+			else:
+				bands.append([y])
+		rows = []
+		for band in (b for b in bands if len(b) >= 3):
+			xs = sorted(x for x in range(0, shot.width, 3) if _near(shot.getpixel((x, band[len(band) // 2])), colour, 24))
+			rows.append((xs[len(xs) // 2], band[len(band) // 2]))
+		if rows:
+			return rows
+		await asyncio.sleep(0.25)
+	raise AssertionError('no such button on screen')
+
+
+async def test_the_person_marks_a_site_to_be_asked_about_every_time_and_only_they_can_stop_it(
+	bridge, display, site, elsewhere, bank
+):
+	"""The every-time list was fixed when the extension was written. Now a site's "Every time" in the Sites list marks
+	it, and so may the relay (marking only takes access away). "Stop asking" is the person's alone."""
+	relay, _ = bridge
+	visited = elsewhere[8]
+	origin, banking = f'http://127.0.0.11:{visited.port}', f'http://127.0.0.10:{bank.port}'
+	http, cdp, sid = await _shared_session(relay, site)
+
+	async def sites() -> dict:
+		return (await relay.status())['extension']['sites']
+
+	async def to_front() -> None:
+		shared = next(t for t in (await get(relay, '/json/list')).json() if '/shared' in t['url'])
+		await cdp.call('Target.activateTarget', {'targetId': shared['id']})
+
+	try:
+		await cdp.call('Page.navigate', {'url': visited.url_for('/page')}, sid)
+		x_click(display, *await _asked(display, ALLOW))  # an ordinary Allow, until the browser closes
+		await _until_ok(cdp, 'Page.navigate', {'url': visited.url_for('/page')}, sid)
+		await _back_to_shared(cdp, sid, site)
+		assert origin in (await sites())['allowed']
+
+		await to_front()
+		await asyncio.sleep(1.0)
+		x_click(display, *await _asked(display, SITES))  # the person opens the list
+		x_click(display, *(await _rows(display, EVERY))[0])  # and marks the top row (127.0.0.11 sorts first)
+		await until(lambda: _has(sites, 'everyTime', origin))
+		assert origin not in (await sites())['allowed']
+
+		await to_front()
+		marked = await cdp.call('Page.navigate', {'url': visited.url_for('/page')}, sid)
+		assert 'asks on every visit' in marked.get('error', {}).get('message', ''), marked
+		x_click(display, *await _asked(display, NO))
+
+		await relay._ext_call('everyTime', site=origin, on=False)  # the relay can't stop it: it only ever marks
+		await asyncio.sleep(0.5)
+		assert origin in (await sites())['everyTime']
+
+		await to_front()
+		await asyncio.sleep(1.0)
+		x_click(display, *await _asked(display, SITES))
+		x_click(display, *(await _rows(display, STOP))[-1])  # the person stops it (the bank's row is above)
+		await until(lambda: _lacks(sites, 'everyTime', origin))
+		assert banking in (await sites())['everyTime'], 'the wrong row was stopped'
+
+		now = await relay.ask_every_time(origin)  # the relay marks it again
+		assert origin in now['everyTime'] and origin not in now['allowed'], now
+		with pytest.raises(BridgeError, match='is not a site'):
+			await relay.ask_every_time('banking')
+	finally:
+		await to_front()
+		await http.close()
+
+
+async def _has(probe, key: str, site: str) -> bool:
+	return site in (await probe())[key]
+
+
+async def _lacks(probe, key: str, site: str) -> bool:
+	return site not in (await probe())[key]
 
 
 def test_the_servers_know_the_words_the_extension_refuses_a_site_with():

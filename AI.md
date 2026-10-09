@@ -69,7 +69,9 @@ Then:
   - **Sites asked about every time** (after Claude in Chrome's force-prompt category): sites the person lists with
     `--ask-every-time SITE` (a bank, say) are asked about on every visit, with no Always. An Allow covers one visit
     of one tab: the tab has a minute to get there, and the visit ends when it leaves. Another tab is asked about on
-    its own. Their list wins over Always and `*`; `relay.status()` shows it as `everyTime`.
+    its own. Their list wins over Always and `*`; `relay.status()` shows it as `everyTime`. The Sites list marks a
+    site (**Every time**) and stops asking (**Stop asking**); `relay.ask_every_time(site)` marks one from code, since
+    marking only takes access away. Only the person can stop asking.
   - **Frames of other sites** inside an allowed page (a sign-in widget, a payment form, an embed) are shown to you
     only when their site is allowed too. Otherwise their own sessions never reach you: no attach, no events, no
     commands. They still load for the person, never left paused, and their pixels are in your screenshots.
