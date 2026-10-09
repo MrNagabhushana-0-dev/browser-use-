@@ -1408,9 +1408,16 @@ async def _topmost(display: str, colour: tuple[int, int, int], timeout: float = 
 		points = [
 			(x, y) for y in range(0, shot.height, 3) for x in range(0, shot.width, 3) if _near(shot.getpixel((x, y)), colour, 24)
 		]
-		if len(points) >= 30:
-			top = min(y for _, y in points)
-			row = [(x, y) for x, y in points if y <= top + 18]
+		# rows of the colour, top to bottom; a button is a solid block, an icon of the same hue (Brave's toolbar has
+		# one) only a few dots
+		bands: list[list[tuple[int, int]]] = []
+		for x, y in sorted(points, key=lambda p: p[1]):
+			if bands and y - bands[-1][-1][1] <= 6:
+				bands[-1].append((x, y))
+			else:
+				bands.append([(x, y)])
+		row = next((b for b in bands if len(b) >= 30), None)
+		if row:
 			xs, ys = sorted(x for x, _ in row), sorted(y for _, y in row)
 			return xs[len(xs) // 2], ys[len(ys) // 2]
 		await asyncio.sleep(0.25)

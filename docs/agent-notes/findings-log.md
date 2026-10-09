@@ -3006,10 +3006,45 @@ Always isn't offered. Here, Allow lasted until the browser closed, and any site 
 - **Frames:** a frame of an every-time site inside another site's page stays hidden from the AI. Only a top-level
   visit counts.
 
+**Full `tests/ci` on `0cbdbd5`** (the Round 53 code) with the loop watchdog: 1,654 passed, 30 skipped, 0 failed
+(41m17s). There were 16 stalls, the longest 2.4 s.
+
 **Next, in order:**
 1. Rerun the branded browsers with the frame gating, the Sites list and every-time sites (Edge, Brave, Vivaldi,
    Chrome).
 2. Let the person mark a site "ask every time" from the Sites page.
+3. The A/B test of sheet vs recall vs journal, with blind agents (open since Round 10).
+4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
+5. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 54 (unattended loop): the branded browsers again, and a test that clicked Brave's toolbar
+
+**Item.** Next item 1: the bridge file on the branded browsers since frame gating (Round 51), the Sites list
+(Round 52) and every-time sites (Round 53).
+
+**Results** (bridge file, 35 tests, on `0cbdbd5` plus the test fix below):
+
+| Browser | Result |
+|---|---|
+| Chromium 141 (test build) | 35/35 |
+| Chrome 155 | 35/35, in three invocations as before (the Cancel and idle tests on their own) |
+| Edge 154 | **7 failed on the first run**, then 35/35 twice |
+| Brave 1.97 (Chromium 155) | 34/35 twice, then 35/35 twice after the fix |
+| Vivaldi 8.2 | 34 passed, 1 skipped, twice (no debugging bar, so no Cancel, as before) |
+
+- **Brave's failure was the test's.** The revoke test finds the topmost button of the Remove colour on screen.
+  Brave's rewards icon in the toolbar has that pink, above the list, so the person's click landed on the toolbar.
+  A screenshot showed it. `_topmost` now takes the topmost solid block of the colour (30 or more sampled dots in one
+  band), not the topmost dot. The extension was not at fault.
+- **Edge's first run is unexplained.** Seven tests failed: the revoke and every-time tests and three click-gate
+  tests among them. The log was not kept (only the summary), and two reruns with the log kept passed 35/35. It is
+  recorded, not explained. Earlier rounds saw first-run timeouts on branded browsers too.
+
+**Next, in order:**
+1. Confine the AI's page script to the page's own world and the worlds it creates. Found while drafting item 2: the
+   bridge does not check CDP calls that name an execution context, so a call can name the extension's own
+   content-script world. Also restrict the extension's local storage to its own pages, which only the worker uses.
+2. Let the person mark a site "ask every time" from the Sites page (drafted in scratch, not applied).
 3. The A/B test of sheet vs recall vs journal, with blind agents (open since Round 10).
 4. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 5. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
