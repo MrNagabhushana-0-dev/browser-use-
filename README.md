@@ -266,7 +266,13 @@ session = await attach(cdp_url)     # the URL the command printed
 await focus_human_tab(session)      # lands on the tab you left
 ```
 
-Same profile, same cookies, same IP, same tab. Attaching opens no tab and steals no
+Even better, use the browser you already have. Load the bridge extension once
+(`browser_use/bridge/extension`, via "Load unpacked" in Chrome, Edge, Brave, Opera or Vivaldi), share a
+tab, and run `retinat --bridge`. The AI works in your everyday profile, with no automation flags
+(`navigator.webdriver` stays false) and with real trusted input. It sees only the tabs you share and can't
+do anything you couldn't do from that tab. See `AI.md`.
+
+With cobrowse: same profile, same cookies, same IP, same tab. Attaching opens no tab and steals no
 focus. The profile is persistent, so you sign in once, not once per run. Closing the
 command shuts Chrome down cleanly over CDP — which matters more than it sounds, because
 Chrome only commits cookies to disk on its normal shutdown path, and a killed browser

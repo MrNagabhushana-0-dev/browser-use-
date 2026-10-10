@@ -1,0 +1,167 @@
+{
+ "date": "2026-10-07",
+ "task": "fine print: a 6-character coupon code in 6px grey type at the bottom of a long page",
+ "scoring": "exact code, case-insensitive; UNKNOWN or anything else is wrong (fixed before the runs)",
+ "agents": "fresh Claude Code sub-agents (retinat-browser type), one at a time on one Retinat browser, told only the URL and question; tools limited by instruction",
+ "conditions": {
+  "look-only": [
+   "retinat_open",
+   "retinat_look",
+   "retinat_key",
+   "retinat_swipe",
+   "retinat_scan"
+  ],
+  "find-zoom": [
+   "the same",
+   "retinat_find",
+   "retinat_zoom"
+  ]
+ },
+ "runs": {
+  "canvas-41-find-zoom": {
+   "answer": "W9TVXN",
+   "tools": "retinat_open x1, retinat_scan x1, retinat_find x3, retinat_key x1, retinat_look x1, retinat_zoom x4",
+   "tokens": 21004,
+   "tool_uses": 13,
+   "ms": 34337,
+   "correct": true,
+   "truth": "W9TVXN",
+   "variant": "canvas",
+   "seed": 41,
+   "condition": "find-zoom"
+  },
+  "canvas-41-look-only": {
+   "answer": "UNKNOWN",
+   "tools": "retinat_open x1, retinat_scan x3, retinat_look x3, retinat_key x2",
+   "tokens": 20554,
+   "tool_uses": 10,
+   "ms": 34961,
+   "correct": false,
+   "truth": "W9TVXN",
+   "variant": "canvas",
+   "seed": 41,
+   "condition": "look-only"
+  },
+  "canvas-42-find-zoom": {
+   "answer": "W9XEFV",
+   "tools": "retinat_open x1, retinat_scan x1, retinat_find x3, retinat_key x1, retinat_look x1, retinat_zoom x5",
+   "tokens": 20875,
+   "tool_uses": 13,
+   "ms": 37941,
+   "correct": true,
+   "truth": "W9XEFV",
+   "variant": "canvas",
+   "seed": 42,
+   "condition": "find-zoom"
+  },
+  "canvas-42-look-only": {
+   "answer": "UNKNOWN",
+   "tools": "retinat_open x2, retinat_scan x2, retinat_key x5, retinat_look x5",
+   "tokens": 21783,
+   "tool_uses": 15,
+   "ms": 42368,
+   "correct": false,
+   "truth": "W9XEFV",
+   "variant": "canvas",
+   "seed": 42,
+   "condition": "look-only"
+  },
+  "canvas-43-find-zoom": {
+   "answer": "KLWVRH",
+   "tools": "retinat_open x1, retinat_scan x1, retinat_look x3, retinat_key x1, retinat_zoom x4, retinat_find x2",
+   "tokens": 21253,
+   "tool_uses": 13,
+   "ms": 35549,
+   "note": "operator sanity-checked this URL before the runs",
+   "correct": true,
+   "truth": "KLWVRH",
+   "variant": "canvas",
+   "seed": 43,
+   "condition": "find-zoom"
+  },
+  "canvas-43-look-only": {
+   "answer": "UNKNOWN",
+   "tools": "retinat_open x1, retinat_scan x2, retinat_look x3, retinat_key x2",
+   "tokens": 20063,
+   "tool_uses": 9,
+   "ms": 33898,
+   "correct": false,
+   "truth": "KLWVRH",
+   "variant": "canvas",
+   "seed": 43,
+   "condition": "look-only"
+  },
+  "dom-41-find-zoom": {
+   "answer": "4MHJXY",
+   "tools": "retinat_open x1, retinat_scan x1, retinat_find x3, retinat_key x1, retinat_swipe x1",
+   "tokens": 17947,
+   "tool_uses": 8,
+   "ms": 16673,
+   "correct": true,
+   "truth": "4MHJXY",
+   "variant": "dom",
+   "seed": 41,
+   "condition": "find-zoom"
+  },
+  "dom-41-look-only": {
+   "answer": "4MHJXY",
+   "tools": "retinat_open x1, retinat_scan x1, retinat_look x2, retinat_key x1",
+   "tokens": 18103,
+   "tool_uses": 6,
+   "ms": 17458,
+   "correct": true,
+   "truth": "4MHJXY",
+   "variant": "dom",
+   "seed": 41,
+   "condition": "look-only"
+  },
+  "dom-42-find-zoom": {
+   "answer": "AYY7DW",
+   "tools": "retinat_open x1, retinat_scan x1, retinat_look x2, retinat_find x2, retinat_key x1",
+   "tokens": 19104,
+   "tool_uses": 8,
+   "ms": 22247,
+   "correct": true,
+   "truth": "AYY7DW",
+   "variant": "dom",
+   "seed": 42,
+   "condition": "find-zoom"
+  },
+  "dom-42-look-only": {
+   "answer": "AYY7DW",
+   "tools": "retinat_open x1, retinat_scan x3, retinat_look x3, retinat_key x2",
+   "tokens": 21243,
+   "tool_uses": 10,
+   "ms": 42947,
+   "correct": true,
+   "truth": "AYY7DW",
+   "variant": "dom",
+   "seed": 42,
+   "condition": "look-only"
+  },
+  "dom-43-find-zoom": {
+   "answer": "MLCT7H",
+   "tools": "retinat_open x1, retinat_find x2, retinat_swipe x1",
+   "tokens": 17224,
+   "tool_uses": 5,
+   "ms": 9971,
+   "correct": true,
+   "truth": "MLCT7H",
+   "variant": "dom",
+   "seed": 43,
+   "condition": "find-zoom"
+  },
+  "dom-43-look-only": {
+   "answer": "MLCT7H",
+   "tools": "retinat_open x1, retinat_scan x1, retinat_look x2, retinat_key x1",
+   "tokens": 18387,
+   "tool_uses": 6,
+   "ms": 19787,
+   "correct": true,
+   "truth": "MLCT7H",
+   "variant": "dom",
+   "seed": 43,
+   "condition": "look-only"
+  }
+ }
+}

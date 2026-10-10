@@ -37,6 +37,8 @@
 	const GRID = 16;
 	const BANDS = 24;
 
+	// This document, as the prefix of its item ids and on its text and state events: a page boundary that never lags.
+	const DOC = Math.floor(performance.timeOrigin) % 1e7;
 	const R = {
 		version: VERSION,
 		opts,
@@ -44,7 +46,7 @@
 		ids: new WeakMap(),
 		nextId: 1,
 		// Unique across documents, so a reload never reuses the previous page's item numbers.
-		nextItem: (Math.floor(performance.timeOrigin) % 1e7) * 1000 + 1,
+		nextItem: DOC * 1000 + 1,
 		attended: null,
 		attendedSrc: '',
 		items: new Map(),
@@ -111,8 +113,19 @@
 				bestScore = score;
 			}
 		}
+		if (best) return best;
+		// No video: a large canvas (2D or WebGL) is where an animation, a game or a chart is drawn.
+		for (const c of document.querySelectorAll('canvas')) {
+			const { area } = visible(c);
+			if (area >= opts.minArea * vp && area > bestScore) {
+				best = c;
+				bestScore = area;
+			}
+		}
 		return best;
 	};
+	const isCanvas = (el) => el instanceof HTMLCanvasElement;
+	const dims = (el) => (isCanvas(el) ? [el.width, el.height] : [el.videoWidth, el.videoHeight]);
 
 	// Text a person would read next to the video: caption, author, audio credit. Short on
 	// purpose: this is what is on screen, not the page's markup.
@@ -127,8 +140,23 @@
 		return '';
 	};
 
-	const describe = (v) => ({
+	const describe = (v) => isCanvas(v) ? {
 		vid: v === R.attended ? R.attendedId : 0,
+		el: idOf(v),
+		kind: 'canvas',
+		order: -1,
+		src: 'canvas',
+		w: v.width,
+		h: v.height,
+		duration: null,
+		t: Math.max(0, R.lastSampleT),
+		paused: false,
+		muted: true,
+		rect: visible(v).rect,
+		text: nearbyText(v),
+	} : ({
+		vid: v === R.attended ? R.attendedId : 0,
+		kind: 'video',
 		el: idOf(v),
 		// Position among the page's videos in document order: how a feed says which item is next.
 		order: Array.prototype.indexOf.call(document.querySelectorAll('video'), v),
@@ -143,11 +171,15 @@
 		text: nearbyText(v),
 	});
 
+	// The src attribute first: setting it resets currentTime at once, while currentSrc keeps the old URL until
+	// resource selection runs, so a hop or frame in between would carry the old item's id at the new time 0.
+	const srcOf = (v) => String(v.src || v.currentSrc || '');
+
 	// An *item* is one thing watched: a new element, or the same element given a new source
 	// (virtualized feeds recycle a few <video> elements for every reel).
 	const attend = () => {
 		const v = pick();
-		const src = v ? String(v.currentSrc || v.src || '') : '';
+		const src = v ? (isCanvas(v) ? 'canvas' : srcOf(v)) : '';
 		if (v === R.attended && src === R.attendedSrc) return;
 		R.attended = v;
 		R.attendedSrc = src;
@@ -160,7 +192,10 @@
 		R.lastThumbGrid = null;
 		R.lastThumbT = -1;
 		R.events.push(Object.assign({ type: 'attend', wt: performance.now() }, v ? describe(v) : { vid: 0 }));
-		if (v) {
+		if (v && isCanvas(v)) {
+			stopHearing(); // a canvas has no sound of its own
+			startCanvasSight(v);
+		} else if (v) {
 			if (opts.listen && v.muted) v.muted = false;
 			startSight(v);
 			if (opts.audio) startHearing(v);
@@ -175,6 +210,9 @@
 	const grid2d = gridCanvas.getContext('2d', { willReadFrequently: true });
 
 	const sampleGrid = (v) => {
+		// A canvas is area-averaged when shrunk to 16x16: the default point-samples, so a small drawn object
+		// aliases (flickers between cells) and its motion reads as jitter. Video sampling stays as it was.
+		grid2d.imageSmoothingQuality = isCanvas(v) ? 'high' : 'low';
 		grid2d.drawImage(v, 0, 0, GRID, GRID);
 		const d = grid2d.getImageData(0, 0, GRID, GRID).data;
 		const luma = new Uint8Array(GRID * GRID);
@@ -211,9 +249,10 @@
 	};
 
 	const captureThumb = (v, seq) => {
-		if (!v.videoWidth) return;
-		const w = Math.min(opts.thumbWidth, v.videoWidth);
-		const h = Math.max(1, Math.round((w * v.videoHeight) / v.videoWidth));
+		const [vw, vh] = dims(v);
+		if (!vw) return;
+		const w = Math.min(opts.thumbWidth, vw);
+		const h = Math.max(1, Math.round((w * vh) / vw));
 		const c = new OffscreenCanvas(w, h);
 		c.getContext('2d').drawImage(v, 0, 0, w, h);
 		c.convertToBlob({ type: 'image/jpeg', quality: 0.72 }).then((blob) => {
@@ -231,10 +270,43 @@
 				return;
 			}
 			v.requestVideoFrameCallback(onFrame);
+			// A new source on this element is a new item from its first frame, not from the next attend poll:
+			// stamped with the old id, its restart at 0 reads as a rewind of the old item.
+			if (srcOf(v) !== R.attendedSrc) {
+				attend();
+				if (R.attended !== v) return;
+			}
 			const mt = meta.mediaTime;
 			// A backwards jump is a loop or a seek: always sample it.
 			if (mt >= R.lastSampleT && mt - R.lastSampleT < 1 / opts.fps) return;
 			R.lastSampleT = mt;
+			sampleFrame(v, mt, now);
+		};
+		v.requestVideoFrameCallback(onFrame);
+	};
+
+	// A canvas has no frame callback or media clock: sample it once per animation frame, after the
+	// page has drawn (2D, or WebGL with preserveDrawingBuffer), on a clock that starts when attended.
+	const startCanvasSight = (c) => {
+		if (c.__retinaTapped) return;
+		c.__retinaTapped = true;
+		const t0 = performance.now();
+		const onFrame = (now) => {
+			if (!R.running || R.attended !== c) {
+				c.__retinaTapped = false;
+				return;
+			}
+			requestAnimationFrame(onFrame);
+			const mt = (now - t0) / 1000;
+			if (mt - R.lastSampleT < 1 / opts.fps) return;
+			R.lastSampleT = mt;
+			sampleFrame(c, mt, now);
+		};
+		requestAnimationFrame(onFrame);
+	};
+
+	const sampleFrame = (v, mt, now) => {
+		{
 			if (R.tainted.has(v)) return;
 			let s;
 			try {
@@ -258,8 +330,7 @@
 				captureThumb(v, seq);
 			}
 			R.frames.push([seq, R.attendedId, +mt.toFixed(3), +now.toFixed(1), b64(s.luma), s.rgb, thumb ? 1 : 0, b64(s.c4)]);
-		};
-		v.requestVideoFrameCallback(onFrame);
+		}
 	};
 
 	// -- hearing -------------------------------------------------------------------------
@@ -384,6 +455,10 @@ registerProcessor('retina-ear', RetinaEar);
 		node.port.onmessage = (m) => {
 			const v = R.attended;
 			if (!v || !R.running) return;
+			if (!isCanvas(v) && srcOf(v) !== R.attendedSrc) {
+				attend(); // the source changed under this hop: whose sound it is, is not known
+				return;
+			}
 			const a = m.data;
 			// The worklet stamps each hop with audio-context time. Messages can reach this thread
 			// late and in bursts when it is busy; stamping them with the media time *at arrival*
@@ -406,6 +481,7 @@ registerProcessor('retina-ear', RetinaEar);
 			} catch (e) {}
 		}
 		R.audioSource = null;
+		R.audioTrack = null;
 	};
 
 	const startHearing = async (v) => {
@@ -413,39 +489,162 @@ registerProcessor('retina-ear', RetinaEar);
 		try {
 			const node = await ensureEar();
 			if (R.attended !== v) return;
-			if (!v.__retinaStream) v.__retinaStream = v.captureStream();
-			const tracks = v.__retinaStream.getAudioTracks();
+			if (!v.__retinaStream) {
+				v.__retinaStream = v.captureStream();
+				// A new source on the same element ends the old tracks and adds new ones to this stream:
+				// follow onto them, or the ear sits on a dead track and everything after reads as silence.
+				v.__retinaStream.addEventListener('addtrack', (e) => {
+					if (e.track.kind === 'audio' && R.attended === v) startHearing(v);
+				});
+			}
+			// One track, the newest: given several, createMediaStreamSource takes the one whose id sorts
+			// first, which after a source change is as likely the old, silent one.
+			const tracks = v.__retinaStream.getAudioTracks().filter((t) => t.readyState === 'live');
 			if (!tracks.length) {
 				// Media Source players add their audio track after the first segment; retried
 				// by the heartbeat.
 				R.audioMode = 'no-track';
 				return;
 			}
-			R.audioSource = R.ctx.createMediaStreamSource(new MediaStream(tracks));
+			const track = tracks[tracks.length - 1];
+			R.audioSource = R.ctx.createMediaStreamSource(new MediaStream([track]));
 			R.audioSource.connect(node);
+			R.audioTrack = track;
 			R.audioMode = 'worklet';
 		} catch (e) {
 			R.audioMode = 'error: ' + String((e && e.message) || e).slice(0, 120);
 		}
 	};
 
-	// -- plumbing ------------------------------------------------------------------------
+	// -- transient text ------------------------------------------------------------------
+	// Words that appear on the page: toasts, banners, alerts, a live value changing. A screenshot or
+	// a DOM snapshot only sees them if it happens to be taken while they are up; this sees them arrive.
+	let textObserver = null;
+	let textBudget = { second: 0, n: 0 };
+	const lastText = new Map(); // text -> last time reported, to skip repeats within a second
+	const isShown = (el) => {
+		const style = getComputedStyle(el);
+		if (style.display === 'none' || style.visibility === 'hidden' || +style.opacity === 0) return false;
+		const rect = el.getBoundingClientRect();
+		return rect.width >= 2 && rect.height >= 2;
+	};
+	// Pages often build a toast or a carousel slide hidden and reveal it with a class or style change: no text is
+	// inserted, so only the attribute change says it appeared. Visibility last seen per element, to tell a reveal
+	// from a restyle of something already on screen.
+	const shownBefore = new WeakMap();
+	const REVEALING = ['class', 'style', 'hidden', 'aria-hidden', 'open'];
+	const revealed = (m) => {
+		const el = m.target;
+		if (el.nodeType !== 1 || !el.isConnected) return false;
+		// The root changing class (a theme, a 'loaded' flag) is the page setting state, not something appearing.
+		if (el === document.documentElement || el === document.body) return false;
+		const now = isShown(el);
+		const before = shownBefore.get(el);
+		shownBefore.set(el, now);
+		if (!now || before === true) return false;
+		if (before === false) return true;
+		// First change seen on this element: judge what it was from the old value where it says; a class change
+		// cannot be judged, and is taken as a reveal (at most once per element).
+		const old = m.oldValue;
+		if (m.attributeName === 'style') return /display:\s*none|visibility:\s*hidden|opacity:\s*0(?![.\d])/.test(old || '');
+		if (m.attributeName === 'hidden') return old !== null;
+		if (m.attributeName === 'aria-hidden') return old === 'true';
+		if (m.attributeName === 'open') return old === null;
+		return true;
+	};
+	// WCAG contrast of an element's text against the nearest opaque background up its ancestors (images and
+	// gradients are not seen: they read as the colour behind them). Under ~1.5:1 a person can barely see the text,
+	// a technique used to hide instructions meant for AI agents.
+	const rgbOf = (c) => (c.match(/[\d.]+/g) || []).map(Number);
+	const luminance = ([r, g, b]) => {
+		const f = (v) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+		return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+	};
+	const contrast = (el) => {
+		const fg = rgbOf(getComputedStyle(el).color);
+		let bg = [255, 255, 255];
+		for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+			const c = rgbOf(getComputedStyle(n).backgroundColor);
+			if (c.length >= 3 && (c.length < 4 || c[3] > 0.5)) {
+				bg = c;
+				break;
+			}
+		}
+		if (fg.length < 3) return 21;
+		const [a, b] = [luminance(fg), luminance(bg)].sort((x, y) => y - x);
+		return (a + 0.05) / (b + 0.05);
+	};
+	const reportText = (el) => {
+		if (!el || el.nodeType !== 1 || !el.isConnected || el.closest('video, script, style, noscript')) return;
+		if (!isShown(el)) return;
+		const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
+		if (!text || text.length > 240) return;
+		const now = performance.now();
+		const sec = Math.floor(now / 1000);
+		if (textBudget.second !== sec) textBudget = { second: sec, n: 0 };
+		if (++textBudget.n > 8) return; // a ticker repainting every frame is not news
+		if (now - (lastText.get(text) || -1e9) < 1000) return;
+		lastText.set(text, now);
+		const faint = contrast(el) < 1.5;
+		R.events.push(Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}));
+	};
+	let textReady = false; // false while the page is still being parsed: its own content has not "appeared"
+	const watchText = () => {
+		if (textObserver) return;
+		// Observe the document node itself: it exists from the first instant, before <html> and <body> (the retina
+		// autostarts at document start), so text added right after load is not missed. Ignore everything until
+		// the initial parse is done: the page's own content has not "appeared".
+		textReady = document.readyState !== 'loading';
+		if (!textReady) document.addEventListener('DOMContentLoaded', () => (textReady = true), { once: true });
+		textObserver = new MutationObserver((mutations) => {
+			if (!textReady) return;
+			const touched = new Set();
+			const restyled = [];
+			for (const m of mutations) {
+				if (m.type === 'characterData') touched.add(m.target.parentElement);
+				else if (m.type === 'attributes') restyled.push(m);
+				for (const n of m.addedNodes) touched.add(n.nodeType === 1 ? n : n.parentElement);
+			}
+			// Read styles just after the mutation settles. Not requestAnimationFrame: it never fires in a hidden or
+			// background tab, which is exactly where an agent's page often is.
+			setTimeout(() => {
+				for (const m of restyled) if (revealed(m)) touched.add(m.target);
+				touched.forEach(reportText);
+			}, 0);
+		});
+		textObserver.observe(document, {
+			childList: true,
+			subtree: true,
+			characterData: true,
+			attributes: true,
+			attributeFilter: REVEALING,
+			attributeOldValue: true,
+		});
+	};
 
 	const heartbeat = () => {
+		watchText(); // in case the document element did not exist when the retina started
 		const v = R.attended;
 		if (R.ctx && R.ctx.state === 'suspended') R.ctx.resume().catch(() => {});
-		if (v && opts.audio && (R.audioMode === 'no-track' || R.audioMode.startsWith('error'))) startHearing(v);
-		if (v && opts.listen && v.muted) v.muted = false;
+		const media = v && !isCanvas(v) ? v : null;
+		const stream = media && media.__retinaStream;
+		const gone = R.audioTrack && (R.audioTrack.readyState === 'ended' || (stream && !stream.getAudioTracks().includes(R.audioTrack)));
+		const deaf = R.audioMode === 'no-track' || R.audioMode.startsWith('error') || gone;
+		if (media && opts.audio && deaf) startHearing(media);
+		if (media && opts.listen && media.muted) media.muted = false;
 		R.events.push({
 			type: 'state',
 			wt: performance.now(),
+			doc: DOC,
 			vid: R.attendedId,
-			t: v ? v.currentTime : null,
-			paused: v ? v.paused : null,
-			muted: v ? v.muted || v.volume === 0 : null,
+			t: media ? media.currentTime : v ? Math.max(0, R.lastSampleT) : null,
+			paused: media ? media.paused : v ? false : null,
+			muted: media ? media.muted || media.volume === 0 : v ? true : null,
 			audio: R.audioMode,
 			ctx: R.ctx ? R.ctx.state : 'none',
 			sr: R.ctx ? R.ctx.sampleRate : null,
+			// A muted or ended capture track delivers silence: say so rather than let it read as a quiet video.
+			track: R.audioTrack ? (R.audioTrack.readyState === 'ended' ? 'ended' : R.audioTrack.muted ? 'muted' : 'live') : null,
 			hidden: document.hidden,
 			url: location.href.slice(0, 200),
 		});
@@ -468,6 +667,7 @@ registerProcessor('retina-ear', RetinaEar);
 	R.start = (overrides) => {
 		Object.assign(opts, overrides || {});
 		if (R.running) return R.state();
+		watchText();
 		R.running = true;
 		R.timers.push(setInterval(attend, opts.attendMs));
 		R.timers.push(setInterval(flush, opts.flushMs));
@@ -520,9 +720,10 @@ registerProcessor('retina-ear', RetinaEar);
 	// Take a keyframe right now from the attended video, for looks that are not tied to a sample.
 	R.snapshot = async (width) => {
 		const v = R.attended;
-		if (!v || !v.videoWidth || R.tainted.has(v)) return null;
-		const w = Math.min(width || opts.thumbWidth, v.videoWidth);
-		const h = Math.max(1, Math.round((w * v.videoHeight) / v.videoWidth));
+		const [vw, vh] = v ? dims(v) : [0, 0];
+		if (!v || !vw || R.tainted.has(v)) return null;
+		const w = Math.min(width || opts.thumbWidth, vw);
+		const h = Math.max(1, Math.round((w * vh) / vw));
 		const c = new OffscreenCanvas(w, h);
 		c.getContext('2d').drawImage(v, 0, 0, w, h);
 		const blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
@@ -556,7 +757,7 @@ registerProcessor('retina-ear', RetinaEar);
 
 	R.setListen = (on) => {
 		opts.listen = !!on;
-		if (R.attended && on) R.attended.muted = false;
+		if (R.attended && on && !isCanvas(R.attended)) R.attended.muted = false;
 		return R.state();
 	};
 

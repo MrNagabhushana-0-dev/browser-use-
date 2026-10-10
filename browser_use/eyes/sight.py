@@ -27,6 +27,7 @@ the same framing look alike; text changing on a static background is nearly invi
 slow fade is reported as a cut where it changes fastest, or not at all.
 """
 
+import colorsys
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -52,20 +53,19 @@ LOOP_END_S = 0.6
 # Width of the similarity kernel, in grid-distance units.
 SIGMA = 14.0
 
-_PALETTE = {
-	'black': (15, 15, 15),
-	'grey': (128, 128, 128),
-	'white': (240, 240, 240),
-	'red': (200, 30, 30),
-	'orange': (230, 130, 30),
-	'yellow': (225, 210, 40),
-	'green': (40, 160, 60),
-	'teal': (30, 150, 150),
-	'blue': (40, 70, 200),
-	'purple': (130, 50, 170),
-	'pink': (230, 120, 180),
-	'brown': (120, 75, 40),
-}
+# Upper hue bound (degrees) of each colour name, in order around the wheel.
+_HUES = (
+	(15, 'red'),
+	(45, 'orange'),
+	(70, 'yellow'),
+	(160, 'green'),
+	(200, 'cyan'),
+	(255, 'blue'),
+	(285, 'purple'),
+	(330, 'magenta'),
+	(345, 'pink'),
+	(361, 'red'),
+)
 
 
 @dataclass
@@ -119,15 +119,22 @@ def motion_word(motion: float) -> str:
 
 
 def colour_name(rgb: tuple[int, int, int] | np.ndarray) -> str:
+	"""The colour a person would say, from the hue (HSV), with lightness words for the unsaturated and dark.
+
+	Hue sectors, not nearest swatch in RGB: the nearest-swatch namer called pure cyan "teal".
+	"""
 	r, g, b = (float(x) for x in rgb)
 	top, bottom = max(r, g, b), min(r, g, b)
 	if top - bottom < 28:  # unsaturated: name it by lightness alone
 		return 'black' if top < 45 else 'white' if bottom > 200 else 'dark grey' if top < 100 else 'grey'
-	best = min(
-		(name for name in _PALETTE if name not in ('black', 'grey', 'white')),
-		key=lambda n: sum((a - c) ** 2 for a, c in zip((r, g, b), _PALETTE[n])),
-	)
-	return f'dark {best}' if top < 90 else best
+	h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+	hue = h * 360
+	if 10 <= hue < 45 and v < 0.6:
+		return 'brown'
+	name = next(n for limit, n in _HUES if hue < limit)
+	if name in ('red', 'magenta') and s < 0.6 and v > 0.7:
+		name = 'pink'
+	return f'dark {name}' if v < 0.55 else name
 
 
 def colourfulness(frames: list[FrameSample]) -> tuple[float, list[str]]:
@@ -164,18 +171,58 @@ def grids(frames: list[FrameSample]) -> np.ndarray:
 	return np.frombuffer(b''.join(f.luma for f in frames), dtype=np.uint8).reshape(len(frames), -1).astype(np.float32)
 
 
-def deltas(matrix: np.ndarray) -> np.ndarray:
-	"""Mean absolute difference of each frame from the one before (0 for the first)."""
+def deltas(matrix: np.ndarray, colours: np.ndarray | None = None) -> np.ndarray:
+	"""Mean absolute difference of each frame from the one before (0 for the first).
+
+	Luma alone misses a cut between two shots of the same brightness (red to blue is about 73 to 56 in luma). With
+	`colours` (the frames' 4x4 RGB grids), the larger of the luma and colour differences counts, as content-based
+	scene detectors score hue and saturation as well as brightness.
+	"""
 	if len(matrix) < 2:
 		return np.zeros(len(matrix), dtype=np.float32)
 	d = np.abs(np.diff(matrix, axis=0)).mean(axis=1)
+	if colours is not None and len(colours) == len(matrix):
+		d = np.maximum(d, np.abs(np.diff(colours, axis=0)).mean(axis=1))
 	return np.concatenate([[0.0], d]).astype(np.float32)
+
+
+def colour_grids(frames: list[FrameSample]) -> np.ndarray | None:
+	"""(n, 48) float32 4x4 RGB grids, or None unless every frame has one."""
+	if not frames or any(len(f.colours) != 48 for f in frames):
+		return None
+	return np.frombuffer(b''.join(f.colours for f in frames), dtype=np.uint8).reshape(len(frames), 48).astype(np.float32)
+
+
+# A jump back in media time is believed when this many samples after it carry on from where it landed.
+CONFIRM_JUMP = 2
+
+
+def strays(ts: list[float], jump: float) -> set[int]:
+	"""Indices of samples that went back in time alone: the samples after them carry on from before the jump.
+
+	A loop or a seek keeps going from where it landed. A single sample stamped at the wrong moment (one sent
+	during a source change once carried the new source's time 0) does not, and taken at face value it ends the
+	item's sound and pictures where it lands. With nothing after it to confirm, a backward sample is not believed.
+	"""
+	out: set[int] = set()
+	good: float | None = None
+	for i, t in enumerate(ts):
+		if good is not None and t < good - jump:
+			after = ts[i + 1 : i + 1 + CONFIRM_JUMP]
+			if not after or any(u >= good - jump for u in after):
+				out.add(i)
+				continue
+		good = t
+	return out
 
 
 def read(frames: list[FrameSample], duration: float | None = None) -> Sight:
 	"""Segment one item's frames (in arrival order) into shots."""
+	if frames:
+		drop = strays([f.t for f in frames], LOOP_JUMP_S)
+		frames = [f for i, f in enumerate(frames) if i not in drop]
 	matrix = grids(frames)
-	d = deltas(matrix)
+	d = deltas(matrix, colour_grids(frames))
 	starts: list[tuple[int, float, bool]] = [(0, 0.0, False)] if frames else []
 	loops: list[float] = []
 	rewinds: list[float] = []

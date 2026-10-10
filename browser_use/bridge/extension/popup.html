@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+	:root { color-scheme: light dark; --ok: #1a7f37; --warn: #b26a00; --mute: #6e7781; }
+	body { font: 13px/1.4 system-ui, sans-serif; margin: 0; width: 260px; }
+	main { padding: 12px; display: grid; gap: 10px; }
+	h1 { font-size: 13px; margin: 0; display: flex; align-items: center; gap: 6px; }
+	.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mute); }
+	.dot.on { background: var(--ok); }
+	button { font: inherit; padding: 7px 10px; border-radius: 6px; border: 1px solid #8884; cursor: pointer; background: transparent; color: inherit; }
+	button.primary { background: var(--ok); border-color: var(--ok); color: white; }
+	button.hold { background: var(--warn); border-color: var(--warn); color: white; }
+	small { color: var(--mute); }
+	details input { width: 100%; box-sizing: border-box; font: inherit; padding: 4px; }
+	body.page { width: auto; max-width: 560px; margin: 24px auto; font-size: 15px; }
+	ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+	li { display: flex; align-items: center; gap: 8px; }
+	li span { flex: 1; overflow-wrap: anywhere; }
+	button.forget { padding: 3px 10px; background: #ad1457; border-color: #ad1457; color: white; }
+	button.every { padding: 3px 10px; background: #0277bd; border-color: #0277bd; color: white; }
+	button.stop { padding: 3px 10px; background: #455a64; border-color: #455a64; color: white; }
+</style>
+</head>
+<body>
+<main>
+	<h1><span id="dot" class="dot"></span><span id="conn">Not connected</span></h1>
+	<button id="share" class="primary">Share this tab with the AI</button>
+	<button id="hold">Take the wheel</button>
+	<small id="note"></small>
+	<section>
+		<small>Sites the AI may use</small>
+		<ul id="sites"></ul>
+		<small id="nosites">None yet: it asks before using a site you haven't shared.</small>
+	</section>
+	<section id="everysec" hidden>
+		<small>Asked about on every visit (Every time: no Always, one visit at a time)</small>
+		<ul id="every"></ul>
+	</section>
+	<details>
+		<summary><small>Relay address</small></summary>
+		<input id="relay" spellcheck="false">
+	</details>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>

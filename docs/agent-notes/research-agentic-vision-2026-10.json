@@ -1,0 +1,430 @@
+[
+  {
+    "area": "streaming-video-llm",
+    "already_in_repo": [
+      "In-page Retina (browser_use/eyes/retina.js): attends the largest playing <video>, taps decoded frames with requestVideoFrameCallback into 16x16 luma grids plus 4x4 colour per sample, keeps a ring of up to 240 JPEG keyframes drawn from the element (never a screenshot), and pushes batches over a CDP binding at zero model-token cost.",
+      "Hearing: captureStream() into an AudioWorklet for muted listening; heuristic speech/music/silence features (4 Hz modulation, ZCR, low-energy rate), onsets, tempo, Foote-style novelty change points (hearing.py); optional Silero VAD and faster-whisper ASR (asr.py).",
+      "Sight (sight.py): cut detection by mean absolute luma difference with a MAD outlier test, shots, loops/restarts, motion words, colourfulness; keyframes by greedy facility location F(S) with a (1-1/e) guarantee; novelty() = marginal coverage of recent frames, used as the 'bored' stop in Eyes._bored, which is overridden when VAD/ASR hears speech or the sound class changes.",
+      "Event-style early stop (Eyes._salient for until='event'): stop on new item, loop, first cut, or sound-class change. These are hand-written rules, not a learned gate.",
+      "Percepts (percept.py): one sheet per watch, with a keyframe row and spectrogram strip per item on a shared time axis, plus text (timings, cuts, sound labels, transcript, caption). Token cost uses the 28x28-patch rule after scaling the long edge to 2576 px (this matches the current Claude docs), labelled as an estimate; detail levels are glance/look/study.",
+      "Page scans (page.py): compositor screencast frames reduced to the same signatures, best-first scroll scan, contact sheet. PerceptionStream (browser_use/vision/stream.py) adds a scroll estimate that reports itself 'unknown' when ambiguous.",
+      "Touch: minimum-jerk swipes/flings with the item change confirmed by sight, plus overshoot correction (service.py next/browse).",
+      "Retinat MCP tools: open, look, watch, scan, browse, next, tap, click, swipe, type, key, now, explore. There is no tool that fetches past frames by question or by timestamp, nothing that keeps a running text narration, and nothing that adapts the percept to the model it is sent to.",
+      "The repo's own note (findings-log.md, 'Not novel') already says rVFC/captureStream, facility location, Foote novelty and contact sheets are standard; vercel-labs/agent-browser also has contact sheets and touch input."
+    ],
+    "findings": [
+      {
+        "name": "AOI (Agent-Computer Observation Interface): narration kept as text beats keyframe selection; extra images can hurt",
+        "what": "A perception layer between computer-use agent steps that is model-agnostic and needs no retraining: frames at about 3 Hz with a 1% pixel-change gate and a CLIP-distance gate (theta=0.04), at most 5 keyframes per step, a 70 s audio ring buffer with volume-gated Whisper (~7 s window), and the CU model narrating captured frames into text that persists. On DynaCU-Bench (100 dynamic browser tasks plus 50 static) it adds +17 to +48 pp over screenshot baselines. Five selection strategies (uniform 1/3 FPS, pixel-diff, random, CLIP) all score 56-58% (McNemar p>0.5, replicated on Qwen3-VL-32B). Narration lifts Claude Sonnet 4.6 from 64% to 82%: +8 pp comes from keeping the narration as memory (p=0.039) and about +10 pp from writing it at all. On Gemini 3 Flash the keyframe images cost -12 pp ('image-token dilution'; dropping them recovers 57/100). Fewer steps also cut cost, e.g. Claude $2.72 to $1.35 per 100 tasks.",
+        "beyond_repo_because": "The repo puts its effort into which frames to send (facility location, (1-1/e)) and sends them as one image sheet each turn. AOI's controlled ablation says the selection method barely matters. The gain comes from (a) a narration that persists as text across steps and (b) choosing, per model, whether to send images at all. The repo has no narration memory and no per-model switch for its percept. This is the closest prior art to the eyes and the most direct challenge to their design.",
+        "maturity": "open code (github.com/19PINE-AI/aoi); preprint, one group, n=100 tasks, about +/-3 pp decoding noise acknowledged",
+        "sources": [
+          "https://arxiv.org/abs/2606.29472",
+          "https://github.com/19PINE-AI/aoi",
+          "https://01.me/research/aoi"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Gemini 'agentic' video processing: the model pulls the transcript, frames and audio itself (production)",
+        "what": "Gemini API video inputs accept processing='agentic' (documented with gemini-3.8-flash on the Interactions API). Instead of placing 1 FPS frames in context in one pass, the model 'dynamically navigates the video timeline, loading only the content it needs', emitting processing_call/processing_result steps for transcript or frame loads. Loaded media is billed as tool-use tokens and navigation as thought tokens. Google claims up to 88% fewer total tokens and ~7% higher quality on long-form content, with higher TTFT on clips under 5 minutes. The vendor gives no benchmark or methodology for these numbers.",
+        "beyond_repo_because": "Retinat only pushes: watch() returns a sheet the eyes chose without seeing the question. A frontier vendor now ships the opposite pattern, where the model asks for the transcript first and then for frames at chosen times. The retina's 240-JPEG ring and its timestamps could serve as the store for this, but no MCP tool lets the agent ask 'frames at t=12-15 s' or 'the frame that best matches X'.",
+        "maturity": "production (Gemini API docs); quality claims are vendor-reported and unverified",
+        "sources": [
+          "https://ai.google.dev/gemini-api/docs/video-understanding"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Frontier token and latency budgets for video and audio (measured or documented numbers)",
+        "what": "Gemini 3 media_resolution is set per media part. A video frame costs 70 tokens at low/medium and 280 at high (for text-heavy video); an image costs 280/560/1120/2240; audio costs 25 tokens/s at every setting. Gemini static video is 1 FPS by default with a custom fps such as 0.5, about 100 tokens/s of video at low and about 300 at high, so a 1M context holds about 3 h at low and 1 h at high. Gemini Live API takes JPEG at 1 FPS or less plus 16 kHz PCM; without context compression an audio+video session is capped at 2 minutes (audio-only at 15). A sliding-window ContextWindowCompressionConfig with a trigger token count extends it, the context is 128k for native-audio models and 32k for others, and a connection lasts about 10 minutes. Claude images are ceil(w/28)*ceil(h/28) visual tokens, capped at 2576 px / 4784 tokens on Claude 4.7+ and 1568 px / 1568 tokens on other models. Qwen3-Omni reports first-packet latency of 234 ms (audio in) and 547 ms (video in) at concurrency 1, rising to 728/1517 ms at concurrency 4.",
+        "beyond_repo_because": "percept.py has a single Claude-style estimator with no per-model cap (it ignores the 1568/4784 tiers). The repo has no notion that on Gemini 30 s of 1 FPS frames at 70 tokens each (2.1k tokens) costs about the same as one study-detail sheet, nor that audio is cheap enough (25 tok/s) to send raw instead of a spectrogram picture. Choosing the percept format by provider cost (sheet, frame list, or text) is not implemented.",
+        "maturity": "production docs (Google, Anthropic); Qwen3-Omni numbers are a 'theoretical' figure from the tech report",
+        "sources": [
+          "https://ai.google.dev/gemini-api/docs/media-resolution",
+          "https://ai.google.dev/gemini-api/docs/video-understanding",
+          "https://ai.google.dev/gemini-api/docs/live-session",
+          "https://ai.google.dev/gemini-api/docs/live-guide",
+          "https://platform.claude.com/docs/en/build-with-claude/vision",
+          "https://arxiv.org/abs/2509.17765"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Patch-level differential token drop (TimeChat-Online DTD)",
+        "what": "Each patch is compared with the same patch in the previous frame, either by L1 distance on raw pixel patches before the ViT or by cosine similarity on ViT tokens. Unchanged patches are dropped and the survivors keep their original M-RoPE (t,h,w) positions. Reported: 82.8% of video tokens removed overall, 1.76x lower response latency, over 98% of accuracy kept. StreamingBench 56.56 with an 82.6% cut. Added to Qwen2.5-VL-7B it gives +5.7 on VideoMME-long with 84.6% fewer tokens. OVO-Bench 47.6 with 84.8% dropped.",
+        "beyond_repo_because": "The repo's change detection works on whole frames (a 16x16 grid, one distance per frame), so it can only keep or drop entire frames. A per-patch change mask would allow sending only the changed regions of a frame, i.e. crops or difference tiles on the sheet. Closed APIs take whole images, but crops of the changed regions are an input-side version of the same idea. The repo's own stated limit, 'text changing on a static background is nearly invisible', is the case a patch mask handles.",
+        "maturity": "open code + weights (github.com/yaolinli/TimeChat-Online, HF wyccccc/TimeChatOnline-7B)",
+        "sources": [
+          "https://arxiv.org/abs/2504.17343",
+          "https://timechat-online.github.io/",
+          "https://github.com/yaolinli/TimeChat-Online"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Event-gated LLM invocation with a learned Cognition Gate (StreamMind)",
+        "what": "A state-space Event-Preserving Feature Extractor squeezes each frame's spatiotemporal features into one perception token at constant cost. A small Cognition Gate network decides from that token whether to invoke the LLM at all, replacing invocation at every step. Reported: 100 fps on one A100, SOTA on Ego4D and SoccerNet streaming dialogue (ICCV 2025).",
+        "beyond_repo_because": "The repo's until='event' and 'bored' stops are fixed rules over luma deltas, sound classes and marginal coverage, and they do not depend on the query. StreamMind learns the gate and conditions it on the query ('invoke when query-relevant events occur'). For a turn-based remote model the analogue is a cheap local gate that decides when to wake the expensive model.",
+        "maturity": "open code (training/eval/serving released)",
+        "sources": [
+          "https://arxiv.org/abs/2503.06220",
+          "https://github.com/xinding-sys/StreamMind",
+          "https://openaccess.thecvf.com/content/ICCV2025/papers/Ding_StreamMind_Unlocking_Full_Frame_Rate_Streaming_Video_Dialogue_through_Event-Gated_ICCV_2025_paper.pdf"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Bounded-memory streaming via KV cache policy: attention sinks + windows (StreamingVLM), retrieval offload (ReKV), hard memory caps (InfiniPot-V)",
+        "what": "StreamingVLM fine-tunes Qwen2.5-VL-7B on short overlapped chunks so that training matches inference. At inference it keeps attention-sink KV, a short window of recent vision tokens and a longer window of recent text tokens, with contiguous position IDs. It reports 8 FPS on one H100, more than 2 h of continuous commentary, and a 66.18% win rate vs GPT-4o-mini on Inf-Streams-Eval. ReKV (ICLR 2025, training-free) encodes with sliding-window attention, moves the video KV to RAM or disk, and reloads only the KV relevant to the query. InfiniPot-V (NeurIPS 2025, training-free) compresses whenever the cache hits a user cap, using temporal redundancy (TaR) and value-norm (VaN), and reports up to 94% lower peak GPU memory at full-cache accuracy.",
+        "beyond_repo_because": "The repo keeps no memory across watches beyond a JPEG ring and the luma signatures. These systems give principled ways to keep evidence for hours at fixed memory, and ReKV's retrieval-by-query maps directly onto a missing 'recall' tool over the retina's history. They need a local open VLM; with closed APIs only the policy can be copied (what to keep, what to page out, what to recall).",
+        "maturity": "open code for all three (mit-han-lab/streaming-vlm MIT license; Becomebright/ReKV; aiha-lab/InfiniPot-V)",
+        "sources": [
+          "https://arxiv.org/abs/2510.09608",
+          "https://github.com/mit-han-lab/streaming-vlm",
+          "https://arxiv.org/abs/2503.00540",
+          "https://github.com/becomebright/rekv",
+          "https://arxiv.org/abs/2506.15745",
+          "https://github.com/aiha-lab/InfiniPot-V"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Query-aware frame selection: relevance x coverage (AKS) and inverse-transform sampling (BOLT)",
+        "what": "AKS (CVPR 2025) chooses keyframes by an objective with two terms, relevance to the prompt and coverage over time, approximated by recursive judge-and-split; it is evaluated as a plug-in for Qwen2-VL, LLaVA-OV and LLaVA-Video. BOLT (CVPR 2025, training-free) samples frames by inverse transform sampling on the query-frame similarity CDF and reports Video-MME 53.8 to 56.1 and MLVU 58.9 to 63.4.",
+        "beyond_repo_because": "The repo's facility location covers only the frames themselves; there is no query term. The eyes cannot be told 'watch for the product' and bias keyframes toward it. Caveat: AOI's ablation (finding 1) found selection immaterial in short inter-step UI windows. Query-aware selection helps on long-video QA (minutes to hours) and probably does little on a 10 s reel. This tension has not been tested on agent workloads.",
+        "maturity": "open code (sming256/BOLT; AKS repo linked from arXiv)",
+        "sources": [
+          "https://arxiv.org/abs/2502.21271",
+          "https://openaccess.thecvf.com/content/CVPR2025/papers/Tang_Adaptive_Keyframe_Sampling_for_Long_Video_Understanding_CVPR_2025_paper.pdf",
+          "https://arxiv.org/abs/2503.21483",
+          "https://github.com/sming256/BOLT"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Agentic search over a multi-granular video database (Deep Video Discovery)",
+        "what": "Long video is segmented and indexed at several granularities. An LLM agent plans, picks search-centric tools (global browse, clip search, frame inspection), sets their parameters, and iterates. Reported LVBench accuracy is 74.2%, or 76.0% with transcripts (NeurIPS 2025), well above prior single-pass VLMs. It is the research counterpart of Gemini's agentic mode.",
+        "beyond_repo_because": "The repo's browse/watch loop is a fixed policy that watches until bored or until a salience rule fires. DVD shows the gain from letting the model run a search with a budget over an index (tool calls into a store). The retina already produces the raw material for such an index (signatures, shots, transcripts) but exposes no search over it.",
+        "maturity": "open code (microsoft/DeepVideoDiscovery)",
+        "sources": [
+          "https://arxiv.org/abs/2505.18079",
+          "https://github.com/microsoft/DeepVideoDiscovery"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Duplication beats importance for visual token pruning (DART), with a warning about importance-score hype",
+        "what": "DART picks pivot tokens and keeps the tokens least redundant with them. It prunes 88.9% of vision tokens with comparable accuracy, a 1.99x end-to-end speedup and 2.99x faster prefill, training-free and compatible with FlashAttention. The paper's main empirical point is that attention-importance rankings (FastV-style) do worse than random pruning. Follow-up work finds random or pooling baselines competitive on VQA but sharply worse on visual grounding.",
+        "beyond_repo_because": "It supports the repo's redundancy-based (coverage) approach over saliency, but at token granularity rather than frame granularity. It also warns that headline pruning ratios from VQA benchmarks do not carry over to grounding, and grounding is exactly what a browser agent needs for clicks. The repo has no evidence on how sheet compression affects click accuracy.",
+        "maturity": "open code (ZichenWen1/DART)",
+        "sources": [
+          "https://arxiv.org/abs/2502.11494",
+          "https://github.com/ZichenWen1/DART"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Proactive 'when to speak' streaming with silence/response tokens and tiered memory (StreamingHarness)",
+        "what": "Trained on Streaming-Train-248K with per-second frame-text alignment, using explicit </silence> and </response> tokens and a weighted loss against the silence-heavy class imbalance. Short/mid/long-term memory reaches 12 h of context with a prefix-aware KV design that works under vLLM. Reported TTFT stays under 1 s on 2 h videos vs about 4 s per step for a sliding-window baseline, with a 61.4% narration win rate vs four closed VLMs.",
+        "beyond_repo_because": "The repo's agent speaks only when its tool call returns. It has no learned policy for interrupting the agent at the right moment. These numbers come from one preprint and I have not checked them against the code.",
+        "maturity": "paper (preprint, June 2026); code status unverified",
+        "sources": [
+          "https://arxiv.org/html/2606.08615v1"
+        ],
+        "verified": false
+      }
+    ],
+    "gaps": [
+      "Watching the right amount: LivingScreen (browser short-video feeds, the repo's exact use case) finds even the best model (Gemini-3.5) at 69.3% success with an 11.9% watch ratio, vs humans at 94.0% / 9.7%. 39-61% of trajectories under-observe, 25-43% over-observe, and 9-24% do both. Nobody has a calibrated stopping rule that depends on the question. The repo's 'bored' rule ignores the question and is not validated against this kind of benchmark. https://arxiv.org/html/2606.04701v1 , https://github.com/BITHLP/LivingScreen",
+      "Proactive and forward responding stays far below humans. On OVO-Bench Forward Active Responding humans score 92.9, while recent systems report about 36-57 (StreamAgent 35.9, Response-G1 41.9, GROVE 56.5; self-reported, not independently re-run). Deciding when enough future evidence has arrived is unsolved. https://arxiv.org/abs/2501.05510 , https://arxiv.org/pdf/2605.07575 , https://arxiv.org/html/2608.02392v1",
+      "Percept format depends on the model and nobody chooses it automatically. AOI shows keyframe images +10 pp on Claude, about 0 on GPT-5.4 and -12 pp on Gemini 3 Flash for the same content. No published method tunes the images-vs-text-vs-narration mix per model online under a token budget. The authors call the configuration simply 'mis-tuned' and set it by hand. https://arxiv.org/abs/2606.29472",
+      "The streaming and KV-cache literature (StreamingVLM, ReKV, InfiniPot-V, TimeChat-Online, StreamMind) assumes white-box open VLMs. For closed, turn-based APIs (Claude, GPT, Gemini outside Live) there is no principled theory of rate-distortion for what to send per turn. Vendor answers are either fixed 1 FPS with a sliding window (Gemini Live: 2-min AV cap without compression) or a vendor-internal agentic navigation whose 88% claim has no published methodology. https://ai.google.dev/gemini-api/docs/live-session , https://ai.google.dev/gemini-api/docs/video-understanding",
+      "Pruning and compression are judged on VQA, not on grounding or action. Random and pooling baselines match sophisticated pruning on VQA but drop sharply on visual grounding, and AOI's Gemini 3 regression was a loss in action grounding. Nobody measures how video and percept compression affects click and gesture accuracy in live UIs. https://arxiv.org/abs/2502.11494 , https://arxiv.org/abs/2606.29472",
+      "Image token counts are unverifiable from the client side. The repo's own log measured about 163 vs 645 tokens for one sheet (n=1). Providers document per-patch or per-frame formulas (Claude ceil(w/28)*ceil(h/28) capped at 1568/4784; Gemini 70/280 per frame) but no API reports realised per-image cost. This blocks honest token-latency trade-off reporting in this area. https://platform.claude.com/docs/en/build-with-claude/vision , https://ai.google.dev/gemini-api/docs/media-resolution"
+    ]
+  },
+  {
+    "area": "gui-web-agents",
+    "already_in_repo": [
+      "retina.js runs in an isolated world and taps decoded frames with requestVideoFrameCallback. Each sample is a 16x16 luma grid plus 4x4 colour, with a ring of JPEG keyframes drawn from the element. Audio comes through captureStream into an AudioWorklet: per-22 ms loudness, ZCR, centroid, flux, flatness, pitch and a 24-band spectrum, plus optional 16 kHz PCM. Data is pushed to Python over a CDP binding about 5 times a second (browser_use/eyes/retina.js, retina.py; findings-log Round 6).",
+      "sight.py: adaptive cut detection (floor plus MADs), loops vs rewinds, motion, Hasler-Susstrunk colourfulness, keyframes chosen by greedy facility location ((1-1/e) submodular), and a 'bored' stop when marginal coverage gain gets small.",
+      "hearing.py and asr.py: Foote-novelty change points on the band spectrum; stretches labelled silence, tone, noise, beats, music or speech; onsets and tempo; Silero VAD gating faster-whisper tiny.en on local CPU.",
+      "percept.py: one contact sheet (keyframe row plus spectrogram strip on one time axis) with text, costed with the 28x28-px-patch token rule. Hook-injected one-line ambient context; hold=True pauses the video while the model thinks.",
+      "page.py / retinat_scan: whole-page scans from compositor screencast frames (canvas and WebGL included); perceive.scroll_estimate does row-profile scroll inference with an explicit 'ambiguous' state.",
+      "human/touch.py: minimum-jerk CDP touch flicks; Eyes.next() confirms by sight that a new item settled, with fallbacks.",
+      "DOM side (browser_use/dom): CDP DOMSnapshot plus full AX tree merged across frames, indexed interactive elements and highlight overlays. This is effectively the a11y-plus-set-of-marks hybrid observation, and browser-use MCP and Retinat are positioned as structure vs pixels.",
+      "Retinat tools (look/scan/watch/browse/now/tap/swipe/click/type/key/explore). There is NO region-zoom or crop perception action, NO persistent model-written narration memory, NO learned grounding model, NO next-state prediction, and NO per-step visual-token pruning or history decay (checked with grep on browser_use/retinat/server.py and browser_use/eyes)."
+    ],
+    "findings": [
+      {
+        "name": "Agent-Computer Observation Interface (AOI): narration, not keyframe selection, carries the dynamic-content gain",
+        "what": "Wraps any CU model with three gated channels. (1) About 3 Hz screen sampling with a pixel-change gate (skip if fewer than 1% of pixels changed), giving 0-5 keyframes per step. (2) An RMS-gated Whisper large-v3 audio channel. (3) The CU model writes a short 'what is visually new' narration as a side output of each call, and that narration persists as text after the images are pruned. On DynaCU-Bench (100 dynamic browser tasks plus a 50-task static control), 7B-to-frontier models gain +17 to +48 pp with no retraining. Ablation: five selectors (uniform 1/3 fps, pixel-diff, random, CLIP) are statistically indistinguishable. Raw keyframes add only +1 pp but +10 pp once narrated, and narration alone lifts Claude from 64% to 82%. On Gemini 3 Flash the keyframe stream costs 12 pp through 'image-token dilution'. Token cost drops 15-50% because steps fall by about 50%, but wall-clock rises for fast models.",
+        "beyond_repo_because": "The repo invests in clever keyframe selection (facility location, the 'bored' test). This paper's ablation says selection barely matters and the missing piece is model-authored, persistent text memory of what was seen, which Retinat lacks. It also shows the image channel must be tuned per model (it can hurt), where Retinat ships one fixed percept bundle. The repo should treat this as a falsifiable threat to its keyframe design. Caveats: n=1 trial per cell, synthetic audio, own benchmark, no results on external dynamic benchmarks (the authors' own limitations section).",
+        "maturity": "paper plus open code (repo linked from the paper; not opened, because the GitHub proxy returned 403)",
+        "sources": [
+          "https://arxiv.org/abs/2606.29472",
+          "https://arxiv.org/pdf/2606.29472",
+          "https://github.com/19PINE-AI/aoi"
+        ],
+        "verified": true
+      },
+      {
+        "name": "LivingScreen: observation control (watch/wait) is now a benchmarked capability, and frontier models are miscalibrated at it",
+        "what": "A short-video-platform benchmark where content keeps playing. Agents get a Watch action (record 0.1-30 fps for up to 60 s; clips go to video models, frame sequences to image models) and a Wait action, scored on success and also on Watch Ratio, the share of feed runtime observed. Humans: 94.0% SR at 9.7% WR. Gemini-3.5: 69.3% SR / 11.9% WR. Seed-2.0: 64.8% / 15.5%. Claude-Opus: 45.6% / 8.5%. Manual audit: under-observation in 39-61% of trajectories and over-observation in 25-43%, and prompting did not fix it. Humans do 'patch scouting': 52% of their observations are brief relevance glances before deeper watching.",
+        "beyond_repo_because": "Retinat has the primitives (watch with until=bored, now, browse) but no measured policy for how long or how densely to look. LivingScreen gives an external metric (SR vs watch ratio) and a human strategy (cheap glance, then commit) that the 'bored' marginal-coverage stop could be benchmarked against or learn from. The repo has never been evaluated on any external dynamic benchmark.",
+        "maturity": "paper plus benchmark (code repo linked; not opened, GitHub proxy 403)",
+        "sources": [
+          "https://arxiv.org/abs/2606.04701",
+          "https://arxiv.org/html/2606.04701v1"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Active foveation: zoom/crop as a first-class perception action, now in production APIs and gated by uncertainty in research",
+        "what": "Anthropic's computer_toolset_20260801 has a zoom action that takes region [x0,y0,x1,y1], captures that region at full resolution scaled to the normal screenshot size, and keeps coordinates in full-screen space. It is enabled by default. The docs cost screenshots at about 1,000-1,800 tokens each with ceil(w/28)*ceil(h/28) visual tokens. Seed1.8 goes from 64.3 to 73.1 on ScreenSpot-Pro when given a crop-box tool. UI-Zoomer (training-free) triggers zoom only when stochastic-candidate spatial spread plus token confidence signal uncertainty, sizes the crop from a law-of-total-variance split, and reports up to +13.4% on ScreenSpot-Pro. GUI-Eyes trains when and how to crop with RL (3B model, 44.8% ScreenSpot-Pro from 3k samples).",
+        "beyond_repo_because": "retinat_look and retinat_scan return fixed whole-viewport or whole-page images. There is no region or zoom action and no 'which patch to spend tokens on' decision. That is the main lever the field uses for small-target legibility at bounded token cost. Repo notes (Round 5) already say text on sheets is unreadable at sheet scale.",
+        "maturity": "production (Anthropic API, Seed1.8); UI-Zoomer and GUI-Eyes are papers",
+        "sources": [
+          "https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool",
+          "https://arxiv.org/html/2603.20633v1",
+          "https://arxiv.org/abs/2604.14113",
+          "https://arxiv.org/abs/2601.09770"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Coordinate-free grounding: attention action heads plus a grounding verifier (GUI-Actor) as the successor to set-of-marks",
+        "what": "Instead of emitting (x,y) as text or tagging a SoM overlay, an <ACTOR> token's hidden state is dot-producted against contextualised visual-patch features, giving a patch-level attention map. That yields several candidate regions in one forward pass, and a separate verifier picks among them. GUI-Actor-7B scores 40.7 (Qwen2-VL) and 44.6 (Qwen2.5-VL) on ScreenSpot-Pro, above UI-TARS-72B's 38.1 (NeurIPS 2025). For context, OmniParser V2 (detector plus captioner, a SoM-style pipeline) lifted GPT-4o from 0.8 to 39.6 on ScreenSpot-Pro. Detector-based marks help weak models, but native grounders have caught up.",
+        "beyond_repo_because": "The repo's grounding is DOM indices plus highlight overlays (SoM-like) for structure, and raw viewport coordinates for Retinat taps. On canvas, WebGL or video surfaces (exactly where Retinat is used) there are no DOM marks, and the repo has no learned pixel-to-target grounder or candidate verifier.",
+        "maturity": "open code and weights (Microsoft); OmniParser V2 is production OSS",
+        "sources": [
+          "https://arxiv.org/abs/2506.03143",
+          "https://proceedings.neurips.cc/paper_files/paper/2025/file/16130af940e9dabb43c726119bd3b42e-Paper-Conference.pdf",
+          "https://www.microsoft.com/en-us/research/articles/omniparser-v2-turning-any-llm-into-a-computer-use-agent/"
+        ],
+        "verified": true
+      },
+      {
+        "name": "History-aware visual token budgeting: recency-decayed resolution, structure-preserving pruning, and ViT-embedding reuse",
+        "what": "GUIPruner (training-free) applies Temporal-Adaptive Resolution, which resizes older screenshots down on a decay schedule, plus Stratified Structure-aware Pruning that keeps interactive elements and layout anchors. On Qwen2-VL-2B it reports 3.4x fewer FLOPs and 3.3x faster vision encoding at over 94% of original accuracy. A separate 2026 study finds GUI agents show a recency effect (big budgets for recent frames, heavy compression for old ones), that spatially uniform or even random pruning keeps global layout better than naive saliency pruning, and that identical screenshots re-fed across steps are redundantly re-encoded by the ViT, so embeddings should be cached. ShowUI's UI-guided token selection cut redundant visual tokens by 33%. AQuaUI's quadtrees cut 29.5% of tokens at 99.06% retention.",
+        "beyond_repo_because": "The repo costs each percept independently (the 28-px rule) and leaves context management to the host model. It has no notion of degrading old percepts to text or lower resolution over a trajectory, and no structure-aware token allocation within a sheet. Caveat: most of these methods need model-internal access (open VLMs), so for a closed API model only the resolution-decay and text-replacement parts transfer.",
+        "maturity": "papers; ShowUI has open code (CVPR 2025)",
+        "sources": [
+          "https://arxiv.org/abs/2602.23235",
+          "https://arxiv.org/abs/2603.26041",
+          "https://openaccess.thecvf.com/content/CVPR2025/papers/Lin_ShowUI_One_Vision-Language-Action_Model_for_GUI_Visual_Agent_CVPR_2025_paper.pdf",
+          "https://arxiv.org/abs/2605.19260"
+        ],
+        "verified": true
+      },
+      {
+        "name": "GUI world models: predicting the next screen as renderable code for lookahead",
+        "what": "Code2World predicts the post-action GUI state by generating renderable HTML instead of pixels. It is trained on 80K+ screen-action pairs with render-aware RL (rendered output as reward). The 8B model is claimed to rival GPT-5 and Gemini-3-Pro-Image on next-UI prediction and adds +9.5% on AndroidWorld when it augments Gemini-2.5-Flash. MobileDreamer uses textual 'sketch' world models (+5.25% AndroidWorld). GUI-CC (2609.00048) shows these models are mostly judged as one-step predictors, and their multi-step consistency as environments is weak.",
+        "beyond_repo_because": "The repo perceives only what has happened. It has no forward model to check 'did the screen change as expected' beyond its post-hoc 'confirm by sight' for flicks. An expected-state predictor would turn Eyes.next()-style confirmation into a general action-verification signal. Caveat: the gains are on mobile and Android, and nothing was shown on live web or video content.",
+        "maturity": "paper plus open code (AMAP-ML/Code2World, not opened, GitHub proxy 403)",
+        "sources": [
+          "https://arxiv.org/abs/2602.09856",
+          "https://arxiv.org/html/2609.00048v1",
+          "https://arxiv.org/pdf/2601.04035"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Synchronous multimodal step inputs expose cross-modal interference (OmniGUI) and frame-clustered video context (DynamicUI)",
+        "what": "OmniGUI: 709 expert episodes, 2,579 steps and 29 smartphone apps, with images, synchronous audio and video clips at every step. Omni-modal models are competent on static tasks but degrade significantly when tasks need synchronous temporal or auditory signals, and task-irrelevant environmental noise is a key bottleneck. DynamicUI: clusters screen-recording frames (C=3, doubled when relevance or confidence is low), captions the centroids with a VLM, keeps about 3 frames, and filters them against the planned action. Qwen3-VL-8B goes from 15.1% to 22.1% on DynamicGUIBench and from 25.8% to 28.4% on OSWorld. The weakest categories are content-triggered (15.4%) and ephemeral-reference (20.0%) events.",
+        "beyond_repo_because": "Retinat hears muted audio and labels it, but nothing tests whether its audio channel distracts the downstream model on tasks where sound is irrelevant (the OmniGUI failure). DynamicUI's action-conditioned frame filtering, which picks frames for relevance to the next action rather than for coverage, is a different objective from the repo's facility-location coverage. Both results are modest and from small models, so treat them as directional.",
+        "maturity": "papers / benchmarks",
+        "sources": [
+          "https://arxiv.org/abs/2605.18758",
+          "https://arxiv.org/abs/2604.25380",
+          "https://arxiv.org/html/2604.25380v1"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Latency is dominated by deliberation, not perception: OSWorld-Human, plus small screenshot-only models as cost floors",
+        "what": "OSWorld-Human (MLSys 2026) annotates human-optimal trajectories for all 369 OSWorld tasks. Agents take 1.4-2.7x more steps than needed, planning and reflection LLM calls take 75-94% of total latency, and later steps take up to 3x longer. Fara-7B (screenshot-only, coordinate actions, on-device) gets 73.5% WebVoyager and 34.1% Online-Mind2Web at about $0.025 per task vs about $0.30 for proprietary CUA baselines. Its input tokens per task (~1.2e5) match SoM agents, but it emits ~1.1k output tokens against GPT-5's ~13k. Gemini 2.5 Computer Use claims over 70% on Online-Mind2Web at ~225 s per task on Browserbase's harness (vendor-measured).",
+        "beyond_repo_because": "The repo optimises percept tokens (input side) and claims about zero-token perception. These data say per-step wall-clock and cost are dominated by output and reasoning tokens and by excess steps, so the measurable win is fewer steps, as AOI also found, rather than cheaper images. The repo has no step-efficiency or latency measurement against a human-optimal reference.",
+        "maturity": "benchmark plus open data (OSWorld-Human); production open weights (Fara-7B); vendor claim (Gemini CU)",
+        "sources": [
+          "https://arxiv.org/abs/2506.16042",
+          "https://proceedings.mlsys.org/paper_files/paper/2026/file/5edb57c05c81d04beb716ef1d542fe9e-Paper-Conference.pdf",
+          "https://www.microsoft.com/en-us/research/wp-content/uploads/2025/11/Fara-7B-An-Efficient-Agentic-Model-for-Computer-Use.pdf",
+          "https://blog.google/innovation-and-ai/models-and-research/google-deepmind/gemini-computer-use-model/"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Benchmark headline numbers are unreliable: measurement critique you should apply before trusting any 'SOTA'",
+        "what": "Epoch AI (Oct 2025): about 15% of OSWorld tasks are terminal-only solvable and another ~30% can largely swap GUI work for terminal or Python. About 10% are invalid, many are ambiguous, and instructions keep changing. A July 2026 audit of 150 publicly scored failure trajectories across five CU benchmarks finds 15.3% of FAIL verdicts wrong (10.7% evaluator false negatives, 4.7% broken tasks). Genuine failures are dominated by verification and planning, not grounding. Online-Mind2Web (Illusion of Progress) measured Operator at 61.3% and Browser Use at 30.0%, against near-90% claims on WebVoyager. Blog-reported OSWorld-Verified leaders above 80% (e.g. 'Qwen3.8-Max 86.1%', 'Opus 4.7 82.3%') could not be confirmed from primary pages: the leaderboard renders client-side and the Anthropic page text has no OSWorld figure. Seed1.8's model card reports OSWorld 61.9 and Online-Mind2Web 85.9.",
+        "beyond_repo_because": "The repo's own measurements are n=1-6 on its own clips, and it reports no external benchmark. These critiques show that even external benchmarks need trajectory-level auditing (missing visual evidence is a named root cause), which matters directly for a perception layer whose value lies in what screenshots miss.",
+        "maturity": "analysis / papers",
+        "sources": [
+          "https://epoch.ai/blog/what-does-osworld-tell-us-about-ais-ability-to-use-computers",
+          "https://arxiv.org/abs/2607.28367",
+          "https://arxiv.org/abs/2504.01382",
+          "https://arxiv.org/html/2603.20633v1",
+          "https://benchlm.ai/benchmarks/osworld-verified"
+        ],
+        "verified": false
+      }
+    ],
+    "gaps": [
+      "Sub-300 ms and real-time interactive content (games, canvas animations, live dashboards) remains out of reach for every observe-act loop. AOI's own limitations section says ~3 Hz sampling and 1-5 s per step put such events and real-time games outside its scope (its Games family regressed). WebGames reports 95.7% human vs 43.1% best AI, with failures clustered on latency and vision rather than reasoning. No published system decouples a fast local reflex controller from the slow VLM planner for web canvas. (https://arxiv.org/abs/2606.29472, https://arxiv.org/abs/2502.18356)",
+      "Learned observation control: when to glance, how long to watch, at what fps and at which region. LivingScreen shows 39-61% under-observation and 25-43% over-observation that prompting does not fix, while humans patch-scout (52% brief glances). No method yet optimises the success vs watch-ratio frontier, and the repo's marginal-coverage 'bored' stop has never been evaluated against it. (https://arxiv.org/html/2606.04701v1)",
+      "Per-model perception configuration. AOI finds keyframe images help Claude and Gemini 2.5 (+10/+6 pp via narration), are neutral on GPT-5.4, and cost Gemini 3 Flash 12 pp through image-token dilution. Nobody has a principled, online way to decide which channels and how many images a given model should get, so a perception layer shipped as one fixed bundle (like Retinat's sheet) is likely miscalibrated for some hosts. (https://arxiv.org/abs/2606.29472)",
+      "Non-speech audio understanding for agents. AOI transcribes speech only and calls chimes, beeps and alert sounds unhandled. OmniGUI finds irrelevant environmental audio actively degrades omni models. Nobody has shown an agent that reliably uses non-speech UI sounds as state signals without being distracted by background audio. The repo's heuristic labels (tone, beats, noise) are a start but are unvalidated on agent task success. (https://arxiv.org/abs/2606.29472, https://arxiv.org/abs/2605.18758)",
+      "Trustworthy evaluation of perception itself. Benchmarks mis-score about 15% of failures, partly from incomplete trajectory observation. OSWorld is about 45% partially solvable without the GUI. There is no accepted live benchmark that isolates dynamic-content perception, holds the reasoning model fixed, and reports cost and latency against a human-optimal reference. AOI and LivingScreen each built their own, with n=1 trials or single-platform scope. (https://arxiv.org/abs/2607.28367, https://epoch.ai/blog/what-does-osworld-tell-us-about-ais-ability-to-use-computers, https://arxiv.org/abs/2506.16042)",
+      "Errors in persistent visual memory. Narration-as-memory is where the AOI gain comes from, but its authors note a misread number persists in the trajectory, and no work verifies or retracts narrated facts against later pixels or the DOM. This matters wherever pixels and structure disagree (canvas text, video overlays). (https://arxiv.org/abs/2606.29472)"
+    ]
+  },
+  {
+    "area": "active-predictive-perception",
+    "already_in_repo": [
+      "In-page retina (browser_use/eyes/retina.js) runs in an isolated world. It taps <video> with requestVideoFrameCallback at about 10 samples/s of media time, keeps a 16x16 luma grid plus a 4x4 RGB grid per sample, and stores a JPEG keyframe only when the luma-grid distance is at least thumbDiff=18. It pushes batches over a CDP binding.",
+      "sight.py handles cuts with a floor of 16 mean-abs luma plus 6 MADs over a 20-sample window, merges shots, detects loops, and names colours and colourfulness. Keyframes come from greedy facility location F(S)=(1/n)sum max sim, with sim=exp(-(d/sigma)^2) and sigma=14, which carries the (1-1/e) bound. The 'bored' stop fires when the marginal coverage gain of recent frames stays near 0.",
+      "Hearing (hearing.py, asr.py) computes loudness, ZCR, spectral centroid, 4 Hz modulation, onsets, tempo and Foote-style novelty change points. It uses Silero VAD to find speech regions and faster-whisper to transcribe them, and falls back to heuristics without the extras.",
+      "page.py reads the Page.screencast compositor stream (frames are pushed when the screen changes, with no screenshot polling) and reduces it to the same 16x16 signatures. scan() scrolls with real wheel input and keeps facility-location keyframes. vision/perceive.py adds row-profile scroll estimation and a horizontal pan detector.",
+      "percept.py builds one contact sheet (keyframes plus a spectrogram strip on one time axis) and text, costed in tokens at about 1 token per 28x28 px patch. The caller picks a fixed detail level ('glance', 'look').",
+      "Touch uses minimum-jerk flicks, taps and long-press. Eyes.next() confirms by sight that the item changed and corrects overshoot.",
+      "Retinat MCP has 13+ tools: open, look, watch(until=bored), scan, browse, next, tap, click, swipe, type, key, now and explore. None takes a region, zoom or crop argument, and frame selection never sees the agent's query. Grep finds no LayerTree, beginFrame or damage-rect use. The only PerformanceObserver (layout-shift) is in explore/probe.js, where it serves CLS bug finding, not perception.",
+      "Selection is diversity/coverage-based and query-agnostic. Redundancy is removed per whole frame by grid distance, not per patch. There is no predictive model of the next frame or of an action's outcome, and no learned attention."
+    ],
+    "findings": [
+      {
+        "name": "Learned active perception: a sensing policy decides where to zoom (DeepEyes, ACTIVE-o3, GUI-ARP/GUI-Eyes, ScreenSeekeR)",
+        "what": "The MLLM is split, explicitly or implicitly, into a sensing policy that proposes crop or zoom regions and a task policy that answers from them, trained with GRPO and an outcome reward. DeepEyes (arXiv 2505.14362) learns the zoom-in tool end to end with RL and no cold-start SFT. ACTIVE-o3 (ICML 2026, code released) separates the sensing and task modules on one backbone. GUI-ARP and GUI-Eyes apply the same idea to screenshots with crop-region and zoom-scale optimisation. The training-free version, ScreenSeekeR, uses a planner's GUI priors for a cascaded crop search and raises OS-Atlas-7B on ScreenSpot-Pro from 18.9% to 48.1%.",
+        "beyond_repo_because": "Retinat always sends a fixed-resolution full-frame sheet, and no tool lets the model ask for a high-resolution foveal crop of a region. sight.py's own docstring admits that text changing on a static background is nearly invisible at 16x16. A saccade-then-fixate tool, a cheap low-resolution periphery plus a model-chosen high-resolution fovea, is missing.",
+        "maturity": "Open code (ACTIVE-o3, DeepEyes). ScreenSeekeR is published with its benchmark. GUI-ARP and GUI-Eyes are preprints.",
+        "sources": [
+          "https://arxiv.org/abs/2505.14362",
+          "https://arxiv.org/html/2505.21457v2",
+          "https://github.com/aim-uofa/Active-o3",
+          "https://arxiv.org/html/2509.15532",
+          "https://www.arxiv.org/pdf/2601.09770",
+          "https://arxiv.org/abs/2504.07981"
+        ],
+        "verified": true
+      },
+      {
+        "name": "ViCrop: the model's own attention or gradients pick the crop, training-free (ICLR 2025)",
+        "what": "Zhang et al. show that MLLMs attend to the right region even when they answer a small-detail question wrongly. ViCrop takes answer-to-image attention normalised by a generic-prompt attention map (rel-att), gradient-weighted attention (grad-att), or the input-gradient L2 norm (pure-grad), then crops and re-asks. It improves detail-sensitive benchmarks without training and without hurting large-object questions. Official code is released.",
+        "beyond_repo_because": "The repo has no notion of where the consumer model is looking. Caveat: the method needs attention or gradient access, so it works with an open-weights local VLM acting as the fovea selector, not with Claude or GPT behind an API.",
+        "maturity": "Open code (github.com/saccharomycetes/mllms_know).",
+        "sources": [
+          "https://arxiv.org/pdf/2502.17422",
+          "https://github.com/saccharomycetes/mllms_know"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Resolution and fidelity on demand: VisionThink and VOILA's value-of-information selection",
+        "what": "VisionThink (NeurIPS 2025, code released) feeds a downsampled image first. An RL-trained policy, using LLM-as-judge rewards on general VQA, emits a special token to request the full-resolution image only when needed, which saves tokens on easy questions and keeps OCR-level accuracy. VOILA (arXiv 2602.03007) chooses the cheapest visual fidelity before retrieval. A gradient-boosted regressor predicts P(correct | question, fidelity) from question features and an isotonic calibrator refines it. Across 5 datasets and 6 VLMs (7B-235B) it cuts cost by 50-60% while keeping 90-95% of full-resolution accuracy.",
+        "beyond_repo_because": "Retinat's detail level ('glance' or 'look') and keyframe count are fixed by the caller or by defaults. No expected-value-of-information estimate decides whether one more image, a higher resolution, or nothing at all is worth the tokens.",
+        "maturity": "VisionThink: open code. VOILA: preprint, no code found.",
+        "sources": [
+          "https://arxiv.org/pdf/2507.13348",
+          "https://github.com/JIA-Lab-research/VisionThink",
+          "https://arxiv.org/abs/2602.03007"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Predictive coding at the tokenizer: AdaCodec I-frames and P-tokens, and Run-Length Tokenization",
+        "what": "AdaCodec (arXiv 2606.02569, Qwen3-VL-8B) sends a full reference frame only when scene predictability is low. Otherwise it encodes motion plus prediction residuals as compact P-tokens, with the token budget allocated by conditional predictive cost. At 32k versus 224k tokens (1/7 the budget) it beats the baseline on all long-video benchmarks, and time-to-first-token drops from 9.26 s to 1.62 s. RLT (NeurIPS 2024, CMU, code released) removes patches that repeat over time before inference and encodes run length in the positional encoding. Token count falls by up to 80% on long videos, and fine-tuning wall-clock by 30%, at matched accuracy.",
+        "beyond_repo_because": "The repo sends whole keyframes and dedups at frame level. It never transmits only the residual against a prediction. Hype check: both methods need control of the vision tokenizer, so they do not transfer to a closed API model. At the API boundary the closest analogue is crops of the changed regions plus a text diff.",
+        "maturity": "RLT: open code. AdaCodec: preprint, code not stated.",
+        "sources": [
+          "https://arxiv.org/abs/2606.02569",
+          "https://arxiv.org/abs/2411.05222",
+          "https://github.com/rccchoudhury/rlt",
+          "https://proceedings.neurips.cc/paper_files/paper/2024/file/3181db351fd3ced43cd589b0b572675d-Paper-Conference.pdf"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Patch-level temporal redundancy removal for computer-use screenshots (ReVision, TimeChat-Online DTD, AQuaUI)",
+        "what": "ReVision (arXiv 2605.11212) learns a patch selector that drops regions repeated across consecutive screenshots while keeping spatial structure. On OSWorld, WebTailBench and AgentNetBench with Qwen2.5-VL-7B it uses 46% fewer tokens and gains 3 points of success rate, and accuracy keeps rising as more history is added once redundancy is removed. TimeChat-Online's Differential Token Dropping, framed as 'change blindness', drops 82.8% of streaming-video tokens at 98% of StreamingBench accuracy and a 1.76x speed-up. Its per-frame drop ratio doubles as a scene-transition detector. AQuaUI (2605.19260) builds adaptive quadtrees conditioned on the previous screenshot, giving 29.5% fewer tokens at 99.06% of full performance, training-free.",
+        "beyond_repo_because": "The repo decides keep-or-drop per frame (grid distance at least 18, facility location). It never drops the unchanged 90% of a frame and sends only the changed patches. For a feed or page where only a caption or comment counter changes, that is the main token sink.",
+        "maturity": "TimeChat-Online: open weights on Hugging Face. ReVision and AQuaUI: preprints, no code found.",
+        "sources": [
+          "https://arxiv.org/abs/2605.11212",
+          "https://arxiv.org/abs/2504.17343",
+          "https://huggingface.co/wyccccc/TimeChatOnline-7B",
+          "https://arxiv.org/abs/2605.19260"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Surprise as prediction error rather than coverage: Swift Sampling, and V-JEPA's violation-of-expectation signal",
+        "what": "Swift Sampling (arXiv 2605.22678) treats a video as a trajectory in visual feature space. It estimates velocity and acceleration, extrapolates the next position with a second-order Taylor expansion, and selects frames that deviate from the prediction. The reported overhead is 0.02x (about 30x cheaper than comparable selectors), with up to +12.5 points on long-video QA under tight frame budgets. Meta's V-JEPA work (arXiv 2502.11831) uses latent prediction error as 'surprise' and detects physically impossible events: 98% on IntPhys, 66% on GRASP, 62% on InfLevel-lab.",
+        "beyond_repo_because": "The repo's novelty() measures marginal coverage, i.e. diversity. A smooth pan or a scripted carousel scores as novel even though it is perfectly predictable, and an off-trend event inside an already-covered look scores low. A Taylor-extrapolated luma-grid or embedding predictor, whose residual drives keyframing and the bored stop, is a cheap, drop-in, real predictive-coding upgrade.",
+        "maturity": "Swift Sampling: preprint, no code stated. V-JEPA: open weights from Meta. The VoE result is published research.",
+        "sources": [
+          "https://arxiv.org/abs/2605.22678",
+          "https://www.alphaxiv.org/abs/2502.11831"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Query-conditioned keyframe allocation: AKS (CVPR 2025), relevance traded against coverage",
+        "what": "AKS samples at 1 fps, scores each frame against the prompt with a vision-language matcher, then recursively judges and splits segments to divide a fixed keyframe budget between query relevance and temporal coverage. It is plug-and-play and training-free for video LLMs. A 2026 line of follow-ups (coverage-driven selection, RIDGE, MEDR, a plug-and-play evaluation paper) shows the area is still moving and not settled.",
+        "beyond_repo_because": "Facility location in sight.py ignores the agent's question entirely. 'What price is shown at the end of this reel?' and 'summarize this reel' get the same six keyframes. A query-weighted facility location, gain weighted by a cheap CLIP or SigLIP relevance score, keeps the (1-1/e) guarantee because it stays monotone submodular.",
+        "maturity": "Published at CVPR 2025 with code (per the paper). The follow-ups are preprints.",
+        "sources": [
+          "https://openaccess.thecvf.com/content/CVPR2025/papers/Tang_Adaptive_Keyframe_Sampling_for_Long_Video_Understanding_CVPR_2025_paper.pdf",
+          "https://arxiv.org/html/2608.00714",
+          "https://arxiv.org/html/2609.13250"
+        ],
+        "verified": true
+      },
+      {
+        "name": "World models that predict only the state transition: WMA web agents (ICLR 2025) and State Transition Pretraining",
+        "what": "WMA trains an LLM world model to predict a natural-language description of only what changes after an action (elements ADDED, DELETED or UPDATED, aligned by Hungarian matching). It does not predict the whole next observation, and it uses the predictions to pick actions on WebArena and Mind2Web. Predicting the full accessibility tree was the worst variant (14.5% SR). STP (arXiv 2607.24112) jointly trains forward dynamics (state plus action to next state) and inverse dynamics (state change to action) on visual GUI transitions and beats trajectory-only fine-tuning on AgentNetBench, AndroidControl and GUIOdyssey.",
+        "beyond_repo_because": "Eyes.next() confirms a gesture after the fact. It never predicts what the screen should look like, so it cannot report 'expected item change, observed spinner' as a surprise, or skip perception when the outcome is certain. Transmitting only the prediction residual of an action is the agent-level form of predictive coding.",
+        "maturity": "WMA: published (ICLR 2025). STP: preprint.",
+        "sources": [
+          "https://proceedings.iclr.cc/paper_files/paper/2025/file/a00548031e4647b13042c97c922fadf1-Paper-Conference.pdf",
+          "https://huggingface.co/papers/2410.13232",
+          "https://arxiv.org/abs/2607.24112"
+        ],
+        "verified": true
+      },
+      {
+        "name": "The compositor as an event camera: damage and paint signals that already exist (CDP beginFrame hasDamage, LayerTree.layerPainted clip, DXGI dirty/move rects, AD\u0394ER)",
+        "what": "In the repo's own cdp_use protocol bindings, HeadlessExperimental.beginFrame returns hasDamage, i.e. whether the frame committed anything, plus an optional screenshot. It needs a target created with BeginFrameControl and --run-all-compositor-stages-before-draw, and the field is documented as diagnostic and 'may be removed in the future'. LayerTree.layerPainted emits {layerId, clip: Rect} on every layer repaint, and Layer carries paintCount. Windows' DXGI Desktop Duplication exposes per-frame dirty RECTs and move RECTs (move rects must be applied first). AD\u0394ER (adder-codec-rs, MIT) transcodes framed video into asynchronous per-pixel events with rate control.",
+        "beyond_repo_because": "Retinat infers change from pixels after JPEG decode at 16x16. The renderer already knows exactly which rectangles were repainted, and when, at zero pixel cost. An asynchronous 'paint event' stream would give saccade targets (fovea on the damaged rect) and a near-free surprise prior. Every CUA pruning paper above re-learns this from pixels instead. Caveats: layerPainted is per layer, not per glyph, and CSS transforms or animations can move content without a repaint, so the signal has false negatives.",
+        "maturity": "Production APIs (DXGI) and experimental ones (CDP HeadlessExperimental, LayerTree). AD\u0394ER has open code. I found no published agent-perception use; that negative is unverified.",
+        "sources": [
+          "https://chromedevtools.github.io/devtools-protocol/tot/HeadlessExperimental/",
+          "https://chromedevtools.github.io/devtools-protocol/tot/LayerTree/",
+          "https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgioutputduplication-getframedirtyrects",
+          "https://arxiv.org/abs/2508.14996",
+          "https://github.com/ac-freeman/adder-codec-rs"
+        ],
+        "verified": true
+      },
+      {
+        "name": "Gaze policies rewarded by downstream action success (EyeRobot, CoRL 2025; policy-based foveated imaging, 2026)",
+        "what": "EyeRobot trains a foveated mechanical eye with RL in a real-to-sim BC-RL loop. A behaviour-cloned hand policy acts on the eye's renders, and the eye is rewarded only when the hand succeeds. Fixation, tracking and distractor suppression emerge without any gaze demonstrations. Xiao, Ackermann, Deng and Wetzstein (arXiv 2606.02565) frame foveated acquisition as sensor-attention policy learning on a 200 MP dual-stream sensor, with a low-resolution global stream plus a policy-steered high-resolution stream under strict pixel budgets, and beat same-bandwidth baselines.",
+        "beyond_repo_because": "The GUI zoom RL work optimises grounding accuracy for one step. Nothing learns a temporal gaze over a live screen stream (feeds, video, animated pages) rewarded by whether the agent's next tap, swipe or answer succeeded. That is the right objective, and the eyes plus touch loop has the confirm-by-sight signal needed to compute the reward.",
+        "maturity": "EyeRobot: published (CoRL / PMLR v305). Foveated imaging: preprint, project page.",
+        "sources": [
+          "https://arxiv.org/abs/2506.10968",
+          "https://proceedings.mlr.press/v305/kerr25a.html",
+          "https://arxiv.org/abs/2606.02565"
+        ],
+        "verified": true
+      }
+    ],
+    "gaps": [
+      "No published browser or GUI agent uses renderer damage signals (CDP LayerTree.layerPainted clips, beginFrame hasDamage, OS dirty/move rects) as an event-camera-like attention stream. ReVision, AQuaUI, GUIPruner and TimeChat-Online all re-derive 'what changed' from pixels with learned or heuristic selectors, although the compositor knows it exactly. The only 'event camera on a screen' work I found points a physical DVS at a monitor (e.g. NeuroPong). This negative is unverified, but nothing turned up in searches.",
+      "Predictive coding stops at the closed-API boundary. Every measured win (AdaCodec on Qwen3-VL-8B, RLT, ReVision on Qwen2.5-VL-7B, ViCrop's attention maps) needs open weights or tokenizer control. No paper measures accuracy against tokens for a residual-only protocol a closed model can consume: a reference sheet once, then only crops of surprising regions plus a text diff of predicted versus observed. That is exactly Retinat's deployment situation with Claude.",
+      "Learned gaze for GUIs is single-step and rewarded on grounding. GUI-ARP, GUI-Eyes and ScreenSeekeR optimise click-location accuracy on a static screenshot. An EyeRobot-style policy that allocates fovea and frame budget over a live stream (reels, canvases, animated dashboards), with reward from downstream task or action success, is missing.",
+      "Frame and fidelity selection still lacks an actual value-of-information criterion tied to the agent's decision. AKS uses relevance plus coverage, Swift Sampling uses prediction error, and VOILA predicts P(correct) from question features only, before seeing any pixels. None estimates the expected change in the agent's next action per token spent, which is what a token-costed percept should optimise.",
+      "Cost accounting is not trustworthy. The 2026 Efficient-GUI-Agents survey (arXiv 2609.02309) names undercounted verifier cost and poor cross-benchmark comparability as open problems. This repo's own Round 4 notes found that one controlled read moved the session token counter about 163 tokens against 645 by the published patch formula, so image-token claims cannot be validated end to end (n=1, as the notes say).",
+      "Joint audio-visual surprise for budgeted agent perception of web media is largely unexplored. The streaming-video token papers above are vision-only, while short-form web media is driven by audio. I found no work that fuses audio change points and visual prediction error into one keyframe or stop policy. This negative is unverified."
+    ]
+  }
+]

@@ -5,7 +5,6 @@ import tempfile
 from collections.abc import Iterable
 from enum import Enum
 from fnmatch import fnmatch
-from functools import cache
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlparse
@@ -255,7 +254,14 @@ class ViewportSize(BaseModel):
 		setattr(self, key, value)
 
 
-@cache
+def _no_display_server() -> bool:
+	"""True on Linux with neither an X nor a Wayland server to draw a window on (containers, CI, SSH).
+
+	Not cached: the answer is the environment's, which can change in a running process (a virtual display started,
+	DISPLAY set after import), and a stale yes launches a headful Chrome that dies at once."""
+	return sys.platform == 'linux' and not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY')
+
+
 def get_display_size() -> ViewportSize | None:
 	# macOS
 	try:

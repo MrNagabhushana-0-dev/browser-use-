@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from browser_use.eyes.retina import AudioHop
+from browser_use.eyes.sight import LOOP_JUMP_S, strays
 
 SILENCE_DB = -50.0
 # Half-width of the novelty comparison, and the minimum novelty (band-byte units) for a boundary.
@@ -45,9 +46,17 @@ HZCRR_SPEECH = 0.15
 BEAT_CONTEXT_S = 1.0
 # Unlabelled pieces shorter than this are folded into a neighbour.
 SLIVER_S = 1.0
+OFFSET_DROP_DB = 6.0
+OFFSET_COLLAPSE_DB = 25.0  # the hop after an ending is this much quieter: the sound has stopped  # a flux peak this far below the last few hops' loudness is a sound ending, not starting
 ONSET_FLOOR = 0.3
 ONSET_MADS = 4.0
 ONSET_MIN_GAP_S = 0.08
+# A dropout in the capture inside a sound that keeps going: one or two hops this much quieter (but not silent, as a
+# real gap between notes is), then the same spectrum at the same level. The hop after it is not a new sound.
+DROPOUT_MIN_DB = 3.0
+DROPOUT_MAX_DB = 12.0
+DROPOUT_SAME_LEVEL_DB = 3.0
+DROPOUT_SAME_SPECTRUM = 0.9
 ENERGY_JUMP_DB = 15.0
 TEMPO_MIN_S = 3.0
 DEFAULT_HOP_S = 1024 / 48000
@@ -171,6 +180,23 @@ def classify(
 	return 'sound', ''
 
 
+def _resumed(hops: list[AudioHop], rms: np.ndarray, i: int) -> bool:
+	"""Whether hop i is the same sound coming back after a short dropout in the capture, not a new one."""
+	for dip_len in (1, 2):
+		j = i - dip_len - 1  # the hop before the dip
+		if j < 0 or rms[j] <= SILENCE_DB or abs(float(rms[i] - rms[j])) > DROPOUT_SAME_LEVEL_DB:
+			continue
+		depth = float(rms[j] - rms[j + 1 : i].min())
+		if not DROPOUT_MIN_DB <= depth <= DROPOUT_MAX_DB:
+			continue
+		a = np.frombuffer(hops[j].bands, dtype=np.uint8).astype(np.float32)
+		b = np.frombuffer(hops[i].bands, dtype=np.uint8).astype(np.float32)
+		norm = float(np.linalg.norm(a) * np.linalg.norm(b))
+		if norm > 0 and float(a @ b) / norm >= DROPOUT_SAME_SPECTRUM:
+			return True
+	return False
+
+
 def onsets(hops: list[AudioHop], hop_s: float) -> list[float]:
 	if len(hops) < 5:
 		return []
@@ -185,7 +211,20 @@ def onsets(hops: list[AudioHop], hop_s: float) -> list[float]:
 		med = float(np.median(local))
 		mad = float(np.median(np.abs(local - med)))
 		is_peak = flux[i] >= flux[max(0, i - 2) : i + 3].max()
-		flux_onset = is_peak and flux[i] > max(ONSET_FLOOR, med + ONSET_MADS * mad) and rms[i] > -60
+		# Flux is normalised by the frame's magnitude, so a sound *ending* (magnitude collapsing) spikes it too;
+		# only a peak where loudness is not falling well below its recent level is the start of something.
+		before = rms[max(0, i - 3) : i].max()
+		falling = rms[i] < before - OFFSET_DROP_DB
+		# A sound cut off mid-hop smears into a broadband click (high flux) while the hop is still mostly the
+		# sound: it is an ending when the sound was already going at this level and the next hop collapses.
+		ending = (
+			i + 1 < len(hops)
+			and before > SILENCE_DB
+			and rms[i] >= before - OFFSET_DROP_DB
+			and rms[i + 1] < rms[i] - OFFSET_COLLAPSE_DB
+		)
+		flux_onset = is_peak and flux[i] > max(ONSET_FLOOR, med + ONSET_MADS * mad) and rms[i] > -60 and not (falling or ending)
+		flux_onset = flux_onset and not _resumed(hops, rms, i)
 		energy_onset = rms[i] > SILENCE_DB and rms[i] - rms[max(0, i - 3) : i].min() >= ENERGY_JUMP_DB
 		if (flux_onset or energy_onset) and hops[i].t - last >= ONSET_MIN_GAP_S:
 			found.append(hops[i].t)
@@ -276,6 +315,43 @@ def _regular(times: list[float]) -> float | None:
 	return med if float(np.std(ioi) / med) < 0.15 else None
 
 
+def absorb_beat_edges(segments: list[Segment], onsets: list[float], tolerance: float = 0.15) -> list[Segment]:
+	"""Fold a 'sound' segment into the 'beats' segment it touches when its onsets fall on that beat's grid.
+
+	A change point can land inside a click track and leave its first or last second on its own: too few onsets
+	there to show a rhythm, so it is labelled plain 'sound'. Every onset of it within `tolerance` of a period of
+	the neighbour's beat makes it the same beats. A piece with no onsets, or any off the grid, stays as it is.
+	"""
+	out = list(segments)
+	i = 0
+	while i < len(out):
+		seg = out[i]
+		mine = [t for t in onsets if seg.t0 <= t < seg.t1]
+		if seg.kind != 'sound' or not mine:
+			i += 1
+			continue
+		for j in (i + 1, i - 1):
+			if not 0 <= j < len(out) or out[j].kind != 'beats':
+				continue
+			nb = out[j]
+			if abs((nb.t0 if j > i else nb.t1) - (seg.t1 if j > i else seg.t0)) > 0.1:
+				continue  # not touching
+			theirs = [t for t in onsets if nb.t0 <= t <= nb.t1]
+			# Judged together: the sound piece's onsets continue the beat when the joined run is still even.
+			period = _regular(sorted(theirs + mine))
+			if period is None or not theirs:
+				continue
+			anchor = theirs[0]
+			if all(abs((t - anchor) / period - round((t - anchor) / period)) <= tolerance for t in mine):
+				nb.t0, nb.t1 = min(nb.t0, seg.t0), max(nb.t1, seg.t1)
+				nb.loud_db = max(nb.loud_db, seg.loud_db)
+				del out[i]
+				break
+		else:
+			i += 1
+	return out
+
+
 def _smooth(segments: list[Segment]) -> list[Segment]:
 	"""Fold short unlabelled slivers into a neighbour: a change point lands a hop or two off,
 	and the piece it leaves behind is a mix of both sides that deserves no label of its own."""
@@ -292,7 +368,9 @@ def _smooth(segments: list[Segment]) -> list[Segment]:
 			if out:
 				out[-1].t1 = seg.t1
 				continue
-		if out and out[-1].kind == seg.kind and out[-1].detail == seg.detail:
+		# Adjacent beats (or music) are one run even if their pieces guessed slightly different tempi:
+		# the caller re-estimates one tempo from all of the run's onsets, as listen() itself merges them.
+		if out and out[-1].kind == seg.kind and (out[-1].detail == seg.detail or seg.kind in ('beats', 'music')):
 			out[-1].t1 = seg.t1
 			continue
 		out.append(seg)
@@ -304,6 +382,8 @@ def listen(hops: list[AudioHop], sample_rate: float | None = None) -> Hearing:
 	hop_s = 1024 / sample_rate if sample_rate else DEFAULT_HOP_S
 	if not hops:
 		return Hearing(hop_s=hop_s)
+	drop = strays([h.t for h in hops], LOOP_JUMP_S)
+	hops = [h for i, h in enumerate(hops) if i not in drop]
 	rms = np.array([h.rms_db for h in hops], dtype=np.float32)
 	flat = np.clip(np.array([h.flatness for h in hops], dtype=np.float64), 0, 1)
 	peak = np.array([h.peak_hz for h in hops], dtype=np.float32)
@@ -312,7 +392,7 @@ def listen(hops: list[AudioHop], sample_rate: float | None = None) -> Hearing:
 	found = onsets(hops, hop_s)
 
 	# Media time restarting (a loop) is a boundary too.
-	loops = [i for i in range(1, len(hops)) if hops[i].t < hops[i - 1].t - 0.4]
+	loops = [i for i in range(1, len(hops)) if hops[i].t < hops[i - 1].t - LOOP_JUMP_S]
 	bounds = sorted(set([0, *change_points(hops, hop_s), *loops, len(hops)]))
 	chunk = max(4, int(round(CHUNK_S / hop_s)))
 
@@ -345,7 +425,7 @@ def listen(hops: list[AudioHop], sample_rate: float | None = None) -> Hearing:
 			else:
 				segments.append(Segment(t0, t1, kind, loud, detail))
 
-	segments = _smooth(segments)
+	segments = absorb_beat_edges(_smooth(segments), found)
 	for s in segments:  # a merged run of beats gets one tempo, from all of its onsets
 		if s.kind in ('beats', 'music'):
 			period = _regular([t for t in found if s.t0 - 0.05 <= t <= s.t1])
@@ -405,7 +485,8 @@ def apply_speech_regions(hearing: Hearing, regions: list[tuple[float, float]]) -
 				prev.t1 = b
 			else:
 				out.append(Segment(a, b, kind, seg.loud_db, detail))
-	hearing.segments = [s for s in out if s.duration >= 0.2 or s.kind != 'sound']
+	# Relabelling makes new 'sound' slivers (heuristic 'speech' the model rejected): fold them like any other.
+	hearing.segments = _smooth(out)
 	hearing.speech_by = 'vad'
 	return hearing
 

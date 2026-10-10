@@ -1,6 +1,7 @@
 """About:blank watchdog for managing about:blank tabs with DVD screensaver."""
 
 from typing import TYPE_CHECKING, ClassVar
+from urllib.parse import quote
 
 from bubus import BaseEvent
 from cdp_use.cdp.target import TargetID
@@ -19,6 +20,18 @@ from browser_use.browser.watchdog_base import BaseWatchdog
 
 if TYPE_CHECKING:
 	pass
+
+
+# The loading-screen mark, inline. It used to be fetched from https://cf.browser-use.com/logo.svg,
+# which told a third party every time (and from where) a browser started.
+_LOGO_SVG = (
+	'<svg xmlns="http://www.w3.org/2000/svg" width="300" height="80" viewBox="0 0 300 80">'
+	'<rect x="4" y="14" width="52" height="52" rx="12" fill="none" stroke="#fff" stroke-width="5"/>'
+	'<circle cx="30" cy="40" r="9" fill="#fff"/>'
+	'<text x="72" y="52" fill="#fff" font-family="Helvetica,Arial,sans-serif" font-size="34" font-weight="700">'
+	'browser-use</text></svg>'
+)
+_LOGO_DATA_URL = 'data:image/svg+xml,' + quote(_LOGO_SVG)
 
 
 class AboutBlankWatchdog(BaseWatchdog):
@@ -177,7 +190,7 @@ class AboutBlankWatchdog(BaseWatchdog):
 
 					// Create the image element
 					const img = document.createElement('img');
-					img.src = 'https://cf.browser-use.com/logo.svg';
+					img.src = {_LOGO_DATA_URL!r};  // inline: starting a browser must not contact anyone
 					img.alt = 'Browser-Use';
 					img.style.width = '200px';
 					img.style.height = 'auto';

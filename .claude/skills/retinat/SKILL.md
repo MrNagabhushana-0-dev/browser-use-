@@ -7,8 +7,12 @@ description: See and operate a real browser through the Retinat MCP server (brow
 
 Retinat's MCP tools are prefixed `mcp__retinat__retinat_*`. If they aren't connected, the repository's
 `.mcp.json` registers them. You can also start the server by hand with
-`uv run python -m browser_use.retinat`, adding `--cdp-url http://127.0.0.1:9222` to attach to the
-user's own Chrome.
+`uv run python -m browser_use.retinat`. Add `--bridge` to use the user's own browser, with their profile and
+logins, in the tabs they share through the bridge extension (setup in `AI.md`).
+
+For a native desktop app rather than a web page, a server started with `BROWSER_USE_DESKTOP_CONTROL=1` adds
+`retinat_desktop_*` tools: look at the screen, then click, type and press keys in the apps the person granted. Call
+`retinat_desktop_status` first. Read AI.md's "Computer use" section before using them.
 
 ## Workflow
 
@@ -21,12 +25,31 @@ user's own Chrome.
    - For a video, call `retinat_watch(until='bored')`. It returns keyframes and sound labels, and
      a transcript when the speech extra is installed. It pauses the video afterwards, so nothing
      plays unseen while you think.
-3. **Act like a person:** `retinat_tap` / `retinat_click` at coordinates read off the image,
+   - To look again at one moment of a video you already watched, call `retinat_recall(t0, t1)`:
+     frames from that window, from what the eyes kept. It never replays the video.
+   - To find a moment by what it looked like, across everything archived (hours, earlier sessions),
+     call `retinat_search(query)`, then `retinat_recall` around the time it returns.
+   - To read small print or fine detail, `retinat_zoom(x, y, width, height)` recaptures that region at up to 4x
+     (a look frame is ~640 px wide). To locate text, `retinat_find(text)` returns where each match is, whether it
+     is in view or how far to scroll, and a magnified crop.
+3. **Act like a person:** `retinat_tap` / `retinat_click` at coordinates read off the image (or from `retinat_find`),
    `retinat_type` into the focused field, `retinat_key` for Enter, Tab or Escape, and
-   `retinat_swipe`. For feeds, use `retinat_next` or `retinat_browse(items=N)`.
+   `retinat_swipe`. For feeds, use `retinat_next` or `retinat_browse(items=N)`. Give `retinat_click` an `expect`
+   (the target's words, like "Save") when a wrong click would cost something; it refuses to land elsewhere.
 4. **Check the result by looking again**, not by assuming it worked.
+   - `retinat_requests(only="failed")` when something did nothing: the failing request and, with `body=#n`, what
+     the server said (tokens and passwords masked).
+   - `retinat_console(level="error")` when the page breaks or goes blank: what it logged and threw.
 5. **Find bugs across a site:** `retinat_explore(url)` returns a report plus a sheet of every
    page. Present the findings with their evidence.
+
+## Geo-blocked or censored pages
+
+If `retinat_open` fails with a network error or the page says it isn't available in your country,
+Retinat (default `auto`) retries once through Tor when Tor is installed, and says so. To choose:
+`retinat_network(mode='always', exit_country='de')`, then `retinat_network_status` to see the exit Tor
+reports. It restarts the browser. This is for reading public pages. It does not get past bot walls
+(reported, never retried), and you never log in over Tor.
 
 ## Rules
 

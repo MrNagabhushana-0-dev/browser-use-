@@ -29,6 +29,7 @@ dist/
 *.json
 !/server.json
 !docs/agent-notes/*.json
+!browser_use/bridge/extension/*.json
 *.jsonl
 !docs/agent-notes/workflow-results/*.json
 !docs/agent-notes/workflow-results/*.jsonl

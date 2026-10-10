@@ -7,11 +7,13 @@ the real `tools/call` handler against a real page.
 """
 
 import json
+from typing import cast
 
 import mcp.types as types
 import pytest
 from pytest_httpserver import HTTPServer
 
+from browser_use.browser import BrowserSession
 from browser_use.mcp.server import BrowserUseServer
 
 TABLE_PAGE = (
@@ -185,3 +187,18 @@ async def _list_tools(server):
 	assert handler is not None
 	result = await handler.handler(None, types.PaginatedRequestParams())  # type: ignore[arg-type]
 	return result.tools
+
+
+async def test_a_failed_launch_leaves_no_broken_session_so_the_next_call_retries(tmp_path):
+	# A launch that died once used to stick: every later tool call failed on "Root CDP client not initialized".
+	server = BrowserUseServer()
+	with pytest.raises(Exception):
+		await server._init_browser_session(executable_path='/bin/false', headless=True, user_data_dir=str(tmp_path / 'a'))
+	assert server.browser_session is None
+	await server._init_browser_session(headless=True, user_data_dir=str(tmp_path / 'b'))
+	session = cast(BrowserSession | None, server.browser_session)  # pyright keeps the None narrowing across the await
+	assert session is not None
+	try:
+		assert session.cdp_url
+	finally:
+		await session.kill()

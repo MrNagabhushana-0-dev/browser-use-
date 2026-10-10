@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import socket
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -19,11 +20,25 @@ from browser_use.browser.events import (
 	BrowserLaunchResult,
 	BrowserStopEvent,
 )
+from browser_use.browser.profile import _no_display_server
 from browser_use.browser.watchdog_base import BaseWatchdog
 from browser_use.observability import observe_debug
 
 if TYPE_CHECKING:
 	from browser_use.browser.profile import BrowserChannel
+
+
+def _profile_holder_pid(user_data_dir: str | Path | None) -> int | None:
+	"""The pid of a live Chrome on this host holding `user_data_dir`, read from its SingletonLock ("host-pid")."""
+	if not user_data_dir:
+		return None
+	try:
+		host, _, pid = os.readlink(Path(user_data_dir).expanduser() / 'SingletonLock').rpartition('-')
+	except OSError:
+		return None
+	if host != socket.gethostname() or not pid.isdigit() or not psutil.pid_exists(int(pid)):
+		return None  # stale or another machine's lock: Chrome itself clears it
+	return int(pid)
 
 
 class LocalBrowserWatchdog(BaseWatchdog):
@@ -74,6 +89,7 @@ class LocalBrowserWatchdog(BaseWatchdog):
 		for temp_dir in self._temp_dirs_to_cleanup:
 			self._cleanup_temp_dir(temp_dir)
 		self._temp_dirs_to_cleanup.clear()
+		self._remove_throwaway_profile(self.browser_session.browser_profile.user_data_dir)
 
 		# Restore original user_data_dir if it was modified
 		if self._original_user_data_dir is not None:
@@ -102,6 +118,21 @@ class LocalBrowserWatchdog(BaseWatchdog):
 		profile = self.browser_session.browser_profile
 		self._original_user_data_dir = str(profile.user_data_dir) if profile.user_data_dir else None
 		self._temp_dirs_to_cleanup = []
+
+		if not profile.headless and _no_display_server():
+			# headful Chrome with no X/Wayland server exits before CDP is up, with an error that never says why
+			self.logger.warning('headless=False but no display server ($DISPLAY / $WAYLAND_DISPLAY) is set: launching headless')
+			profile.headless = True
+			profile.detect_display_configuration()  # re-derive the viewport for headless
+
+		if holder := _profile_holder_pid(profile.user_data_dir):
+			# a second Chrome on a held profile hands its URL to the holder and exits before CDP is up
+			tmp_dir = Path(tempfile.mkdtemp(prefix='browseruse-tmp-'))
+			self._temp_dirs_to_cleanup.append(tmp_dir)
+			self.logger.warning(
+				f'Profile {profile.user_data_dir} is in use by another Chrome (pid {holder}): launching on a fresh temporary profile'
+			)
+			profile.user_data_dir = str(tmp_dir)
 
 		for attempt in range(max_retries):
 			try:
@@ -157,7 +188,12 @@ class LocalBrowserWatchdog(BaseWatchdog):
 				process = psutil.Process(subprocess.pid)
 
 				# Wait for CDP to be ready and get the URL
-				cdp_url = await self._wait_for_cdp_url(debug_port, process=process)
+				try:
+					cdp_url = await self._wait_for_cdp_url(debug_port, process=process)
+				except RuntimeError as e:
+					# Chrome said why it exited on stderr: without it the error says only that it did.
+					said = await self._stderr_tail(subprocess)
+					raise RuntimeError(f'{e} Chrome said: {said}' if said else str(e)) from e
 
 				# Success! Clean up only the temp dirs we created but didn't use
 				currently_used_dir = str(profile.user_data_dir)
@@ -180,8 +216,21 @@ class LocalBrowserWatchdog(BaseWatchdog):
 			except Exception as e:
 				error_str = str(e).lower()
 
+				# Lost a race for the profile: another process launched on it in the same instant, so our Chrome
+				# handed off to that one and exited. The lock says so now, though it did not when we checked.
+				holder = (
+					_profile_holder_pid(profile.user_data_dir) if 'browseruse-tmp-' not in str(profile.user_data_dir) else None
+				)
+				if holder:
+					self.logger.warning(
+						f'Profile {profile.user_data_dir} was taken by another Chrome (pid {holder}) as this one started: '
+						'launching on a fresh temporary profile'
+					)
+
 				# Check if this is a user_data_dir related error
-				if any(err in error_str for err in ['singletonlock', 'user data directory', 'cannot create', 'already in use']):
+				if holder or any(
+					err in error_str for err in ['singletonlock', 'user data directory', 'cannot create', 'already in use']
+				):
 					self.logger.warning(f'Browser launch failed (attempt {attempt + 1}/{max_retries}): {e}')
 
 					if attempt < max_retries - 1:
@@ -405,6 +454,17 @@ class LocalBrowserWatchdog(BaseWatchdog):
 		return port
 
 	@staticmethod
+	async def _stderr_tail(subprocess: asyncio.subprocess.Process, limit: int = 600) -> str:
+		"""The last lines Chrome wrote to stderr before exiting, or '' if there is nothing to read."""
+		if subprocess.stderr is None:
+			return ''
+		try:
+			data = await asyncio.wait_for(subprocess.stderr.read(), timeout=2.0)
+		except (TimeoutError, OSError):
+			return ''
+		return ' '.join(data.decode(errors='replace').split())[-limit:]
+
+	@staticmethod
 	async def _wait_for_cdp_url(port: int, timeout: float = 30, process: psutil.Process | None = None) -> str:
 		"""Wait for the browser to start and return the CDP URL.
 
@@ -488,6 +548,21 @@ class LocalBrowserWatchdog(BaseWatchdog):
 		except Exception:
 			# Ignore any other errors during cleanup
 			pass
+
+	def _remove_throwaway_profile(self, user_data_dir: str | Path | None) -> None:
+		"""Delete the temporary profile the library made for user_data_dir=None (or a temp copy of a real profile).
+
+		Only a directory directly in the system temp dir with the library's prefix, and only once no live Chrome
+		holds it: a profile the caller chose is theirs, and one shared with a still-running browser stays.
+		"""
+		if not user_data_dir:
+			return
+		path = Path(user_data_dir)
+		ours = path.name.startswith('browser-use-user-data-dir-') and path.parent == Path(tempfile.gettempdir())
+		if not ours or not path.is_dir() or _profile_holder_pid(path):
+			return
+		shutil.rmtree(path, ignore_errors=True)
+		self.logger.debug(f'[LocalBrowserWatchdog] Removed temporary profile {path}')
 
 	def _cleanup_temp_dir(self, temp_dir: Path | str) -> None:
 		"""Clean up temporary directory.

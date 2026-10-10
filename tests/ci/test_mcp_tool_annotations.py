@@ -28,6 +28,8 @@ EXPECTED_READ_ONLY_TOOLS = frozenset(
 		'browser_list_sessions',
 		# Discovery only: reads what the page declares, invokes nothing.
 		'browser_list_page_tools',
+		# Reports the route and the exit Tor says it uses; `peek`s at Tor, never starts one.
+		'browser_network_status',
 	}
 )
 
@@ -92,3 +94,55 @@ async def test_unknown_tool_is_reported_as_mcp_error(server: BrowserUseServer) -
 	assert len(result.content) == 1
 	assert isinstance(result.content[0], types.TextContent)
 	assert 'Unknown tool: does_not_exist' in result.content[0].text
+
+
+async def test_a_failed_call_says_whether_it_may_have_acted(server: BrowserUseServer) -> None:
+	"""The same hint decides what a failure reports (browser_use/mcp/effects.py). These handlers don't mark when they
+	start sending, so a failing tool that isn't read-only fails closed: effect unknown, look before retrying."""
+	await _list_tools(server)
+	handler = server.server.get_request_handler('tools/call')
+	assert handler is not None
+
+	async def call(name: str, arguments: dict) -> types.CallToolResult:
+		result = await handler.handler(None, types.CallToolRequestParams(name=name, arguments=arguments))  # type: ignore[arg-type]
+		assert isinstance(result, types.CallToolResult) and result.is_error, result
+		return result
+
+	nonsense = await call('no_such_tool', {})  # (a browser_* name would launch a browser first)
+	assert (nonsense.structured_content or {}).get('effect_state') == 'none', 'an unknown tool did nothing'
+	acting = await call('browser_close_session', {'session_id': ['a', 'list']})  # raises inside an acting handler
+	assert (acting.structured_content or {}).get('effect_state') == 'unknown'
+	assert any('effect: unknown' in getattr(block, 'text', '') for block in acting.content)
+	# Leaving out a required argument is refused before the handler runs: nothing started, and no browser launched.
+	forgot = await call('browser_navigate', {'new_tab': True})
+	assert (forgot.structured_content or {}).get('effect_state') == 'none', forgot
+	assert 'url' in forgot.content[0].text and server.browser_session is None  # type: ignore[union-attr]
+	gone = await call('browser_close_session', {'session_id': 'no-such-session'})  # was reported as success
+	assert (gone.structured_content or {}).get('effect_state') == 'none' and 'not found' in gone.content[0].text  # type: ignore[union-attr]
+
+
+async def test_failures_told_as_text_are_errors_and_an_unknown_tool_launches_nothing(server: BrowserUseServer) -> None:
+	"""Many handlers here report a failure as a string ("Error: ..."), which a client took for success. They are checks
+	made before anything is sent, so they become error results with effect none. And a misspelt browser_* name used to
+	launch a whole browser before being reported as unknown."""
+	await _list_tools(server)
+	handler = server.server.get_request_handler('tools/call')
+	assert handler is not None
+
+	async def call(name: str, arguments: dict) -> types.CallToolResult:
+		result = await handler.handler(None, types.CallToolRequestParams(name=name, arguments=arguments))  # type: ignore[arg-type]
+		assert isinstance(result, types.CallToolResult)
+		return result
+
+	server.cdp_url = 'http://127.0.0.1:9'  # attached to a Chrome the person runs: its route can't be changed from here
+	routed = await call('browser_network', {'mode': 'auto'})
+	assert routed.is_error and (routed.structured_content or {}).get('effect_state') == 'none', routed
+	assert 'attached to a Chrome you run' in routed.content[0].text  # type: ignore[union-attr]
+
+	from browser_use.mcp.server import BROWSER_TOOLS
+
+	listed = {t.name for t in await _list_tools(server) if t.name.startswith('browser_')}
+	assert listed <= BROWSER_TOOLS, f'listed but refused as unknown: {listed - BROWSER_TOOLS}'
+	misspelt = await call('browser_clik', {'index': 1})
+	assert misspelt.is_error and (misspelt.structured_content or {}).get('effect_state') == 'none'
+	assert server.browser_session is None, 'an unknown tool started a browser'

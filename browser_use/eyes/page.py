@@ -97,6 +97,21 @@ class PageWatcher:
 		frames = self.live.frames if self.live else []
 		return frames[-1].data if frames else None
 
+	async def wait_latest(self, timeout: float = 4.0, settle: float = 0.3) -> bytes | None:
+		"""The newest frame, waiting up to `timeout` for the first one rather than a fixed nap.
+
+		A busy machine can take well over half a second to deliver the first screencast frame;
+		`settle` still lets a page that is painting send a fresher one before we pick.
+		"""
+		await self.start()
+		loop = asyncio.get_event_loop()
+		started = loop.time()
+		while loop.time() - started < timeout:
+			if self.latest() and loop.time() - started >= settle:
+				break
+			await asyncio.sleep(0.05)
+		return self.latest()
+
 	async def scan(self, max_screens: int = 25, dwell_s: float = 0.6, keyframes: int = 6) -> PageScan:
 		"""Scroll top to bottom like a reader, watching; keep the frames that cover what was seen."""
 		await self.start()
@@ -143,7 +158,7 @@ class PageWatcher:
 		selection = sight.select_keyframes(samples, keyframes)
 		# Where the picture changed while the page was not being scrolled: things moving on their own.
 		moving: list[float] = []
-		deltas = sight.deltas(sight.grids(samples))
+		deltas = sight.deltas(sight.grids(samples), sight.colour_grids(samples))
 		for i in range(1, len(captured)):
 			a, b = captured[i - 1], captured[i]
 			if a.scroll_y == b.scroll_y and deltas[i] > 6 and (not moving or abs(moving[-1] - a.scroll_y) > h * 0.5):

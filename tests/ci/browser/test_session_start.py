@@ -97,6 +97,12 @@ class TestBrowserSessionStart:
 
 	async def test_user_data_dir_not_allowed_to_corrupt_default_profile(self):
 		"""Test user_data_dir handling for different browser channels and version mismatches."""
+		from browser_use.browser.watchdogs.local_browser_watchdog import _profile_holder_pid
+
+		if holder := _profile_holder_pid(CONFIG.BROWSER_USE_DEFAULT_USER_DATA_DIR):
+			# a running Chrome (e.g. an MCP server's) holds the default profile: launching on a temporary copy is
+			# then the right behaviour, and "the dir was not changed" cannot hold
+			pytest.skip(f'the default profile is held by a running Chrome (pid {holder})')
 		# Test 1: Chromium with default user_data_dir and default channel should work fine
 		session = BrowserSession(
 			browser_profile=BrowserProfile(
@@ -139,6 +145,25 @@ class TestBrowserSessionStart:
 		assert profile3.user_data_dir != CONFIG.BROWSER_USE_DEFAULT_USER_DATA_DIR
 		assert profile3.user_data_dir == CONFIG.BROWSER_USE_DEFAULT_USER_DATA_DIR.parent / 'default-msedge'
 		assert 'browser-use-user-data-dir-' not in str(profile3.user_data_dir)
+
+
+async def test_a_throwaway_profile_is_removed_when_the_browser_is_killed_and_a_chosen_one_is_kept(tmp_path):
+	"""user_data_dir=None makes a temporary Chrome profile. It must not outlive the browser (thousands of them once
+	filled a disk), while a profile directory the caller chose is theirs and stays."""
+	from pathlib import Path
+
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=False))
+	await session.start()
+	throwaway = Path(str(session.browser_profile.user_data_dir))
+	assert throwaway.is_dir() and any(throwaway.iterdir()), throwaway
+	await session.kill()
+	assert not throwaway.exists(), f'temporary profile left behind: {throwaway}'
+
+	chosen = tmp_path / 'profile'
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=chosen, keep_alive=False))
+	await session.start()
+	await session.kill()
+	assert chosen.is_dir() and any(chosen.iterdir()), 'a profile the caller chose is never deleted'
 
 
 class TestBrowserSessionReusePatterns:

@@ -1,5 +1,7 @@
 """The Retinat MCP server, called the way an MCP client calls it. Real browser, local pages."""
 
+import json
+
 import mcp.types as types
 import pytest
 from pytest_httpserver import HTTPServer
@@ -7,6 +9,50 @@ from pytest_httpserver import HTTPServer
 from browser_use.retinat import RetinatServer
 
 PAGE = '<!doctype html><title>Hello</title><body style="background:#0b7a3b"><h1>Hello from a page</h1><input id="q"></body>'
+TOAST = (
+	'<!doctype html><title>Toast</title><body><h1>Settings</h1><script>setTimeout(() => {'
+	"const t = document.createElement('div'); t.textContent = 'Saved #4242'; document.body.appendChild(t);"
+	'setTimeout(() => t.remove(), 1200) }, 600)</script></body>'
+)
+FIND = (
+	'<!doctype html><title>Shop</title><body style="margin:0;font:16px sans-serif">'
+	'<button id="go" style="position:absolute;left:80px;top:180px;width:140px;height:44px">Checkout</button>'
+	'<p style="position:absolute;left:600px;top:400px;margin:0;font:6px sans-serif">Coupon code ZX-4417</p>'
+	'<div style="position:absolute;top:3200px">Terms of service</div></body>'
+)
+FIND_DEEP = (
+	'<!doctype html><title>Deep</title><body style="margin:0;font:16px sans-serif">'
+	'<button style="position:absolute;left:300px;top:100px;width:160px;height:44px">Check<b>out</b> now</button>'
+	'<ship-box style="position:absolute;left:300px;top:240px;display:block"><span>Ships from Lisbon</span></ship-box>'
+	'<div style="position:absolute;left:300px;top:400px"><p>Sizes run true, so pick the larger.</p>'
+	'<footer><p>Terms apply to every order.</p></footer></div>'
+	"<script>customElements.define('ship-box', class extends HTMLElement { constructor() { super();"
+	"this.attachShadow({mode: 'open'}).innerHTML = '<p>Shipping estimate 3 days</p><slot></slot>'; } });</script></body>"
+)
+CLICK = (
+	'<!doctype html><title>Two buttons</title><body style="margin:0;font:16px sans-serif">'
+	'<button id="save" style="position:absolute;left:100px;top:100px;width:120px;height:40px">Save</button>'
+	'<button id="del" style="position:absolute;left:260px;top:100px;width:120px;height:40px">Delete</button>'
+	"<script>window.hits = {save: 0, del: 0}; for (const b of document.querySelectorAll('button'))"
+	' b.onclick = () => hits[b.id]++;</script></body>'
+)
+JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZGEifQ.c2lnbmF0dXJlLW5vdC1yZWFsLTEyMw'
+REQUESTS = (
+	'<!doctype html><title>Shop</title><body><h1>Shop</h1><script>'
+	"fetch('/api/login?access_token=qs-s3cret&lang=en', {method: 'POST', headers: {'content-type': 'application/json'},"
+	" body: JSON.stringify({user: 'ada', password: 'hunter2'})})"
+	".then(() => fetch('/api/broken'))"
+	".then(() => { const i = new Image(); i.src = '/missing.png'; document.body.append(i); });"
+	'</script></body>'
+)
+CONSOLE = (
+	'<!doctype html><title>Console</title><body><h1>App</h1><img src="/no-such.png"><script>'
+	"console.log('app started');"
+	"console.warn('slow response from the cart service');"
+	"console.error('payment failed: api_key=sk_live_abcdefghijklmnop1234 rejected');"
+	"setTimeout(() => { throw new Error('cart is undefined at render'); }, 50);"
+	'</script></body>'
+)
 WALL = '<!doctype html><title>Just a moment...</title><body>Checking your browser before accessing the site.</body>'
 
 
@@ -16,8 +62,30 @@ def site():
 	server.start()
 	server.expect_request('/').respond_with_data(PAGE, content_type='text/html')
 	server.expect_request('/wall').respond_with_data(WALL, content_type='text/html')
+	server.expect_request('/find').respond_with_data(FIND, content_type='text/html')
+	server.expect_request('/find-deep').respond_with_data(FIND_DEEP, content_type='text/html')
+	server.expect_request('/click').respond_with_data(CLICK, content_type='text/html')
+	server.expect_request('/requests').respond_with_data(REQUESTS, content_type='text/html')
+	server.expect_request('/console').respond_with_data(CONSOLE, content_type='text/html')
+	server.expect_request('/no-such.png').respond_with_data('', status=404)
+	server.expect_request('/api/login', method='POST').respond_with_json(
+		{'user': {'name': 'Ada'}, 'session': 'sess-v4lue', 'note': JWT, 'greeting': 'hello Ada'}
+	)
+	server.expect_request('/api/broken').respond_with_json({'error': 'db down'}, status=500)
+	server.expect_request('/missing.png').respond_with_data('', status=404)
+	server.expect_request('/toast').respond_with_data(TOAST, content_type='text/html')
 	yield server
 	server.stop()
+
+
+@pytest.fixture(scope='module')
+def beeps(site, tmp_path_factory):
+	from browser_use.eyes import bench
+
+	task = bench.beeps_task(1, tmp_path_factory.mktemp('beeps'))
+	site.expect_request('/beeps').respond_with_data(task.page('/beeps.webm'), content_type='text/html')
+	site.expect_request('/beeps.webm').respond_with_handler(lambda r: bench.media_response(r, task.media))
+	return task
 
 
 @pytest.fixture
@@ -57,6 +125,11 @@ async def test_it_is_its_own_server_with_only_vision_first_tools():
 		'retinat_browse',
 		'retinat_next',
 		'retinat_explore',
+		'retinat_recall',
+		'retinat_search',
+		'retinat_changes',
+		'retinat_find',
+		'retinat_zoom',
 	}
 	assert all(n.startswith('retinat_') for n in names), 'no DOM tools here: that is the browser-use server'
 
@@ -86,3 +159,247 @@ async def test_a_bot_wall_is_reported_as_blocked(retinat, site):
 async def test_unknown_tools_are_errors_not_crashes(retinat):
 	result = await _call(retinat, 'browser_click', {'index': 1})
 	assert result.is_error and 'Unknown tool' in _text(result)
+
+
+async def test_recall_through_mcp_answers_plainly_when_nothing_is_held(retinat, site):
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/')})
+	result = await _call(retinat, 'retinat_recall', {'t0': 0, 't1': 5})
+	assert not result.is_error and 'nothing held' in _text(result), _text(result)
+	bad = await _call(retinat, 'retinat_recall', {'t0': 5, 't1': 1})
+	assert bad.is_error and 't1 must be' in _text(bad)
+
+
+async def test_search_through_mcp_answers_plainly_with_an_empty_archive(retinat, site):
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/')})
+	result = await _call(retinat, 'retinat_search', {'query': 'a green page'})
+	assert not result.is_error, _text(result)
+	assert 'nothing archived' in _text(result), _text(result)
+
+
+async def test_changes_reports_text_that_appeared_once_then_nothing(retinat, site):
+	import asyncio
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/toast')})
+	await asyncio.sleep(3.0)  # the toast comes and goes before we ask
+	first = _text(await _call(retinat, 'retinat_changes', {}))
+	assert 'Saved #4242' in first, first
+	second = _text(await _call(retinat, 'retinat_changes', {}))
+	assert 'Saved #4242' not in second, second
+
+
+async def test_the_server_hears_a_muted_video_with_no_gesture_even_when_asked_late(retinat, site, beeps):
+	# Through the server's own launch profile, as an MCP client gets it: no autoplay flag passed in by the
+	# test, and no click on the page. The model's first call after opening comes seconds later; beeps
+	# that played in between must still be counted.
+	import asyncio
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/beeps')})
+	await asyncio.sleep(3.0)
+	text = _text(await _call(retinat, 'retinat_watch', {'seconds': 11}))
+	assert 'none captured' not in text, text
+	assert f'{beeps.truth["count"]} onsets' in text, (beeps.truth, text)
+
+
+async def test_after_a_video_page_a_text_page_is_seen_as_a_page_with_its_toast(retinat, site, beeps):
+	# The second page has no video: the first page's item must not linger (it did, so look watched a ghost
+	# and returned no image), and a toast that came and went before the call must still be reported.
+	import asyncio
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/beeps')})
+	await asyncio.sleep(1.5)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/toast')})
+	await asyncio.sleep(2.5)  # the toast shows at 0.6 s for 1.2 s: gone before the first call
+	watched = await _call(retinat, 'retinat_watch', {'seconds': 2, 'until': 'time'})
+	text = _text(watched)
+	assert 'Saved #4242' in text, text
+	assert 'video 360x640' not in text, text
+	assert any(isinstance(b, types.ImageContent) for b in watched.content), 'a page with no video is shown as drawn'
+	looked = await _call(retinat, 'retinat_look', {})
+	assert 'no video playing' in _text(looked), _text(looked)
+	assert any(isinstance(b, types.ImageContent) for b in looked.content)
+	assert 'watching a video' not in _text(await _call(retinat, 'retinat_now', {}))
+
+
+async def test_beeps_asked_about_long_after_the_video_ended_are_still_counted(retinat, site, beeps):
+	# The question can come long after playback: the journal must hold the count (it only logged sound-class
+	# changes, and beeps over silence are none), and a watch must reach back past a 30 s cap the ring outlasts.
+	import asyncio
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/beeps')})
+	await asyncio.sleep(33.0)
+	changes = _text(await _call(retinat, 'retinat_changes', {}))
+	assert f'{beeps.truth["count"]} distinct sounds' in changes, changes
+	watched = _text(await _call(retinat, 'retinat_watch', {'seconds': 2, 'until': 'time'}))
+	assert f'distinct sounds: {beeps.truth["count"]}' in watched, watched
+
+
+async def test_find_says_where_text_is_and_zoom_magnifies_small_print(retinat, site):
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/find')})
+
+	found = await _call(retinat, 'retinat_find', {'text': 'checkout'})
+	text = _text(found)
+	assert any(isinstance(b, types.ImageContent) for b in found.content), 'a crop around the match comes back'
+	import re
+
+	m = re.search(r'at \((\d+), (\d+)\)', text)
+	assert m, text
+	x, y = int(m.group(1)), int(m.group(2))
+	assert abs(x - (80 + 70)) <= 4 and abs(y - (180 + 22)) <= 4, f'the centre of the button, to click: {text}'
+
+	below = _text(await _call(retinat, 'retinat_find', {'text': 'terms of service'}))
+	assert 'below' in below and 'scroll' in below, below
+	assert 'not found' in _text(await _call(retinat, 'retinat_find', {'text': 'no such words here'}))
+
+	zoomed = await _call(retinat, 'retinat_zoom', {'x': 590, 'y': 392, 'width': 120, 'height': 24})
+	images = [b for b in zoomed.content if isinstance(b, types.ImageContent)]
+	assert images, _text(zoomed)
+	import base64
+	import io
+
+	from PIL import Image
+
+	with Image.open(io.BytesIO(base64.b64decode(images[0].data))) as img:
+		assert img.width >= 3 * 120, f'magnified from a fresh capture, not the 640 px frame: {img.size}'
+
+
+async def test_find_matches_text_split_across_elements_and_inside_shadow_roots(retinat, site):
+	import re
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/find-deep')})
+	split = _text(await _call(retinat, 'retinat_find', {'text': 'checkout now'}))
+	m = re.search(r'at \((\d+), (\d+)\)', split)
+	assert m and 300 <= int(m.group(1)) <= 460 and 100 <= int(m.group(2)) <= 144, f'inside the button: {split}'
+	shadow = _text(await _call(retinat, 'retinat_find', {'text': 'shipping estimate'}))
+	assert 'in view' in shadow and 'not found' not in shadow, shadow
+	slotted = _text(await _call(retinat, 'retinat_find', {'text': 'ships from lisbon'}))
+	assert slotted.count('. at (') == 1, f'slotted light-DOM text is found once, not twice: {slotted}'
+
+
+async def test_find_keeps_to_one_block_in_its_match_and_its_context(retinat, site):
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/find-deep')})
+	terms = _text(await _call(retinat, 'retinat_find', {'text': 'terms apply'}))
+	assert '"Terms apply to every order."' in terms, f'the context is its own paragraph, nothing more: {terms}'
+	across = _text(await _call(retinat, 'retinat_find', {'text': 'larger. terms'}))
+	assert 'not found' in across or '0 match' in across, f'two paragraphs are not one phrase: {across}'
+
+
+async def test_click_says_what_it_hit_and_refuses_when_it_is_not_what_was_expected(retinat, site):
+	"""A page moves between a look and a click; saying what is under the point, and refusing a mismatch, keeps an
+	agent from pressing Delete while it believes it pressed Save (after BrowserSkill's hit verification)."""
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/click')})
+	saved = _text(await _call(retinat, 'retinat_click', {'x': 160, 'y': 120, 'expect': 'Save'}))
+	assert 'Clicked' in saved and 'button "Save"' in saved, saved
+	wrong = _text(await _call(retinat, 'retinat_click', {'x': 320, 'y': 120, 'expect': 'Save'}))
+	assert 'Not clicked' in wrong and 'button "Delete"' in wrong, wrong
+	plain = _text(await _call(retinat, 'retinat_click', {'x': 160, 'y': 120}))
+	assert 'button "Save"' in plain, f'without expect it still says what it clicked: {plain}'
+	assert retinat.browser_session is not None
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	hits = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'JSON.stringify(hits)', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	assert json.loads(hits['result'].get('value', '{}')) == {'save': 2, 'del': 0}
+
+
+async def test_requests_lists_what_the_page_fetched_with_its_secrets_masked(retinat, site):
+	"""After BrowserSkill's network evidence: what the page asked for and got, failures first in mind, without handing
+	the AI the tokens in it. Masked by key name and by value (a JWT under an innocent key is still a JWT)."""
+	import asyncio
+	import re
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/requests')})
+	listed = ''
+	for _ in range(50):
+		listed = _text(await _call(retinat, 'retinat_requests', {}))
+		if '/missing.png' in listed and 'fetch /api/broken' in listed:
+			break
+		await asyncio.sleep(0.1)
+	assert 'POST 200 fetch /api/login?access_token=[redacted]&lang=en' in listed, listed
+	assert 'GET 500 fetch /api/broken' in listed and '404 image /missing.png' in listed, listed
+	assert 'qs-s3cret' not in listed
+
+	failed = _text(await _call(retinat, 'retinat_requests', {'only': 'failed'}))
+	assert '/api/broken' in failed and '/missing.png' in failed and '/api/login' not in failed, failed
+
+	login = int(re.search(r'#(\d+) POST', listed).group(1))  # type: ignore[union-attr]
+	body = _text(await _call(retinat, 'retinat_requests', {'body': login}))
+	assert '"name":"Ada"' in body and 'hello Ada' in body, body
+	assert 'sess-v4lue' not in body and JWT not in body and '[redacted]' in body, body
+	broken = int(re.search(r'#(\d+) GET 500 fetch /api/broken', listed).group(1))  # type: ignore[union-attr]
+	assert 'db down' in _text(await _call(retinat, 'retinat_requests', {'body': broken}))
+
+	last = int(re.search(r'since=(\d+)', listed).group(1))  # type: ignore[union-attr]
+	assert _text(await _call(retinat, 'retinat_requests', {'since': last})).startswith('0 requests after')
+
+
+async def test_a_failed_call_says_whether_anything_happened(retinat, site):
+	"""After BrowserSkill's effect_state. An agent retrying a failed action must know whether the first try already
+	did something: none (nothing was sent, retry freely), unknown (input or navigation had started: look first),
+	committed (it happened; only what followed failed)."""
+	import socket
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/click')})
+	refused = await _call(retinat, 'retinat_click', {'x': 320, 'y': 120, 'expect': 'Save'})
+	assert refused.is_error and (refused.structured_content or {}).get('effect_state') == 'none', _text(refused)
+	assert 'effect: none' in _text(refused)
+	backwards = await _call(retinat, 'retinat_recall', {'t0': 5, 't1': 1})
+	assert (backwards.structured_content or {}).get('effect_state') == 'none', 'a tool that only looks changed nothing'
+	nonsense = await _call(retinat, 'retinat_fly', {})
+	assert (nonsense.structured_content or {}).get('effect_state') == 'none'
+
+	with socket.socket() as sock:
+		sock.bind(('127.0.0.1', 0))
+		dead = sock.getsockname()[1]
+	gone = await _call(retinat, 'retinat_open', {'url': f'http://127.0.0.1:{dead}/'})
+	assert gone.is_error and (gone.structured_content or {}).get('effect_state') == 'unknown', _text(gone)
+	assert 'look' in _text(gone).split('effect: unknown', 1)[1], 'unknown says to look before trying again'
+
+
+async def test_effect_is_committed_when_the_act_went_through_and_only_what_followed_failed():
+	from browser_use.mcp import effects
+
+	async def press() -> str:
+		return 'pressed'
+
+	token = effects.begin()
+	try:
+		assert await effects.act(press()) == 'pressed'
+		result = effects.failure('retinat_key', RuntimeError('the reading after it failed'), read_only=False)
+	finally:
+		effects.end(token)
+	assert result.structured_content == {
+		'tool': 'retinat_key',
+		'error': 'the reading after it failed',
+		'effect_state': 'committed',
+	}
+	assert "don't repeat it" in result.content[0].text  # type: ignore[union-attr]
+
+
+async def test_console_shows_what_the_page_logged_and_threw_with_secrets_masked(retinat, site):
+	"""After Claude in Chrome's read_console_messages: errors, warnings, logs and uncaught exceptions, newest last,
+	filtered by level or pattern, with keys and tokens masked like retinat_requests masks them."""
+	import asyncio
+
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/console')})
+	everything = ''
+	for _ in range(50):
+		everything = _text(await _call(retinat, 'retinat_console', {}))
+		if 'cart is undefined' in everything:
+			break
+		await asyncio.sleep(0.1)
+	assert 'app started' in everything and 'slow response' in everything, everything
+	assert 'payment failed' in everything and 'sk_live_' not in everything and '[redacted]' in everything, everything
+	assert 'cart is undefined at render' in everything, 'uncaught exceptions are there too'
+	for _ in range(30):
+		if 'no-such.png' in everything:
+			break
+		await asyncio.sleep(0.1)
+		everything = _text(await _call(retinat, 'retinat_console', {}))
+	assert '[network]' in everything and 'no-such.png' in everything, "the browser's own entries (a failed load) too"
+	cursor = int(everything.split('since=')[1].split('.')[0])
+	assert _text(await _call(retinat, 'retinat_console', {'since': cursor})).startswith('0 console entries'), 'cursor'
+	errors = _text(await _call(retinat, 'retinat_console', {'level': 'error'}))
+	assert 'payment failed' in errors and 'cart is undefined' in errors and 'app started' not in errors, errors
+	assert 'slow response' not in errors
+	cart = _text(await _call(retinat, 'retinat_console', {'pattern': 'cart'}))
+	assert 'cart is undefined' in cart and 'slow response from the cart' in cart and 'payment failed' not in cart, cart
