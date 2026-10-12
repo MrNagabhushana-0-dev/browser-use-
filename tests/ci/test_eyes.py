@@ -1210,3 +1210,54 @@ def test_colours_are_named_by_hue_as_people_name_them():
 	}
 	got = {rgb: sight.colour_name(rgb) for rgb in named}
 	assert got == named, {rgb: (got[rgb], want) for rgb, want in named.items() if got[rgb] != want}
+
+
+def test_a_ticking_readout_is_one_line_not_one_per_tick():
+	"""Hands-on on Wikimedia Commons: the player's clock and buffer readout came back as "text that appeared" once per
+	second ("0:01", "0:02", ... "Loaded: 2.72%"), crowding out what actually appeared. Values of one readout share a
+	shape once their digits are masked; each readout is now one line, first value to last."""
+	from browser_use.eyes.retina import RetinaEvent
+	from browser_use.eyes.service import _text_lines
+
+	events = [RetinaEvent('state', 0.0, {'doc': 'd1'})]
+	events += [RetinaEvent('text', 10.0 + s, {'text': f'0:0{s}', 'doc': 'd1'}) for s in range(1, 6)]
+	events += [RetinaEvent('text', 10.5 + s, {'text': f'Loaded: {2.0 + s / 10:.2f}%', 'doc': 'd1'}) for s in range(3)]
+	events += [RetinaEvent('text', 12.0, {'text': 'Saved #4242', 'doc': 'd1'})]
+	text = _text_lines(events, since=0.0, page_since=9.0)
+	lines = [line for line in text.splitlines() if line.strip().startswith('"')]
+	assert len(lines) == 3, text
+	assert '"0:01"' in text and '"0:05"' in text and '0:03' not in text, 'a clock: its first and last values only'
+	assert 'changing' in text and '"Saved #4242"' in text, text
+
+
+async def test_a_look_at_a_page_with_a_paused_video_shows_the_page(eyes, session, site):
+	"""Hands-on on Wikimedia Commons: a look at the file page, its player not started, came back with no picture at
+	all; it went the watch route for the paused <video> and nothing played. A paused video is part of the page."""
+	site.expect_request('/paused').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#f5f0e0"><h1>A film page</h1>'
+		'<video src="/calib.webm" preload="metadata" style="width:480px;height:270px"></video></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/paused'))
+	p = await eyes.look()
+	assert p.image is not None, p.text
+	assert 'no video playing' in p.text, p.text
+
+
+async def test_find_finds_an_icon_only_control_by_its_name(eyes, session, site):
+	"""Hands-on on Wikimedia Commons: find "Play" missed the player's play button, an icon whose name ("Play video")
+	lives in aria-label. Names count as well as visible text, and the match says it is a name."""
+	site.expect_request('/icons').respond_with_data(
+		'<!doctype html><body style="margin:0;font:16px sans-serif"><p>Some text about playing.</p>'
+		'<button aria-label="Play video" style="position:absolute;left:300px;top:200px;width:64px;height:64px">'
+		'<svg width="24" height="24"><polygon points="4,2 22,12 4,22" fill="#000"/></svg></button>'
+		'<img alt="Company logo" style="position:absolute;left:40px;top:300px;width:80px;height:40px;background:#ccc"></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/icons'))
+	p = await eyes.find('play video')
+	assert 'button named "Play video"' in p.text and '(332, 232)' in p.text, p.text
+	logo = await eyes.find('logo')
+	assert 'img named "Company logo"' in logo.text, logo.text
+	words = await eyes.find('playing')
+	assert 'Some text about playing' in words.text and 'named' not in words.text, 'visible text still matches as text'

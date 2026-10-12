@@ -1890,6 +1890,36 @@ def _is_secret_field(attributes: dict[str, str]) -> bool:
 	)
 
 
+async def serve_until_stopped(server: Any) -> None:
+	"""Run an MCP server over stdio until the client leaves or a signal (SIGTERM, SIGHUP, SIGINT) stops it, then close
+	its browsers. Without this a stopped server left its Chromium running with no one to close it (found hands-on)."""
+	import signal
+
+	loop = asyncio.get_running_loop()
+	task = asyncio.current_task()
+	assert task is not None
+	for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+		try:
+			loop.add_signal_handler(sig, task.cancel)
+		except (NotImplementedError, RuntimeError, ValueError):
+			pass  # Windows, or not the main thread: the client closing stdin still ends run()
+	try:
+		await server.run()
+	except asyncio.CancelledError:
+		pass
+	finally:
+		try:
+			await asyncio.wait_for(server._close_all_sessions(), timeout=15)
+		except Exception as e:
+			logger.debug(f'closing sessions on exit: {type(e).__name__}: {e}')
+		session = getattr(server, 'browser_session', None)
+		if session is not None:
+			try:
+				await asyncio.wait_for(session.kill(), timeout=15)
+			except Exception as e:
+				logger.debug(f'killing the browser on exit: {type(e).__name__}: {e}')
+
+
 async def main(session_timeout_minutes: int = 10):
 	if not MCP_AVAILABLE:
 		print('MCP SDK is required. Install with: pip install mcp', file=sys.stderr)
@@ -1911,7 +1941,7 @@ async def main(session_timeout_minutes: int = 10):
 	)
 
 	try:
-		await server.run()
+		await serve_until_stopped(server)
 	finally:
 		duration = time.time() - server._start_time
 		server._telemetry.capture(

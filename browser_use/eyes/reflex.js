@@ -6,7 +6,10 @@
 // are read from a canvas downscaled once per frame, and every `see` reading is memoised for the frame.
 //
 // `see` (all positions in viewport CSS px):
-//   see.locate([r,g,b], {tol, canvas})  centroid {x, y, n} of the pixels near that colour on the largest canvas
+//   see.locate([r,g,b], {tol, from})    centroid {x, y, n} of the pixels near that colour; from: 'canvas' (the
+//                                        default, else the largest video), 'video', or a CSS selector
+//   see.changed({from})                  share (0-1) of the picture that changed since the last frame
+//   see.level(), see.onset(jumpDb)       loudness (dB) of the playing media; true on the frame a sound starts
 //   see.el(selector)                     {x, y, w, h, cx, cy} of an element, or null
 //   see.text(selector)                   its visible text
 //   see.t, see.frame                     the frame's time (ms) and number
@@ -22,6 +25,38 @@
 		} catch (e) {}
 	};
 	const memo = new Map();
+	const previous = new Map(); // the last frame's grid per source, for changed()
+	const loudness = []; // recent frames' dB, for onset()
+	let ear = null; // {media, ctx, analyser, buf}
+
+	// The playing media's sound through an analyser on a copy of its stream (captureStream leaves the page's own
+	// audio as it is). Silent for a cross-origin source without CORS: the page cannot read that sound either.
+	const hear = () => {
+		const media = [...document.querySelectorAll('video, audio')].find((m) => !m.paused && !m.ended) || null;
+		if (!media) return null;
+		try {
+			if (!ear || ear.media !== media) {
+				const ctx = ear ? ear.ctx : new AudioContext();
+				const stream = media.captureStream ? media.captureStream() : media.mozCaptureStream();
+				if (!stream.getAudioTracks().length) return null;
+				const node = ctx.createMediaStreamSource(stream);
+				const analyser = ctx.createAnalyser();
+				analyser.fftSize = 1024;
+				node.connect(analyser);
+				ear = { media, ctx, analyser, buf: new Float32Array(analyser.fftSize) };
+			}
+			if (ear.ctx.state === 'suspended') ear.ctx.resume();
+			ear.analyser.getFloatTimeDomainData(ear.buf);
+			let sum = 0;
+			for (const v of ear.buf) sum += v * v;
+			const db = 10 * Math.log10(sum / ear.buf.length + 1e-12);
+			loudness.push(db);
+			if (loudness.length > 60) loudness.shift();
+			return db;
+		} catch (e) {
+			return null;
+		}
+	};
 	const off = document.createElement('canvas');
 	const offCtx = off.getContext('2d', { willReadFrequently: true });
 	const SAMPLE_WIDTH = 256;
@@ -39,14 +74,38 @@
 		return best;
 	};
 
-	// The canvas, downscaled once this frame: [data, W, H, rect]
+	const largestVideo = () => {
+		let best = null;
+		let score = 0;
+		for (const v of document.querySelectorAll('video')) {
+			const r = v.getBoundingClientRect();
+			const s = r.width * r.height * (v.paused ? 1 : 2);
+			if (s > score && v.videoWidth) {
+				best = v;
+				score = s;
+			}
+		}
+		return best;
+	};
+	// What a reading looks at: {from: 'canvas'} (the default: the largest canvas, else the largest video), 'video', or a
+	// CSS selector for a canvas, video or image.
+	const sourceOf = (opts) => {
+		const from = opts.from || opts.canvas || 'canvas';
+		if (from === 'video') return largestVideo();
+		if (from === 'canvas') return largestCanvas() || largestVideo();
+		return document.querySelector(from);
+	};
+	const sizeOf = (el) => (el instanceof HTMLVideoElement ? [el.videoWidth, el.videoHeight] : el instanceof HTMLImageElement ? [el.naturalWidth, el.naturalHeight] : [el.width, el.height]);
+
+	// The source, downscaled once this frame: [data, W, H, rect]
 	const pixelsOf = (canvas, which) => {
 		const key = 'px' + which;
 		if (memo.has(key)) return memo.get(key);
 		let out = null;
-		if (canvas) {
-			const W = Math.min(SAMPLE_WIDTH, canvas.width);
-			const H = Math.max(1, Math.round((canvas.height * W) / canvas.width));
+		const [sw, sh] = canvas ? sizeOf(canvas) : [0, 0];
+		if (canvas && sw && sh) {
+			const W = Math.min(SAMPLE_WIDTH, sw);
+			const H = Math.max(1, Math.round((sh * W) / sw));
 			if (off.width !== W || off.height !== H) {
 				off.width = W;
 				off.height = H;
@@ -69,8 +128,7 @@
 		locate(rgb, opts = {}) {
 			const key = 'loc' + JSON.stringify([rgb, opts]);
 			if (memo.has(key)) return memo.get(key);
-			const canvas = opts.canvas ? document.querySelector(opts.canvas) : largestCanvas();
-			const px = pixelsOf(canvas, opts.canvas || '*');
+			const px = pixelsOf(sourceOf(opts), opts.from || opts.canvas || 'canvas');
 			let found = null;
 			if (px) {
 				const [data, W, H, rect] = px;
@@ -92,6 +150,47 @@
 			}
 			memo.set(key, found);
 			return found;
+		},
+		// The share (0-1) of the picture that changed since the last frame: motion, a cut, a flash.
+		changed(opts = {}) {
+			const which = opts.from || opts.canvas || 'canvas';
+			const key = 'ch' + which;
+			if (memo.has(key)) return memo.get(key);
+			const px = pixelsOf(sourceOf(opts), which);
+			let share = 0;
+			if (px) {
+				const [data, W, H] = px;
+				const grid = new Uint8Array(32 * 18);
+				for (let gy = 0; gy < 18; gy++) {
+					for (let gx = 0; gx < 32; gx++) {
+						const i = (Math.floor(((gy + 0.5) * H) / 18) * W + Math.floor(((gx + 0.5) * W) / 32)) * 4;
+						grid[gy * 32 + gx] = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+					}
+				}
+				const prev = previous.get(which);
+				if (prev) {
+					let n = 0;
+					for (let k = 0; k < grid.length; k++) if (Math.abs(grid[k] - prev[k]) > 24) n++;
+					share = n / grid.length;
+				}
+				previous.set(which, grid);
+			}
+			memo.set(key, share);
+			return share;
+		},
+		// Loudness (dB) of the playing media's sound right now, or null when there is none to hear.
+		level() {
+			if (memo.has('lv')) return memo.get('lv');
+			const db = hear();
+			memo.set('lv', db);
+			return db;
+		},
+		// True on the frame a sound starts: at least `jump` dB louder than the frames just before.
+		onset(jump = 12) {
+			const db = see.level();
+			if (db === null || loudness.length < 6) return false;
+			const before = loudness.slice(-12, -1).sort((a, b) => a - b)[Math.floor(Math.min(11, loudness.length - 1) / 2)];
+			return db > -50 && db - before >= jump;
 		},
 		el(selector) {
 			const key = 'el' + selector;
@@ -120,7 +219,8 @@
 	let running = true;
 
 	const fire = (rule, action, extra = {}) => {
-		const msg = { r: rule.i, a: action, wt: performance.now(), ...extra };
+		const media = largestVideo();
+		const msg = { r: rule.i, a: action, wt: performance.now(), mt: media ? media.currentTime : null, ...extra };
 		if (msg.key && (action === 'down' || action === 'tap')) pending.set(msg.key, msg.wt);
 		send(msg);
 	};

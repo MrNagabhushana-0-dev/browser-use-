@@ -37,7 +37,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from browser_use.mcp.server import MCP_AVAILABLE, TEXT_FAILURES, BrowserUseServer, types
+from browser_use.mcp.server import MCP_AVAILABLE, TEXT_FAILURES, BrowserUseServer, serve_until_stopped, types
 from browser_use.net import NetworkMode, NetworkRouter
 
 if TYPE_CHECKING:
@@ -510,7 +510,9 @@ def _browser_tools() -> list['types.Tool']:
 				'control, waiting for a button): write the rules once, then retinat_wait for what you asked to be told. '
 				'A rule: {"when": <JS expression over see>, then one of "hold": key (held while true), "key": key '
 				'(tapped as it becomes true), "click": <expression giving [x, y]>, "notify": label (wakes retinat_wait)}. '
-				'see.locate([r,g,b], {tol}) finds a colour on the largest canvas -> {x, y, n} viewport px; '
+				'see.locate([r,g,b], {tol, from}) finds a colour on the largest canvas (from: "video" or a CSS selector) '
+				'-> {x, y, n} viewport px; see.changed({from}) -> share of the picture changed since the last frame; '
+				'see.level() -> loudness dB of the playing media; see.onset(jumpDb) -> true as a sound starts; '
 				'see.el(css) -> {x, y, w, h, cx, cy}; see.text(css); see.t; see.frame; see.memory. '
 				'action=install replaces the rules; clear stops them and lets go of held keys; status gives counts and '
 				'decision-to-input latency.'
@@ -906,7 +908,8 @@ class RetinatServer(BrowserUseServer):
 			done = f'{stats["actions"]} input actions so far, decision to input p50 {stats["latency_ms_p50"]} ms'
 			if event is None:
 				return f'Nothing notified in {float(args.get("timeout", 30)):.0f}s. The reflexes keep running: {done}.'
-			return f'"{event.label}" (rule {event.rule}) fired at page time {event.page_ms / 1000:.2f}s. {done}.'
+			at = f', video at {event.media_t:.2f}s' if event.media_t is not None else ''
+			return f'"{event.label}" (rule {event.rule}) fired at page time {event.page_ms / 1000:.2f}s{at}. {done}.'
 		action = str(args.get('action') or 'install')
 		if action == 'clear':
 			await reflexes.clear()
@@ -1007,7 +1010,7 @@ async def main(cdp_url: str | None = None, network: NetworkRouter | None = None,
 		print(f'Retinat bridge on {bridge.cdp_url}; load the extension from {EXTENSION_DIR} and share a tab.', file=sys.stderr)
 	server = RetinatServer(cdp_url=cdp_url, network=network, bridge=bridge)
 	try:
-		await server.run()
+		await serve_until_stopped(server)
 	finally:
 		if bridge:
 			await bridge.stop()

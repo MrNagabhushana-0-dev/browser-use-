@@ -37,6 +37,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -313,8 +314,8 @@ class Eyes:
 		percept = await self.perceive(
 			since=since, detail=detail, keyframes=keyframes, transcribe=transcribe, text_since=text_since, watch_start=start
 		)
-		if not percept.items and not self.retina.attended.get('vid'):
-			await self._show_page(percept)
+		if not percept.items:
+			await self._show_page(percept)  # nothing played (no video, or a paused one): the page as drawn is what there is
 		percept.stop_reason = reason
 		percept.started_at, percept.ended_at = start, time.monotonic()
 		self._last_percept_end = percept.ended_at
@@ -471,11 +472,12 @@ class Eyes:
 		if not matches:
 			return Percept(
 				[],
-				f'🔎 "{text}": not found in the visible text of the page (text inside images, canvas, iframes and closed shadow roots is not searched)',
+				f'🔎 "{text}": not found in the visible text or the names of controls on the page (text inside images, canvas, iframes and closed shadow roots is not searched)',
 				None,
 			)
 		lines = [
-			f'🔎 "{text}": {len(matches)} match(es) in the page text' + (f', the first {limit}' if len(matches) > limit else '')
+			f'🔎 "{text}": {len(matches)} match(es) in the page text and control names'
+			+ (f', the first {limit}' if len(matches) > limit else '')
 		]
 		in_view = None
 		for i, m in enumerate(matches[:limit], 1):
@@ -510,7 +512,9 @@ class Eyes:
 			await self.open()
 		await self.retina.wait_for_data(0.6)
 		# A video is watched briefly; a canvas is shown with the page around it (watch follows a canvas over time).
-		if self.retina.attended.get('vid') and self.retina.attended.get('kind') != 'canvas':
+		# A playing video is watched briefly; a paused or empty <video> (a player not started yet) is just part of the page.
+		playing = self.retina.state.get('vid') == self.retina.attended.get('vid') and self.retina.state.get('paused') is False
+		if self.retina.attended.get('vid') and self.retina.attended.get('kind') != 'canvas' and playing:
 			return await self.watch(seconds=seconds, until='time', min_seconds=seconds, detail=detail, keyframes=2)
 		jpeg = await self._page_watcher().wait_latest()
 		url = self.retina.state.get('url', '')
@@ -1169,6 +1173,24 @@ _FIND_JS = """(q, cap) => {
 		const context = shown.slice(c0, c1).trim();
 		out.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, context });
 	}
+	// Controls with no visible text (an icon button, a logo) carry their name in aria-label, title, alt or a
+	// placeholder: what a screen reader says, and what a person means by "the play button".
+	const els = [];
+	const collect = (root) => { for (const el of root.querySelectorAll('*')) { els.push(el); if (el.shadowRoot) collect(el.shadowRoot); } };
+	collect(document);
+	for (const el of els) {
+		if (out.length >= cap) break;
+		const name = el.getAttribute('aria-label') || el.getAttribute('title') ||
+			(el.tagName === 'IMG' ? el.getAttribute('alt') : null) || (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? el.getAttribute('placeholder') : null);
+		if (!name || !name.replace(/\\s+/g, ' ').toLowerCase().includes(needle)) continue;
+		const st = getComputedStyle(el);
+		if (st.visibility === 'hidden' || st.display === 'none' || +st.opacity === 0) continue;
+		const r = el.getBoundingClientRect();
+		if (r.width < 1 || r.height < 1) continue;
+		if (out.some((m) => m.x + m.w / 2 >= r.left && m.x + m.w / 2 <= r.right && m.y + m.h / 2 >= r.top && m.y + m.h / 2 <= r.bottom)) continue;
+		const role = el.getAttribute('role') || el.tagName.toLowerCase();
+		out.push({ x: r.left, y: r.top, w: r.width, h: r.height, context: role + ' named "' + name.replace(/\\s+/g, ' ').trim().slice(0, 80) + '"', named: true });
+	}
 	return { matches: out, vw: innerWidth, vh: innerHeight };
 }"""
 
@@ -1190,11 +1212,24 @@ def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_
 			seen.setdefault(' '.join(str(e.data['text']).split())[:240], (e.wall, bool(e.data.get('faint'))))
 	if not seen:
 		return ''
-	lines = [
-		f'    "{t}" ({w - page_since:.1f}s after the page loaded)' + page_text_note(t, faint)
-		for t, (w, faint) in list(seen.items())[:limit]
-	]
-	more = f'\n    ... {len(seen) - limit} more' if len(seen) > limit else ''
+	# A readout that ticks (a player's clock, a buffer percentage, a countdown) is one thing changing, not new text
+	# each second: values of one readout share a shape once their digits are masked.
+	groups: dict[str, list[tuple[str, float, bool]]] = {}
+	for t, (w, faint) in seen.items():
+		shape = re.sub(r'\d+', '#', t) if re.search(r'\d', t) else t
+		groups.setdefault(shape, []).append((t, w, faint))
+	lines = []
+	for members in list(groups.values())[:limit]:
+		t, w, faint = members[0]
+		if len(members) == 1:
+			lines.append(f'    "{t}" ({w - page_since:.1f}s after the page loaded)' + page_text_note(t, faint))
+		else:
+			last, w1, _ = members[-1]
+			lines.append(
+				f'    "{t}" -> "{last}" (a readout changing {len(members)} times, '
+				f'{w - page_since:.1f}s-{w1 - page_since:.1f}s after the page loaded)'
+			)
+	more = f'\n    ... {len(groups) - limit} more' if len(groups) > limit else ''
 	return '\n    text that appeared:\n' + '\n'.join(lines) + more
 
 

@@ -131,3 +131,67 @@ async def test_a_rule_that_does_not_compile_is_refused_with_the_reason(session, 
 	with pytest.raises(ValueError, match='did not compile'):
 		await reflexes.install([{'when': 'see.locate([255,0,0]) &&', 'notify': 'x'}])
 	assert not reflexes.installed
+
+
+@pytest.fixture(scope='module')
+def clip(tmp_path_factory) -> bytes:
+	"""4 s: red with silence, then at 2 s blue with an 880 Hz tone. Generated, not committed."""
+	import subprocess
+
+	import imageio_ffmpeg
+
+	out = tmp_path_factory.mktemp('clip') / 'clip.webm'
+	subprocess.run(
+		[imageio_ffmpeg.get_ffmpeg_exe(), '-loglevel', 'error', '-y']
+		+ ['-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=2', '-f', 'lavfi', '-i', 'color=c=blue:s=320x180:r=30:d=2']
+		+ ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=mono:d=2', '-f', 'lavfi', '-i', 'sine=f=880:r=48000:d=2']
+		+ ['-filter_complex', '[0:v][2:a][1:v][3:a]concat=n=2:v=1:a=1[v][a]', '-map', '[v]', '-map', '[a]']
+		+ ['-c:v', 'libvpx', '-b:v', '300k', '-c:a', 'libopus', str(out)],
+		check=True,
+		timeout=120,
+	)
+	return out.read_bytes()
+
+
+async def test_reflexes_hear_and_see_a_video_and_say_where_in_it(clip, tmp_path):
+	"""Reflexes are not only for canvas games: on a playing video they see a colour, a cut and a sound start, each
+	within a frame or two, and say where in the video it happened."""
+	server = HTTPServer()
+	server.start()
+	server.expect_request('/clip.webm').respond_with_data(clip, content_type='video/webm')
+	server.expect_request('/v').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#000"><video src="/clip.webm" autoplay playsinline style="width:640px"></video></body>',
+		content_type='text/html',
+	)
+	session = BrowserSession(
+		browser_profile=BrowserProfile(
+			headless=True, user_data_dir=None, keep_alive=False, args=['--autoplay-policy=no-user-gesture-required']
+		)
+	)
+	await session.start()
+	try:
+		await session.navigate_to(server.url_for('/v'))
+		reflexes = Reflexes(session)
+		await reflexes.install(
+			[
+				{
+					'when': "see.locate([0,0,255], {from: 'video'}) && see.locate([0,0,255], {from: 'video'}).n > 200",
+					'notify': 'blue',
+				},
+				{'when': "see.changed({from: 'video'}) > 0.5", 'notify': 'cut'},
+				{'when': 'see.onset(15)', 'notify': 'sound'},
+			]
+		)
+		seen = {}
+		while len(seen) < 3:
+			event = await reflexes.wait(timeout=8)
+			if event is None:
+				break
+			seen.setdefault(event.label, event.media_t)
+		assert set(seen) == {'blue', 'cut', 'sound'}, (seen, reflexes.stats())
+		for label, at in seen.items():
+			assert at is not None and abs(at - 2.0) < 0.2, f'{label} at {at}s of the video, expected 2.0s'
+	finally:
+		await session.kill()
+		server.clear()
+		server.stop()

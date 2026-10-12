@@ -77,6 +77,7 @@ class ReflexEvent(BaseModel):
 	label: str
 	rule: int
 	page_ms: float  # the page's clock when the rule fired
+	media_t: float | None = None  # the playing video's own time then, when there is one
 	wall: float  # time.monotonic() when it reached Python
 
 
@@ -219,7 +220,11 @@ class Reflexes:
 			await asyncio.gather(*before, return_exceptions=True)
 		self.events.put_nowait(
 			ReflexEvent(
-				label=str(msg.get('label')), rule=int(msg.get('r', -1)), page_ms=float(msg.get('wt') or 0), wall=time.monotonic()
+				label=str(msg.get('label')),
+				rule=int(msg.get('r', -1)),
+				page_ms=float(msg.get('wt') or 0),
+				media_t=float(msg['mt']) if isinstance(msg.get('mt'), int | float) else None,
+				wall=time.monotonic(),
 			)
 		)
 
