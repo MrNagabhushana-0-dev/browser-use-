@@ -357,6 +357,40 @@ async def test_cuts_and_sounds_are_found_where_they_are(eyes, session, site):
 	assert len(clicks) >= 4, f'5 clicks in the beats section, onsets there: {clicks}'
 
 
+@pytest.fixture(scope='module')
+def elsewhere(media):
+	"""A second origin serving the same media with no CORS headers, as the CDNs behind most players do."""
+	server = HTTPServer()
+	server.start()
+	for name, data in media.items():
+		_serve(server, f'/{name}', data)
+	yield server
+	server.clear()
+	if server.is_running():
+		server.stop()
+
+
+async def test_a_cross_origin_video_is_watched_from_the_compositor(eyes, session, site, elsewhere):
+	"""Found hands-on on Wikimedia Commons: its player streams from another origin without CORS, so the page cannot
+	read the video's pixels, and the watch said "no video was on screen" while the film played. The pictures now come
+	from the compositor, as drawn on the page; the sound stays unreadable, and the percept says so."""
+	site.expect_request('/cross').respond_with_data(
+		PLAYER.format(src=elsewhere.url_for('/calib.webm'), attrs='autoplay', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/cross'))
+	p = await eyes.watch(seconds=4 * SECTION + 1.0, until='time')
+
+	assert len(p.items) == 1, p.text
+	item = p.items[0]
+	assert item.tainted and 'compositor' in p.text, p.text
+	cuts = item.sight.cuts
+	assert len(cuts) == 3, f'expected cuts at 2.5/5/7.5, got {cuts}'
+	for got, want in zip(cuts, (SECTION, 2 * SECTION, 3 * SECTION)):
+		assert _near(got, want, 0.4), f'cut at {got:.2f}s, expected {want}s'
+	assert p.image is not None, 'keyframes, taken from the compositor'
+	assert 'sound cannot be read' in p.text and 'none captured' not in p.text, 'unreadable is not absent: ' + p.text
+
+
 async def test_a_muted_video_is_still_heard_and_said_to_be_muted(eyes, session, site):
 	# captureStream taps the audio before volume and mute: the agent can listen without
 	# making a sound, and must not report a muted reel as silent.

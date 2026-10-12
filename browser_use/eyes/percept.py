@@ -160,7 +160,10 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	if text:
 		lines.append(f'    on screen: "{text[:240]}"' + page_text_note(text))
 	if item.tainted:
-		lines.append('    picture: unreadable (cross-origin video without CORS); only sound and on-screen text are known')
+		lines.append(
+			'    picture: from the compositor, as drawn on the page (a cross-origin video without CORS, which the page '
+			'cannot read); its sound cannot be read'
+		)
 
 	# Pair each shot with the sound under it. After a loop the shots repeat; say so once.
 	shots = []
@@ -191,6 +194,8 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	h = item.hearing
 	if info.get('kind') in ('canvas', 'desktop') and not h.heard:
 		pass  # a canvas has no sound of its own: nothing to say
+	elif item.tainted and not h.heard:
+		pass  # said on the picture line: the sound of a cross-origin video without CORS cannot be read, not absent
 	elif not h.heard:
 		lines.append('    sound: none captured (no audio track, or it had not started)')
 	else:

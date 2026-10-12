@@ -41,6 +41,11 @@ _SCRIPT = (Path(__file__).parent / 'retina.js').read_text()
 # couple of minutes: far more than one watch needs, and bounded.
 MAX_FRAMES = 1500
 MAX_HOPS = 6000
+# A cross-origin video without CORS cannot be read by the page ("tainted"); its pictures are taken from the
+# compositor instead, at this rate, with sample numbers from here on so they never collide with the page's own.
+COMPOSITOR_FPS = 6.0
+COMPOSITOR_SEQ = 1_000_000_000
+MAX_LOCAL_KEYFRAMES = 400
 MAX_EVENTS = 2000
 
 
@@ -114,6 +119,11 @@ class Retina:
 		self._listeners: list[Callable[[list[FrameSample], list[AudioHop], list[RetinaEvent]], None]] = []
 		self._arrived = asyncio.Event()
 		self.batches = 0
+		self._compositor: asyncio.Task | None = None
+		self._compositor_vid = 0
+		self._compositor_seq = COMPOSITOR_SEQ
+		self._local_keyframes: dict[int, bytes] = {}
+		self._state_wall = 0.0
 
 	@property
 	def running(self) -> bool:
@@ -154,6 +164,7 @@ class Retina:
 		return self.state
 
 	async def stop(self) -> None:
+		self._stop_compositor()
 		if not self.running:
 			return
 		try:
@@ -218,14 +229,101 @@ class Retina:
 		"""Like keyframes(), plus why they are all missing when the page did not hand them over in time."""
 		if not seqs:
 			return [], None
-		try:
-			urls = await self.evaluate(f'window.__retina.keyframes({json.dumps(list(seqs))})', timeout=self.keyframes_timeout)
-		except TimeoutError:
-			# What was seen and heard is already held; losing the pictures must not lose the watch.
-			why = await self._why_no_answer()
-			logger.warning(f'👁️ keyframes: {why}')
-			return [None] * len(seqs), why
-		return [_decode_data_url(u) for u in (urls or [None] * len(seqs))], None
+		page_seqs = [s for s in seqs if s < COMPOSITOR_SEQ]
+		got: dict[int, bytes | None] = {s: self._local_keyframes.get(s) for s in seqs if s >= COMPOSITOR_SEQ}
+		why = None
+		if page_seqs:
+			try:
+				urls = await self.evaluate(f'window.__retina.keyframes({json.dumps(page_seqs)})', timeout=self.keyframes_timeout)
+				got.update(zip(page_seqs, [_decode_data_url(u) for u in (urls or [None] * len(page_seqs))]))
+			except TimeoutError:
+				# What was seen and heard is already held; losing the pictures must not lose the watch.
+				why = await self._why_no_answer()
+				logger.warning(f'👁️ keyframes: {why}')
+		return [got.get(s) for s in seqs], why
+
+	# -- a cross-origin video, seen from the compositor -----------------------------------------------------
+
+	def _watch_compositor(self, vid: int) -> None:
+		if not vid or (self._compositor and not self._compositor.done() and self._compositor_vid == vid):
+			return
+		self._stop_compositor()
+		self._compositor_vid = vid
+		self._compositor = asyncio.create_task(self._compositor_loop(vid), name='retina_compositor')
+
+	def _stop_compositor(self) -> None:
+		if self._compositor is not None and not self._compositor.done():
+			self._compositor.cancel()
+		self._compositor = None
+		self._compositor_vid = 0
+
+	async def _compositor_loop(self, vid: int) -> None:
+		"""While a tainted video is attended, sample its rectangle as the compositor draws it."""
+		period = 1.0 / COMPOSITOR_FPS
+		while self.running and self.attended.get('vid') == vid:
+			started = time.monotonic()
+			try:
+				sample = await self._compositor_frame(vid)
+			except asyncio.CancelledError:
+				raise
+			except Exception as e:
+				logger.debug(f'retina: compositor frame failed: {type(e).__name__}: {e}')
+				sample = None
+			if sample is not None:
+				self.frames.append(sample)
+				for listener in self._listeners:
+					try:
+						listener([sample], [], [])
+					except Exception as e:
+						logger.debug(f'retina listener failed: {type(e).__name__}: {e}')
+				self._arrived.set()
+			await asyncio.sleep(max(0.0, period - (time.monotonic() - started)))
+
+	async def _compositor_frame(self, vid: int) -> FrameSample | None:
+		import io
+
+		from PIL import Image
+
+		state = self.state if self.state.get('vid') == vid else {}
+		if state.get('paused') or self._cdp is None:
+			return None  # the page samples only while it plays; so does this
+		rect = self.attended.get('rect') or []
+		if len(rect) != 4 or rect[2] < 8 or rect[3] < 8:
+			return None
+		send = self._cdp.cdp_client.send
+		metrics = await send.Page.getLayoutMetrics(session_id=self._session_id)
+		vp = metrics['cssLayoutViewport']
+		left, top = max(0.0, float(rect[0])), max(0.0, float(rect[1]))
+		width = min(float(rect[0] + rect[2]), float(vp['clientWidth'])) - left
+		height = min(float(rect[1] + rect[3]), float(vp['clientHeight'])) - top
+		if width < 8 or height < 8:
+			return None  # scrolled out of view
+		thumb_width = float(self.options.get('thumbWidth') or 320)
+		clip = {
+			'x': vp['pageX'] + left,
+			'y': vp['pageY'] + top,
+			'width': width,
+			'height': height,
+			'scale': min(1.0, thumb_width / width),
+		}
+		shot = await send.Page.captureScreenshot(
+			params={'format': 'jpeg', 'quality': 70, 'clip': clip},  # type: ignore[typeddict-item]
+			session_id=self._session_id,
+		)
+		jpeg = base64.b64decode(shot['data'])
+		with Image.open(io.BytesIO(jpeg)) as img:
+			rgb_img = img.convert('RGB')
+			luma = rgb_img.convert('L').resize((16, 16), Image.Resampling.BOX).tobytes()
+			colours = rgb_img.resize((4, 4), Image.Resampling.BOX).tobytes()
+			mean = rgb_img.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
+		# media time: the page's last report of it, run forward to now while it plays
+		t = float(state.get('t') or 0.0) + max(0.0, time.monotonic() - self._state_wall) if state else 0.0
+		self._compositor_seq += 1
+		seq = self._compositor_seq
+		self._local_keyframes[seq] = jpeg
+		while len(self._local_keyframes) > MAX_LOCAL_KEYFRAMES:
+			self._local_keyframes.pop(next(iter(self._local_keyframes)))
+		return FrameSample(seq, vid, t, time.monotonic(), luma, tuple(mean)[:3], True, colours)  # type: ignore[arg-type]
 
 	async def _why_no_answer(self, probe_s: float = 2.0) -> str:
 		"""After a read timed out: is the renderer answering at all, or only that read stuck?"""
@@ -313,10 +411,15 @@ class Retina:
 				if e.get('url') != self.state.get('url'):
 					self.page_since = now
 				self.state = e
+				self._state_wall = now
 				if not e.get('vid') and self.attended.get('vid'):
 					self.attended = {'vid': 0}  # the page attends to nothing (a new page, or the video left it)
 			elif kind == 'attend':
 				self.attended = e
+				if e.get('vid') != self._compositor_vid:
+					self._stop_compositor()
+			elif kind == 'tainted':
+				self._watch_compositor(int(e.get('vid') or 0))
 		self.frames.extend(frames)
 		self.hops.extend(hops)
 		self.events.extend(events)
