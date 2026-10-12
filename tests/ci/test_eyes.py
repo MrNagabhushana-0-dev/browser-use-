@@ -1280,6 +1280,8 @@ async def test_a_player_built_on_click_from_another_origin_is_watched(eyes, sess
 		'<button id="play" style="position:absolute;left:160px;top:90px;width:80px;height:44px">Play</button>'
 		'<script>document.getElementById("play").onclick = () => {'
 		' const d = document.createElement("div"); d.style = "position:fixed;left:60px;top:40px;width:900px;height:520px;background:#000";'
+		' d.setAttribute("role", "dialog"); d.setAttribute("aria-labelledby", "title");'
+		' d.innerHTML = \'<label id="title" style="color:#fff">Calibration film.webm</label>\';'
 		' const v = document.createElement("video"); v.style = "width:0;height:0"; v.playsInline = true;'
 		' v.addEventListener("loadedmetadata", () => setTimeout(() => { v.style = "width:900px;height:506px"; }, 400), {once: true});'
 		f' setTimeout(() => {{ v.src = "{elsewhere.url_for("/calib.webm")}?quality=1080"; v.play(); }}, 1500);'
@@ -1294,6 +1296,9 @@ async def test_a_player_built_on_click_from_another_origin_is_watched(eyes, sess
 	p = await eyes.watch(seconds=2 * SECTION + 1.5, until='time')
 	assert p.items and all(i.tainted for i in p.items), p.text
 	assert any(len(i.sight.cuts) >= 1 for i in p.items), f'the higher-quality source was not seen: {p.text}'
+	# each item is named by the dialog it plays in, and sized once its metadata is in (Video.js attends first)
+	assert all(i.info.get('name') == 'Calibration film.webm' for i in p.items), p.text
+	assert all(i.info.get('w') and i.info.get('duration') for i in p.items), p.text
 
 
 def test_the_journal_folds_a_ticking_clock_but_keeps_a_peak_and_every_slide():

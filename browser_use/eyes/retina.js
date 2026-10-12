@@ -170,6 +170,14 @@
 		const caption = fig && fig.querySelector('figcaption');
 		const own = labelled || clean(v.getAttribute('aria-label')) || clean(v.getAttribute('title')) || clean(caption && caption.innerText);
 		if (own || isCanvas(v)) return own.slice(0, 160);
+		// A player opened in a dialog plays what the dialog is titled
+		const dialog = v.closest('dialog, [role=dialog], [role=alertdialog]');
+		if (dialog) {
+			const by = (dialog.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+			const title = clean(by.map((id) => (document.getElementById(id) || {}).textContent || '').join(' '));
+			const heading = dialog.querySelector('h1, h2, h3');
+			return (title || clean(dialog.getAttribute('aria-label')) || clean(heading && heading.innerText)).slice(0, 160);
+		}
 		const least = opts.minArea * innerWidth * innerHeight;
 		const sizable = Array.prototype.filter.call(document.querySelectorAll('video'), (o) => {
 			const r = o.getBoundingClientRect();
@@ -237,6 +245,13 @@
 		R.lastThumbGrid = null;
 		R.lastThumbT = -1;
 		R.events.push(Object.assign({ type: 'attend', wt: performance.now() }, v ? describe(v) : { vid: 0 }));
+		if (v && !isCanvas(v) && v.readyState < 1) {
+			// A player that attends before its metadata (Video.js, a quality switch) is described again once it is in:
+			// its size and length, which the first description could not know
+			v.addEventListener('loadedmetadata', () => {
+				if (R.attended === v && R.attendedSrc === src) R.events.push(Object.assign({ type: 'attend', wt: performance.now() }, describe(v)));
+			}, { once: true });
+		}
 		if (v && isCanvas(v)) {
 			stopHearing(); // a canvas has no sound of its own
 			startCanvasSight(v);
