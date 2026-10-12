@@ -195,3 +195,55 @@ async def test_reflexes_hear_and_see_a_video_and_say_where_in_it(clip, tmp_path)
 		await session.kill()
 		server.clear()
 		server.stop()
+
+
+# A runner, drawn as Chrome's T-Rex game is: the player, the ground and every obstacle are the same grey. Obstacles
+# slide in from the right; a trusted Space makes the player jump for 600 ms. Where all that grey sits on average says
+# nothing; only a reading of one region (just ahead of the player, above the ground) tells an obstacle is coming.
+RUNNER = """<!doctype html><title>Run</title><body style="margin:0;background:#fff">
+<canvas id="c" width="800" height="300" style="display:block"></canvas><div id="passed">0</div>
+<script>
+const g = document.getElementById('c').getContext('2d');
+let obstacles = [], jumpUntil = 0, next = 0, t0 = performance.now();
+window.track = {hits: 0, passed: 0, jumps: 0};
+addEventListener('keydown', e => { if (e.key === ' ' && e.isTrusted && performance.now() > jumpUntil) { jumpUntil = performance.now() + 600; track.jumps++; } });
+function frame(now) {
+  if (now > next && now - t0 > 500) { obstacles.push({x: 800}); next = now + 900 + (obstacles.length % 3) * 250; }
+  const up = now < jumpUntil;
+  g.fillStyle = '#fff'; g.fillRect(0, 0, 800, 300);
+  g.fillStyle = '#535353';
+  g.fillRect(0, 270, 800, 3);
+  g.fillRect(100, up ? 150 : 230, 40, 40);
+  for (const o of obstacles) {
+    o.x -= 6;
+    g.fillRect(o.x, 230, 20, 40);
+    if (!o.hit && o.x < 140 && o.x + 20 > 100 && !up) { o.hit = true; track.hits++; }
+    if (!o.counted && o.x + 20 < 100) { o.counted = true; track.passed++; document.getElementById('passed').textContent = String(track.passed); }
+  }
+  obstacles = obstacles.filter(o => o.x > -30);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body>"""
+
+
+async def test_a_rule_reads_one_region_so_it_can_jump_what_is_coming(session, game):
+	"""Found at the reflexes' first live use, on the open-source T-Rex runner: see.locate only gave where all of a
+	colour sits on average, and there the player, the ground and the obstacles share one grey. `in` reads one region."""
+	game.expect_request('/runner').respond_with_data(RUNNER, content_type='text/html')
+	await session.navigate_to(game.url_for('/runner'))
+	reflexes = Reflexes(session)
+	await reflexes.install(
+		[
+			{'when': 'see.locate([83, 83, 83], {in: [150, 235, 90, 30], tol: 30})', 'key': ' '},
+			{'when': "see.text('#passed') === '6'", 'notify': 'six passed'},
+		]
+	)
+	event = await reflexes.wait(timeout=20)
+	assert event is not None and event.label == 'six passed', (event, reflexes.stats())
+	hits, jumps = await _value(session, 'track.hits'), await _value(session, 'track.jumps')
+	assert hits == 0 and jumps >= 6, f'{hits} hit(s), {jumps} jump(s): {reflexes.stats()}'
+	await reflexes.clear()
+	await session.navigate_to(game.url_for('/runner'))
+	await asyncio.sleep(5.0)
+	assert await _value(session, 'track.hits') >= 3, 'the control: nobody at the keys, the player runs into them'

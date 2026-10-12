@@ -229,7 +229,10 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
 ```
 
 - **What a rule sees:**
-  - `see.locate([r,g,b], {tol})`: where a colour is on the largest canvas, as `{x, y, n}` in viewport px.
+  - `see.locate([r,g,b], {tol, in})`: where a colour is on the largest canvas, as `{x, y, n}` in viewport px.
+    `in: [x, y, w, h]` looks only in that region, for games whose player, ground and obstacles share one colour
+    (the T-Rex runner): "is something grey just ahead of me" is `see.locate(grey, {in: ahead})`.
+  - `see.changed({in})`: the share of the picture, or of that region, that changed since the last frame.
   - `see.el(css)`: `{x, y, w, h, cx, cy}`.
   - `see.text(css)`.
   - `see.t`, `see.frame` and `see.memory`.

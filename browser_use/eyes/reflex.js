@@ -6,9 +6,10 @@
 // are read from a canvas downscaled once per frame, and every `see` reading is memoised for the frame.
 //
 // `see` (all positions in viewport CSS px):
-//   see.locate([r,g,b], {tol, from})    centroid {x, y, n} of the pixels near that colour; from: 'canvas' (the
-//                                        default, else the largest video), 'video', or a CSS selector
-//   see.changed({from})                  share (0-1) of the picture that changed since the last frame
+//   see.locate([r,g,b], {tol, from, in}) centroid {x, y, n} of the pixels near that colour; from: 'canvas' (the
+//                                        default, else the largest video), 'video', or a CSS selector; in: [x, y, w, h]
+//                                        looks only there (viewport CSS px), e.g. just ahead of a runner
+//   see.changed({from, in})              share (0-1) of the picture (or of that region) changed since the last frame
 //   see.level(), see.onset(jumpDb)       loudness (dB) of the playing media; true on the frame a sound starts
 //   see.el(selector)                     {x, y, w, h, cx, cy} of an element, or null
 //   see.text(selector)                   its visible text
@@ -121,6 +122,15 @@
 		return out;
 	};
 
+	// The part of a sampled source a reading covers, in sample px: all of it, or the viewport region opts.in.
+	const boxOf = (opts, W, H, rect) => {
+		if (!opts.in) return [0, 0, W, H];
+		const [x, y, w, h] = opts.in;
+		const sx = (v) => Math.max(0, Math.min(W, Math.floor(((v - rect.left) / rect.width) * W)));
+		const sy = (v) => Math.max(0, Math.min(H, Math.floor(((v - rect.top) / rect.height) * H)));
+		return [sx(x), sy(y), Math.max(sx(x) + 1, sx(x + w)), Math.max(sy(y) + 1, sy(y + h))];
+	};
+
 	const see = {
 		t: 0,
 		frame: 0,
@@ -133,11 +143,12 @@
 			if (px) {
 				const [data, W, H, rect] = px;
 				const tol = opts.tol ?? 60;
+				const [x0, y0, x1, y1] = boxOf(opts, W, H, rect);
 				let sx = 0;
 				let sy = 0;
 				let n = 0;
-				for (let y = 0; y < H; y++) {
-					for (let x = 0; x < W; x++) {
+				for (let y = y0; y < Math.min(H, y1); y++) {
+					for (let x = x0; x < Math.min(W, x1); x++) {
 						const i = (y * W + x) * 4;
 						if (Math.abs(data[i] - rgb[0]) + Math.abs(data[i + 1] - rgb[1]) + Math.abs(data[i + 2] - rgb[2]) <= tol) {
 							sx += x;
@@ -154,26 +165,29 @@
 		// The share (0-1) of the picture that changed since the last frame: motion, a cut, a flash.
 		changed(opts = {}) {
 			const which = opts.from || opts.canvas || 'canvas';
-			const key = 'ch' + which;
+			const key = 'ch' + which + JSON.stringify(opts.in || null);
 			if (memo.has(key)) return memo.get(key);
 			const px = pixelsOf(sourceOf(opts), which);
 			let share = 0;
 			if (px) {
-				const [data, W, H] = px;
+				const [data, W, H, rect] = px;
+				const [x0, y0, x1, y1] = boxOf(opts, W, H, rect);
 				const grid = new Uint8Array(32 * 18);
 				for (let gy = 0; gy < 18; gy++) {
 					for (let gx = 0; gx < 32; gx++) {
-						const i = (Math.floor(((gy + 0.5) * H) / 18) * W + Math.floor(((gx + 0.5) * W) / 32)) * 4;
+						const sy = Math.min(H - 1, y0 + Math.floor(((gy + 0.5) * (y1 - y0)) / 18));
+						const sx = Math.min(W - 1, x0 + Math.floor(((gx + 0.5) * (x1 - x0)) / 32));
+						const i = (sy * W + sx) * 4;
 						grid[gy * 32 + gx] = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
 					}
 				}
-				const prev = previous.get(which);
+				const prev = previous.get(key);
 				if (prev) {
 					let n = 0;
 					for (let k = 0; k < grid.length; k++) if (Math.abs(grid[k] - prev[k]) > 24) n++;
 					share = n / grid.length;
 				}
-				previous.set(which, grid);
+				previous.set(key, grid);
 			}
 			memo.set(key, share);
 			return share;
