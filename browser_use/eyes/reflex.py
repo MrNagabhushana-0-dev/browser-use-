@@ -116,6 +116,12 @@ class Reflexes:
 		checked = [r if isinstance(r, ReflexRule) else ReflexRule.model_validate(r) for r in rules]
 		assert 1 <= len(checked) <= 50, 'between 1 and 50 rules'
 		await self.clear()
+		# New rules start clean: an event the old ones raised that nobody waited for is not handed to the next wait,
+		# and the stats are the new rules' own (found live: a wait returned a replaced rule's "30 s up")
+		self.events = asyncio.Queue()
+		self._latencies.clear()
+		self._actions = 0
+		self.errors.clear()
 		cdp = await self.session.get_or_create_cdp_session(focus=False)
 		self._cdp, self._session_id = cdp, cdp.session_id
 		send = cdp.cdp_client.send
@@ -174,6 +180,9 @@ class Reflexes:
 				)
 			except Exception as e:
 				logger.debug(f'reflex: stop failed: {type(e).__name__}: {e}')
+			# what the rules decided before they stopped goes out (or fails) before anything else happens on this tab
+			if self._tasks:
+				await asyncio.gather(*list(self._tasks), return_exceptions=True)
 			for key in list(self._held):
 				await self._key(key, 'keyUp')
 		self._held.clear()

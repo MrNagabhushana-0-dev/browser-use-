@@ -247,3 +247,18 @@ async def test_a_rule_reads_one_region_so_it_can_jump_what_is_coming(session, ga
 	await session.navigate_to(game.url_for('/runner'))
 	await asyncio.sleep(5.0)
 	assert await _value(session, 'track.hits') >= 3, 'the control: nobody at the keys, the player runs into them'
+
+
+async def test_new_rules_start_clean_an_old_rule_s_event_is_not_handed_to_the_new_wait(session, game):
+	"""Found live on the T-Rex runner: rules replaced after one of them had notified (nobody waiting) left that event
+	queued, and the next wait returned it, from rules no longer running; the stats carried the old rules' inputs."""
+	await session.navigate_to(game.url_for('/follow'))
+	reflexes = Reflexes(session)
+	await reflexes.install([{'when': 'see.frame > 2', 'notify': 'old'}, {'when': 'see.frame === 3', 'key': 'x'}])
+	await asyncio.sleep(1.0)  # the old rules notify and act; nobody waits for them
+	assert reflexes.stats()['actions'] == 1
+	await reflexes.install([{'when': 'see.frame > 30', 'notify': 'new'}])
+	assert reflexes.stats()['actions'] == 0, reflexes.stats()
+	event = await reflexes.wait(timeout=5)
+	assert event is not None and event.label == 'new', event
+	await reflexes.clear()
