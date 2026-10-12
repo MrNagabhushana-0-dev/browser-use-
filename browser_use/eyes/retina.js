@@ -577,7 +577,7 @@ registerProcessor('retina-ear', RetinaEar);
 		const [a, b] = [luminance(fg), luminance(bg)].sort((x, y) => y - x);
 		return (a + 0.05) / (b + 0.05);
 	};
-	const reportText = (el) => {
+	const reportText = (el, added = false) => {
 		if (!el || el.nodeType !== 1 || !el.isConnected || el.closest('video, script, style, noscript')) return;
 		if (!isShown(el)) return;
 		const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
@@ -590,15 +590,29 @@ registerProcessor('retina-ear', RetinaEar);
 		lastText.set(text, now);
 		const faint = contrast(el) < 1.5;
 		R.events.push(
-			Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}, stillLoading(now) ? { loading: true } : {})
+			Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}, stillLoading(now, added) ? { loading: true } : {})
 		);
 	};
 	let textReady = false; // false while the page is still being parsed: its own content has not "appeared"
 	// The page is still filling itself in until its load event (and a moment after): text that arrives then is the
 	// page's own content rendered by script, not something that appeared on a page already there.
+	// After the load event, scripts often keep rendering the page's content for a while (MediaWiki did, 0.7 s on):
+	// the page counts as filling in until 800 ms pass with no new element added. A value changing inside an existing
+	// element (a ticker, a clock, a carousel's class) never keeps that window open.
 	let loadedAt = document.readyState === 'complete' ? -1e9 : null;
-	addEventListener('load', () => (loadedAt = performance.now()), { once: true });
-	const stillLoading = (now) => loadedAt === null || now - loadedAt < 300;
+	let lastFill = loadedAt === null ? null : -1e9;
+	let settled = loadedAt !== null;
+	addEventListener('load', () => (loadedAt = lastFill = performance.now()), { once: true });
+	const stillLoading = (now, added) => {
+		if (loadedAt === null) return true;
+		if (settled) return false;
+		if (now - lastFill > 800) {
+			settled = true;
+			return false;
+		}
+		if (added) lastFill = now;
+		return true;
+	};
 	const watchText = () => {
 		if (textObserver) return;
 		// Observe the document node itself: it exists from the first instant, before <html> and <body> (the retina
@@ -609,17 +623,22 @@ registerProcessor('retina-ear', RetinaEar);
 		textObserver = new MutationObserver((mutations) => {
 			if (!textReady) return;
 			const touched = new Set();
+			const added = new Set();
 			const restyled = [];
 			for (const m of mutations) {
 				if (m.type === 'characterData') touched.add(m.target.parentElement);
 				else if (m.type === 'attributes') restyled.push(m);
-				for (const n of m.addedNodes) touched.add(n.nodeType === 1 ? n : n.parentElement);
+				for (const n of m.addedNodes) {
+					const el = n.nodeType === 1 ? n : n.parentElement;
+					touched.add(el);
+					if (n.nodeType === 1) added.add(el);
+				}
 			}
 			// Read styles just after the mutation settles. Not requestAnimationFrame: it never fires in a hidden or
 			// background tab, which is exactly where an agent's page often is.
 			setTimeout(() => {
 				for (const m of restyled) if (revealed(m)) touched.add(m.target);
-				touched.forEach(reportText);
+				touched.forEach((el) => reportText(el, added.has(el)));
 			}, 0);
 		});
 		textObserver.observe(document, {

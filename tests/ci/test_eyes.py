@@ -1315,7 +1315,8 @@ def test_the_journal_folds_a_ticking_clock_but_keeps_a_peak_and_every_slide():
 async def test_page_content_filling_in_as_it_loads_is_one_line_and_a_later_toast_stays_its_own(eyes, session, site):
 	"""Hands-on on Wikimedia Commons: eight blocks of the page's own content, rendered by script while it loaded, came
 	back one by one as "text that appeared", next to (and longer than) what actually appeared later. Text arriving
-	before the page's load event is the page filling in: one line; a toast after it is still its own line."""
+	before the load event, or in a burst of new elements just after it (MediaWiki rendered 0.7 s on), is the page
+	filling in: one line. A toast once the page has gone quiet is still its own line."""
 	import time as _time
 
 	def slow_image(request):
@@ -1328,15 +1329,18 @@ async def test_page_content_filling_in_as_it_loads_is_one_line_and_a_later_toast
 		'<script>document.addEventListener("DOMContentLoaded", () => { for (let i = 1; i <= 6; i++) setTimeout(() => {'
 		' const p = document.createElement("p"); p.textContent = "Section " + i + " of the article, filled in by script";'
 		' document.getElementById("m").appendChild(p); }, i * 80); });'
-		'addEventListener("load", () => setTimeout(() => { const t = document.createElement("div");'
-		' t.textContent = "Saved #4242"; t.style = "position:fixed;top:10px;right:10px"; document.body.appendChild(t); }, 900));'
+		'addEventListener("load", () => { for (let i = 7; i <= 9; i++) setTimeout(() => {'
+		' const p = document.createElement("p"); p.textContent = "Section " + i + " of the article, filled in by script";'
+		' document.getElementById("m").appendChild(p); }, (i - 6) * 200);'
+		' setTimeout(() => { const t = document.createElement("div");'
+		' t.textContent = "Saved #4242"; t.style = "position:fixed;top:10px;right:10px"; document.body.appendChild(t); }, 2000); });'
 		'</script></body>'
 	)
 	site.expect_request('/filling-in').respond_with_data(page, content_type='text/html')
 	await eyes.open()  # as retinat_open does: the eyes are on before the page starts, and see it fill in
 	await session.navigate_to(site.url_for('/filling-in'))
-	await asyncio.sleep(2.5)
+	await asyncio.sleep(3.0)
 	p = await eyes.look()
 	lines = [line for line in p.text.splitlines() if 'Section' in line]
-	assert len(lines) == 1 and 'filled in as it loaded' in lines[0] and '6 blocks' in lines[0], p.text
+	assert len(lines) == 1 and 'filled in as it loaded' in lines[0] and '9 blocks' in lines[0], p.text
 	assert '"Saved #4242"' in p.text, f'a toast after the load is still its own line: {p.text}'
