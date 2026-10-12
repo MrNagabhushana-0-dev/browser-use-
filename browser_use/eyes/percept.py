@@ -143,7 +143,8 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	size = f'{info.get("w")}x{info.get("h")}' if info.get('w') else 'size unknown'
 	duration = info.get('duration')
 	label = {'canvas': 'canvas', 'desktop': 'screen'}.get(info.get('kind', ''), 'video')
-	head = f'[{item.index}] {label} {size}'
+	name = (info.get('name') or '').strip()
+	head = f'[{item.index}] {label}' + (f' "{name[:80]}"' if name else '') + f' {size}'
 	if duration:
 		head += f', {_fmt(duration)} long'
 	head += f', watched {item.watched_s:.1f}s'
@@ -152,7 +153,7 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 		head += f', covering {_fmt(t0)}-{_fmt(t1)}'
 	if item.sight.loops:
 		head += f', looped {len(item.sight.loops)}x (seen in full)'
-	lines.append(head)
+	lines.append(head + (page_text_note(name) if name else ''))
 	if (item.frames or item.hops) and t0 > 1.0:
 		# what played before t0 was not held: silence or stillness in this percept says nothing about it
 		lines.append(f'    the first {_fmt(t0)} was not held: sound and pictures before it are unknown, not absent')

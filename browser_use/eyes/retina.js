@@ -127,6 +127,26 @@
 	const isCanvas = (el) => el instanceof HTMLCanvasElement;
 	const dims = (el) => (isCanvas(el) ? [el.width, el.height] : [el.videoWidth, el.videoHeight]);
 
+	const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+
+	// Text in el a person can see: not text only a screen reader gets (a 1px clipped "sr-only" box, as players use
+	// for "Duration: 10 minutes"), nor hidden text. Stops once it has `max` characters.
+	const shownText = (el, max) => {
+		const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+		const parts = [];
+		let size = 0;
+		for (let n = walker.nextNode(), seen = 0; n && size < max && seen < 400; n = walker.nextNode(), seen++) {
+			const t = clean(n.data);
+			const host = n.parentElement;
+			if (!t || !host || !host.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+			const r = host.getBoundingClientRect();
+			if (r.width <= 1 || r.height <= 1) continue;
+			parts.push(t);
+			size += t.length + 1;
+		}
+		return parts.join(' ').slice(0, max);
+	};
+
 	// Text a person would read next to the video: caption, author, audio credit. Short on
 	// purpose: this is what is on screen, not the page's markup.
 	const nearbyText = (v) => {
@@ -134,10 +154,30 @@
 		for (let i = 0; i < 8 && el; i++) {
 			el = el.parentElement;
 			if (!el) break;
-			const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
-			if (t.length >= 12) return t.slice(0, 400);
+			const t = shownText(el, 400);
+			if (t.length >= 12) return t;
 		}
 		return '';
+	};
+
+	// What the video is called: its own label or figure caption; else, when it is the one sizable video on the page
+	// (a film page, a watch page), the page's heading, which is about it. A feed has several, each named by its
+	// caption instead. Found hands-on: a Commons film was named by its player's badges, "Duration: ... CC".
+	const nameOf = (v) => {
+		const ids = (v.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+		const labelled = clean(ids.map((id) => (document.getElementById(id) || {}).textContent || '').join(' '));
+		const fig = v.closest('figure');
+		const caption = fig && fig.querySelector('figcaption');
+		const own = labelled || clean(v.getAttribute('aria-label')) || clean(v.getAttribute('title')) || clean(caption && caption.innerText);
+		if (own || isCanvas(v)) return own.slice(0, 160);
+		const least = opts.minArea * innerWidth * innerHeight;
+		const sizable = Array.prototype.filter.call(document.querySelectorAll('video'), (o) => {
+			const r = o.getBoundingClientRect();
+			return r.width * r.height >= least;
+		});
+		if (sizable.length !== 1 || sizable[0] !== v) return '';
+		const h1 = document.querySelector('h1');
+		return clean((h1 && h1.innerText) || document.title).slice(0, 160);
 	};
 
 	const describe = (v) => isCanvas(v) ? {
@@ -154,6 +194,7 @@
 		muted: true,
 		rect: visible(v).rect,
 		text: nearbyText(v),
+		name: nameOf(v),
 	} : ({
 		vid: v === R.attended ? R.attendedId : 0,
 		kind: 'video',
@@ -169,6 +210,7 @@
 		muted: v.muted || v.volume === 0,
 		rect: visible(v).rect,
 		text: nearbyText(v),
+		name: nameOf(v),
 	});
 
 	// The src attribute first: setting it resets currentTime at once, while currentSrc keeps the old URL until

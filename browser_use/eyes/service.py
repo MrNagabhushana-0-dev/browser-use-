@@ -903,7 +903,7 @@ class Eyes:
 		frames = [f for f in self.retina.frames if f.vid == vid and f.wall >= cutoff]
 		hops = [h for h in self.retina.hops if h.vid == vid and h.wall >= cutoff]
 		fields.update(
-			caption=(att.get('text') or '').strip(),
+			caption=(att.get('name') or att.get('text') or '').strip(),
 			t=state.get('t'),
 			duration=att.get('duration'),
 			paused=bool(state.get('paused')),

@@ -1321,7 +1321,10 @@ async def test_page_content_filling_in_as_it_loads_is_one_line_and_a_later_toast
 
 	def slow_image(request):
 		_time.sleep(1.2)  # holds the load event open while the script fills the page in
-		return Response(b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;', content_type='image/gif')
+		return Response(
+			b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;',
+			content_type='image/gif',
+		)
 
 	site.expect_request('/slow.gif').respond_with_handler(slow_image)
 	page = (
@@ -1344,3 +1347,33 @@ async def test_page_content_filling_in_as_it_loads_is_one_line_and_a_later_toast
 	lines = [line for line in p.text.splitlines() if 'Section' in line]
 	assert len(lines) == 1 and 'filled in as it loaded' in lines[0] and '9 blocks' in lines[0], p.text
 	assert '"Saved #4242"' in p.text, f'a toast after the load is still its own line: {p.text}'
+
+
+async def test_a_film_page_names_its_video_by_the_page_not_by_the_player_badges(eyes, session, site):
+	"""Hands-on on Wikimedia Commons: the film was journalled as 'now watching "Duration: 10 minutes and 35 seconds.
+	10:35 Subtitles available. CC"', the player's own badges and the screen-reader text behind them. A person sees
+	a film page about one film: the heading names it, and text only a screen reader gets is not on screen. A feed of
+	reels still names each by its caption (test_browse_watches_each_reel_once_and_puts_them_on_one_sheet)."""
+	import json
+
+	site.expect_request('/film-page').respond_with_data(
+		'<!doctype html><body style="margin:0;font:16px sans-serif"><style>.sr-only{position:absolute;width:1px;'
+		'height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%);white-space:nowrap}</style>'
+		'<h1>File:Calibration film.webm</h1><div class="fullImageLink"><span><span class="player">'
+		'<video src="/calib.webm" autoplay muted style="width:800px;height:450px"></video>'
+		'<span><span class="sr-only">Duration: 4 seconds.</span><span aria-hidden="true">0:04</span></span>'
+		'<span><span class="sr-only">Subtitles available.</span><span aria-hidden="true">CC</span></span>'
+		'</span></span><div>Size of the above preview of this WEBM file: 800 × 450 pixels.</div></div>'
+		'<table><tr><td><video src="/calib.webm" preload="metadata" style="width:82px;height:47px"></video></td>'
+		'<td>current 18:23, 10 May 2015, 4 s</td></tr></table></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/film-page'))
+	p = await eyes.watch(seconds=1.5, until='time')
+	assert p.items, p.text
+	assert '"File:Calibration film.webm"' in p.text.splitlines()[1], p.text
+	assert 'Duration: 4 seconds' not in p.text and 'Subtitles available' not in p.text, f'screen-reader text: {p.text}'
+	await asyncio.sleep(0.5)
+	assert eyes.journal_path is not None
+	watching = [e['text'] for e in map(json.loads, eyes.journal_path.read_text().splitlines()) if e['kind'] == 'item']
+	assert watching and 'File:Calibration film.webm' in watching[0], watching
