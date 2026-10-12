@@ -18,11 +18,31 @@ no Playwright.
 |---|---|---|
 | 1 | Every HTTPS page failed with `ERR_CERT_AUTHORITY_INVALID`: the sandbox's proxy re-signs TLS and Chromium reads none of the CA variables. | **Fixed** (`39d5d1f`). The CA is learned from the refused chain, but only if the environment's bundle trusts it and it verifiably signed the chain. The first `retinat_open` then succeeds in one call. |
 | 2 | The film played, yet `retinat_watch` said "no video was on screen". The Commons player streams from another origin without CORS, so the page cannot read its pixels. | **Fixed** (`20f32d0`). Pictures now come from the compositor; the sound is said to be unreadable. |
-| 3 | `retinat_look` returned no image on a page with a paused `<video>`: it went into watch mode and found nothing playing. | Open. |
-| 4 | "Text that appeared" reported the page's own text as it loaded, and the player's ticking clock every second. | Open. |
-| 5 | Stopping a Retinat MCP server left its Chromium running (an orphan, its parent PID 1). | Open. |
-| 6 | `retinat_find` cannot find icon-only controls such as the player's play button, though its accessible name was "Play video". | Open. |
+| 3 | `retinat_look` returned no image on a page with a paused `<video>`: it went into watch mode and found nothing playing. | **Fixed** (`a2d19a5`). Checked live: a 640x360 page frame. |
+| 4 | "Text that appeared" reported the page's own text as it loaded, and the player's ticking clock every second. | **Ticking readouts fixed** (`a2d19a5`, `2885693`): one line each, and noted once in the journal. Page text that loads in the first second still counts as "appeared": open. |
+| 5 | Stopping a Retinat MCP server left its Chromium running (an orphan, its parent PID 1). | **Fixed** (`a2d19a5`). Checked live: 0 orphans after a SIGTERM. |
+| 6 | `retinat_find` cannot find icon-only controls such as the player's play button, though its accessible name was "Play video". | **Fixed** (`a2d19a5`). Checked live: `find "play video"` gives `button named "Play video"` at (878, 404). |
 | 7 | The video recorder wrote one frame per repaint, so 3 s became 0.2 s and almost black. | **Fixed** (`d1f027d`), with `retinat_record` added. |
 
 **Cost, honestly:** one `retinat_zoom` of the whole viewport cost about 2,700 tokens, when a look costs about 330.
 The way forward is the event stream and reflexes, not bigger pictures.
+
+## Later the same day: the fixes checked live, and one more bug
+
+**Recordings:**
+- `commons-checks-before-the-source-fix.mp4`: the look, find and watch checks.
+- `commons-film-seen-from-the-compositor.mp4`: the film watched through the MCP tools after the last fix.
+
+| # | Found | Status |
+|---|---|---|
+| 8 | After the compositor fix, the Commons film still came back as 0 items. Running the library against the real page showed why: Video.js starts the 480p source, then switches the same `<video>` to 1080p. Taint was remembered per element, so the 1080p item was never reported and the compositor never restarted. | **Fixed** (`5bac6fd`). Taint is now re-tested for each source. |
+
+**Through the MCP tools after the fixes:**
+- `retinat_watch` for 25 s: 1 item, 1920x1080, 10:34 long, watched through the compositor.
+- Its 4 keyframes are right: the title card, the pink clouds, the stream, the bird on a branch.
+- About 870 tokens for 25 s of film.
+
+**Still open:**
+- Page text that loads in the first second still reads as "appeared".
+- A fade (title to clouds) is not split into its own shot.
+- `find`'s crop of a very large match (the whole 800x450 player) costs about 665 tokens.
