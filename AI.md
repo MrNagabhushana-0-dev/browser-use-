@@ -214,6 +214,37 @@ Coordinates for `retinat_tap` and `retinat_click` are viewport CSS pixels. Read 
 (`Clicked (160, 120) on button "Save".`). Give it `expect` with text the target carries, and it refuses a click that
 would land on something else. Pages shift between a look and a click, and Delete sits next to Save.
 
+## Reflexes: faster than your turns
+
+You think in seconds; a game, a live control or a button that appears needs an answer within a frame. Don't poll
+with looks. Write rules once with `retinat_reflex`. The page runs them every animation frame against what it draws,
+and real key or mouse input goes out within a few milliseconds. Then `retinat_wait` sleeps until a rule you marked
+`notify` fires, at no cost in images while it waits.
+
+```json
+{"rules": [
+  {"when": "see.locate([255,0,0]) && see.locate([255,0,0]).x < see.locate([0,0,255]).x - 12", "hold": "ArrowLeft"},
+  {"when": "see.text('#status') === 'GAME OVER'", "notify": "game over"}
+]}
+```
+
+- **What a rule sees:**
+  - `see.locate([r,g,b], {tol})`: where a colour is on the largest canvas, as `{x, y, n}` in viewport px.
+  - `see.el(css)`: `{x, y, w, h, cx, cy}`.
+  - `see.text(css)`.
+  - `see.t`, `see.frame` and `see.memory`.
+- **What a rule does:**
+  - `hold` holds a key while the condition is true;
+  - `key` taps a key as it becomes true;
+  - `click` clicks an expression's `[x, y]`;
+  - `notify` wakes `retinat_wait`, and only after the same rule's input has gone out.
+- **Measured:** in a canvas game it kept a paddle under a moving ball in 211 of 211 frames, from one install call.
+  A decision reached the page as a real key event in 1.6 ms (p50) and 2.2 ms (p95). Add up to one frame, 16.7 ms
+  at 60 Hz, to see the change.
+- **The page can't forge input:** the rules run in an isolated world, and the page's own script cannot reach their
+  input channel.
+- `action=status` gives counts and latency. `action=clear` stops the rules and releases held keys.
+
 ## Hard rules
 
 1. **Never write Playwright, Puppeteer or Selenium code**, not even "just to test". Use the MCP
@@ -284,9 +315,12 @@ Corporate proxies and agent sandboxes present their own CA. If every page fails 
 `ERR_CERT_AUTHORITY_INVALID`, set `BROWSER_USE_PROXY_CA_CERT=/path/to/proxy-ca.pem`. Only that
 key is trusted, and verification stays on for everything else.
 
-The navigation error names this setting when it detects such an environment. There is no
-automatic detection: telling private CAs from public ones automatically was tried, and it
-wrongly trusted public CAs.
+Usually nothing needs setting. When a page fails that way, the browser reads the chain it was shown and
+learns the CA that signed it, but only if the environment's own CA bundle (`SSL_CERT_FILE` and friends) already
+trusts it, it is not a public root, and its key verifiably signed that chain. Diffing bundles was tried first and
+would have trusted public CAs, so it is not used. The CA is saved for this network, and later browsers trust it from
+the start. Retinat and `browser-use --mcp` restart their browser and retry once, so the first `retinat_open` works.
+If no CA in the bundle signed the chain, the error names the setting.
 
 ## Choosing the route: direct, or Tor with an exit country
 

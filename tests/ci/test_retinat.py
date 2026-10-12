@@ -431,3 +431,31 @@ async def test_record_saves_a_video_of_what_the_browser_showed(retinat, site, tm
 	assert change > 1.0, f'the first and last frames are the same page ({change:.2f})'
 	again = await _call(retinat, 'retinat_record', {'action': 'stop'})
 	assert again.is_error and 'no recording is running' in _text(again), _text(again)
+
+
+async def test_reflexes_act_the_moment_a_button_appears_and_the_agent_sleeps_until_told(retinat, site):
+	"""retinat_reflex installs rules the page runs every frame; retinat_wait sleeps until one notifies. Here a button
+	shows up after a second and a rule clicks it as it appears, with real input, while the agent waits in one call."""
+	page = (
+		'<!doctype html><title>Late</title><body><script>window.clicks = 0;'
+		"setTimeout(() => { const b = document.createElement('button'); b.id = 'go'; b.textContent = 'Claim';"
+		"b.style = 'position:fixed;left:200px;top:150px;width:160px;height:50px';"
+		'b.onclick = (e) => { if (e.isTrusted) clicks++; }; document.body.appendChild(b); }, 1000)</script></body>'
+	)
+	site.expect_request('/late').respond_with_data(page, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/late')})
+	rules = [
+		{'when': "see.text('#go') === 'Claim'", 'click': "[see.el('#go').cx, see.el('#go').cy]", 'notify': 'claimed'},
+	]
+	installed = _text(await _call(retinat, 'retinat_reflex', {'rules': rules}))
+	assert 'running every frame' in installed, installed
+	woke = _text(await _call(retinat, 'retinat_wait', {'timeout': 10}))
+	assert '"claimed"' in woke, woke
+	assert retinat.browser_session is not None
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	clicks = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'clicks', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	assert clicks['result']['value'] == 1, 'one real click, as the button appeared'
+	bad = await _call(retinat, 'retinat_reflex', {'rules': [{'when': 'see.el(', 'notify': 'x'}]})
+	assert bad.is_error and 'did not compile' in _text(bad), _text(bad)

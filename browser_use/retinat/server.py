@@ -15,6 +15,8 @@ turn at a time:
 - `retinat_now`: one line on what is on screen and audible right now.
 - `retinat_console`: what the page logged and threw, masked like the requests.
 - `retinat_record`: a video of what the browser showed, started and stopped by the agent.
+- `retinat_reflex` / `retinat_wait`: rules the page runs every frame, firing real input in milliseconds; the agent
+  sleeps until one notifies.
 - `retinat_requests`: what the page fetched (status, type, size, time, failures), and one response body,
   with tokens, passwords and keys masked.
 
@@ -57,6 +59,7 @@ ACTING = frozenset(
 		'retinat_swipe',
 		'retinat_type',
 		'retinat_key',
+		'retinat_reflex',
 	}
 )
 
@@ -500,6 +503,39 @@ def _browser_tools() -> list['types.Tool']:
 			annotations=ro,
 		),
 		types.Tool(
+			name='retinat_reflex',
+			description=(
+				'Reflexes: rules the page runs every animation frame against what it draws, firing real key or mouse '
+				'input within a few milliseconds. Use them for anything faster than your own turns (a game, a live '
+				'control, waiting for a button): write the rules once, then retinat_wait for what you asked to be told. '
+				'A rule: {"when": <JS expression over see>, then one of "hold": key (held while true), "key": key '
+				'(tapped as it becomes true), "click": <expression giving [x, y]>, "notify": label (wakes retinat_wait)}. '
+				'see.locate([r,g,b], {tol}) finds a colour on the largest canvas -> {x, y, n} viewport px; '
+				'see.el(css) -> {x, y, w, h, cx, cy}; see.text(css); see.t; see.frame; see.memory. '
+				'action=install replaces the rules; clear stops them and lets go of held keys; status gives counts and '
+				'decision-to-input latency.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'action': {'type': 'string', 'enum': ['install', 'clear', 'status'], 'default': 'install'},
+					'rules': {'type': 'array', 'items': {'type': 'object'}, 'maxItems': 50},
+				},
+			},
+		),
+		types.Tool(
+			name='retinat_wait',
+			description=(
+				'Sleep until a reflex rule with "notify" fires (or timeout), then say which, when, and what the '
+				'reflexes did meanwhile. Costs nothing while waiting: no images, no polling.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {'timeout': {'type': 'number', 'default': 30, 'minimum': 0.1, 'maximum': 300}},
+			},
+			annotations=ro,
+		),
+		types.Tool(
 			name='retinat_now',
 			description='One line on what is on screen and audible right now. No image; nearly free.',
 			input_schema={'type': 'object', 'properties': {}},
@@ -700,6 +736,8 @@ class RetinatServer(BrowserUseServer):
 			return blocks
 		if name == 'retinat_record':
 			return await self._record(str(args['action']), int(args.get('framerate', 8)))
+		if name in ('retinat_reflex', 'retinat_wait'):
+			return await self._reflex(name, args)
 		eyes = await self._eyes()
 		if name == 'retinat_console':
 			from browser_use.eyes.console import render as render_console
@@ -850,6 +888,39 @@ class RetinatServer(BrowserUseServer):
 		except RuntimeError as e:  # one already running, or no viewport yet
 			raise Refused(str(e)) from e
 		return f'Recording to {out} at {framerate} fps. Call retinat_record with action=stop to finish the file.'
+
+	async def _reflex(self, name: str, args: dict[str, Any]) -> str:
+		"""Install, clear or report the tab's reflexes, or wait for one to notify."""
+		from browser_use.eyes.reflex import Reflexes
+		from browser_use.mcp.effects import Refused
+
+		assert self.browser_session is not None
+		reflexes = getattr(self, '_reflexes', None)
+		if reflexes is None or reflexes.session is not self.browser_session:
+			reflexes = self._reflexes = Reflexes(self.browser_session)
+		if name == 'retinat_wait':
+			if not reflexes.installed:
+				raise Refused('no reflexes are installed: install rules with retinat_reflex first')
+			event = await reflexes.wait(timeout=float(args.get('timeout', 30)))
+			stats = reflexes.stats()
+			done = f'{stats["actions"]} input actions so far, decision to input p50 {stats["latency_ms_p50"]} ms'
+			if event is None:
+				return f'Nothing notified in {float(args.get("timeout", 30)):.0f}s. The reflexes keep running: {done}.'
+			return f'"{event.label}" (rule {event.rule}) fired at page time {event.page_ms / 1000:.2f}s. {done}.'
+		action = str(args.get('action') or 'install')
+		if action == 'clear':
+			await reflexes.clear()
+			return 'Reflexes stopped; held keys released.'
+		if action == 'status':
+			return json.dumps(reflexes.stats())
+		rules = args.get('rules') or []
+		if not rules:
+			raise Refused('give rules to install (or action=clear / status)')
+		try:
+			count = await reflexes.install(rules)
+		except (ValueError, AssertionError) as e:
+			raise Refused(str(e)) from e
+		return f'{count} reflex rule(s) running every frame on this tab. retinat_wait sleeps until one notifies.'
 
 	async def _close_all_sessions(self) -> str:
 		if self._control is not None:
