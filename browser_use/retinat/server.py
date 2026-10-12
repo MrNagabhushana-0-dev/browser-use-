@@ -1009,11 +1009,7 @@ async def main(cdp_url: str | None = None, network: NetworkRouter | None = None,
 		bridge = await BridgeRelay(port=bridge_port).start()
 		print(f'Retinat bridge on {bridge.cdp_url}; load the extension from {EXTENSION_DIR} and share a tab.', file=sys.stderr)
 	server = RetinatServer(cdp_url=cdp_url, network=network, bridge=bridge)
-	try:
-		await serve_until_stopped(server)
-	finally:
-		if bridge:
-			await bridge.stop()
+	await serve_until_stopped(server)  # closes the bridge and Tor with the browsers
 
 
 def cli() -> None:

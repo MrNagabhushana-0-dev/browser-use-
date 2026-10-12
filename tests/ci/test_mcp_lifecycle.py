@@ -53,11 +53,17 @@ async def test_a_stopped_retinat_server_closes_its_browser(page, tmp_path, stop)
 			browsers = _browsers_of(server_pid)
 			assert browsers, 'the server started a browser'
 			if stop == 'SIGTERM':
+				# the client still holds the server's stdin open, as Claude Code does when it restarts a server: the server
+				# must exit anyway (found hands-on: it closed its browser, then hung on its stdin reader)
 				os.kill(server_pid, signal.SIGTERM)
+				server = psutil.Process(server_pid)
 				for _ in range(100):
-					if not psutil.pid_exists(server_pid):
+					if not server.is_running() or server.status() == psutil.STATUS_ZOMBIE:
 						break
 					await asyncio.sleep(0.2)
+				assert not server.is_running() or server.status() == psutil.STATUS_ZOMBIE, (
+					'the server outlived SIGTERM while its client was still connected'
+				)
 	for _ in range(100):  # 'client leaves': the context exit closed stdin
 		if not any(b.is_running() and b.status() != psutil.STATUS_ZOMBIE for b in browsers):
 			break

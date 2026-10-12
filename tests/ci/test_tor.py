@@ -8,6 +8,7 @@ Tor: per the repo rules, nothing is mocked except the LLM.
 
 from __future__ import annotations
 
+import os
 import shutil
 import socket
 
@@ -70,6 +71,8 @@ def test_torrc_has_core_directives(tmp_path):
 	assert 'ControlPort 9151' in torrc
 	assert 'CookieAuthentication 1' in torrc
 	assert f'DataDirectory {tmp_path}' in torrc
+	# a Tor we launch exits on its own once the process that launched it is gone, even after a SIGKILL
+	assert f'__OwningControllerProcess {os.getpid()}' in torrc
 
 
 def test_torrc_exit_country_pins_exit(tmp_path):
