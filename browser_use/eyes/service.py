@@ -132,6 +132,7 @@ class Eyes:
 		self.journal_path = self.now_path.with_name('journal.jsonl') if self.now_path is not None else None
 		self._journaled: dict[str, Any] = {}
 		self._pending_text: list[str] = []  # text that appeared since the last journal write
+		self._readout_shapes: set[str] = set()  # readouts (clocks, percentages) already journaled on this page
 		# Keyframes copied to disk as they are taken, so recall reaches past the page's ring.
 		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
 		self._archiver: asyncio.Task | None = None
@@ -1003,8 +1004,10 @@ class Eyes:
 				entries.append(('state', 'paused' if f.get('paused') else 'playing again'))
 		if vid != last.get('vid') and last.get('vid') and not last.get('paused'):
 			self._note_sounds_soon(last['vid'])  # leaving an item mid-play: say what it sounded like
+		if f.get('url') != last.get('url'):
+			self._readout_shapes = set()  # a new page: its readouts are new
 		self._journaled = {**last, **{k: f.get(k) for k in ('url', 'vid', 'sound', 'paused')}}
-		texts, self._pending_text = self._pending_text, []
+		texts, self._pending_text = _first_of_each_readout(self._pending_text, self._readout_shapes), []
 		entries += [('text', f'text appeared: "{t}') for t in texts]  # each already closes its quote and carries its note
 		if entries:
 			self._append_journal(entries, vid, t)
@@ -1195,6 +1198,25 @@ _FIND_JS = """(q, cap) => {
 }"""
 
 
+def _readout_shape(text: str) -> str | None:
+	"""A readout's shape: its text with every number masked ("0:07" and "0:08" share "#:#"); None without digits."""
+	return re.sub(r'\d+', '#', text) if re.search(r'\d', text) else None
+
+
+def _first_of_each_readout(texts: list[str], shapes: set[str]) -> list[str]:
+	"""Drop the later values of a ticking readout (a clock, a percentage) once its first value is noted: the journal is
+	about what changed on the page, and a clock changing every second is one thing, not one per second."""
+	kept = []
+	for t in texts:
+		shape = _readout_shape(t)
+		if shape is not None:
+			if shape in shapes:
+				continue
+			shapes.add(shape)
+		kept.append(t)
+	return kept
+
+
 def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_from: float | None = None) -> str:
 	"""Text that appeared on the page (toasts, status lines, captions in the DOM), oldest first.
 
@@ -1216,8 +1238,7 @@ def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_
 	# each second: values of one readout share a shape once their digits are masked.
 	groups: dict[str, list[tuple[str, float, bool]]] = {}
 	for t, (w, faint) in seen.items():
-		shape = re.sub(r'\d+', '#', t) if re.search(r'\d', t) else t
-		groups.setdefault(shape, []).append((t, w, faint))
+		groups.setdefault(_readout_shape(t) or t, []).append((t, w, faint))
 	lines = []
 	for members in list(groups.values())[:limit]:
 		t, w, faint = members[0]

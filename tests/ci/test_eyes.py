@@ -1288,3 +1288,15 @@ async def test_a_player_built_on_click_from_another_origin_is_watched(eyes, sess
 	p = await eyes.watch(seconds=2 * SECTION + 1.5, until='time')
 	assert p.items and all(i.tainted for i in p.items), p.text
 	assert any(len(i.sight.cuts) >= 1 for i in p.items), f'the higher-quality source was not seen: {p.text}'
+
+
+def test_the_journal_notes_a_readout_once_not_every_tick():
+	"""retinat_changes listed a player's clock once per second ("0:09", "0:10", ...). The journal now notes each readout
+	once per page; text without numbers, and a different readout, still come through."""
+	from browser_use.eyes.service import _first_of_each_readout
+
+	shapes: set[str] = set()
+	first = _first_of_each_readout(['0:09"', '4.09%"', 'Saved"'], shapes)
+	later = _first_of_each_readout(['0:10"', '0:11"', '4.79%"', 'Saved"', 'Loaded: 4.79%"'], shapes)
+	assert first == ['0:09"', '4.09%"', 'Saved"'], first
+	assert later == ['Saved"', 'Loaded: 4.79%"'], later
