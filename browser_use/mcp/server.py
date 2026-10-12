@@ -98,6 +98,7 @@ logging.disable(logging.CRITICAL)
 from browser_use import ActionModel, Agent
 from browser_use.bridge.policy import NOT_ALLOWED
 from browser_use.browser import BrowserProfile, BrowserSession
+from browser_use.browser.profile import PROXY_CA_LEARNED
 from browser_use.config import get_default_llm, get_default_profile, load_browser_use_config
 from browser_use.filesystem.file_system import FileSystem
 from browser_use.llm.openai.chat import ChatOpenAI
@@ -1196,9 +1197,16 @@ class BrowserUseServer:
 			return None
 
 		error = await go()
+		note = ''
+		if error is not None and PROXY_CA_LEARNED in str(error) and not self.cdp_url and self.bridge is None:
+			# the proxy's CA was just learned from this refusal (the environment's own CA bundle trusts it): a browser
+			# trusts it from its start, so start one and go again. Not censorship, so no Tor.
+			await self._drop_browser_session()
+			await self._init_browser_session()
+			error = await go()
+			note = " (the browser restarted to trust this network's proxy CA, learned from the refused page)"
 		outcome = classify_navigation(str(error)) if error else await self._page_outcome()
 		self.network.note_outcome(outcome)
-		note = ''
 		if self.network.wants_fallback(outcome) and not self.cdp_url:
 			host = urlparse(url).hostname or url
 			if await self.network.engage(f'{outcome} at {host}'):

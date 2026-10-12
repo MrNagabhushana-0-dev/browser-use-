@@ -15,6 +15,12 @@ import pytest
 from browser_use.browser.profile import MAX_PROXY_CA_CERTS, BrowserProfile, proxy_ca_pins
 
 
+@pytest.fixture(autouse=True)
+def own_config_dir(tmp_path, monkeypatch):
+	"""A CA learned in one test (or on this machine) must not leak into another: each test keeps its own."""
+	monkeypatch.setenv('BROWSER_USE_CONFIG_DIR', str(tmp_path / 'config'))
+
+
 @pytest.fixture(scope='module')
 def a_certificate(tmp_path_factory) -> Path:
 	"""A real self-signed certificate, generated rather than committed."""
@@ -107,26 +113,6 @@ def https_site(a_certificate):
 	server.stop()
 
 
-async def test_an_untrusted_proxy_ca_fails_with_the_fix_in_the_message(https_site, monkeypatch, a_certificate):
-	"""curl and Python trust the proxy through SSL_CERT_FILE; Chromium does not, and says only
-	ERR_CERT_AUTHORITY_INVALID. The error must name the setting that fixes it."""
-	from browser_use.browser import BrowserSession
-
-	monkeypatch.delenv('BROWSER_USE_PROXY_CA_CERT', raising=False)
-	monkeypatch.setenv('SSL_CERT_FILE', str(a_certificate))
-	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=False))
-	await session.start()
-	try:
-		with pytest.raises(Exception) as failure:
-			await session.navigate_to(https_site.url_for('/').replace('http://', 'https://'))
-		message = str(failure.value)
-		assert (
-			'ERR_CERT_AUTHORITY_INVALID' in message and 'BROWSER_USE_PROXY_CA_CERT' in message and 'SSL_CERT_FILE' in message
-		), message
-	finally:
-		await session.kill()
-
-
 def test_a_setting_that_points_at_nothing_still_explains_the_error(tmp_path, monkeypatch, a_certificate):
 	"""A CA path that is missing (a config shared between machines) or a whole trust bundle trusts nothing. The
 	error used to go quiet whenever the setting was present; it must say the file gave no certificate."""
@@ -161,3 +147,110 @@ async def test_the_named_setting_then_opens_the_page(https_site, a_certificate):
 		assert body['result']['value'] == 'behind the proxy'
 	finally:
 		await session.kill()
+
+
+def _other_certificate(folder: Path, subject: str = '/CN=Some Other CA') -> Path:
+	path = folder / f'other-{abs(hash(subject))}.crt'
+	subprocess.run(
+		['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', str(path.with_suffix('.key')), '-out', str(path)]
+		+ ['-days', '1', '-subj', subject],
+		capture_output=True,
+		check=True,
+		timeout=60,
+	)
+	return path
+
+
+async def _fails_then(url: str) -> str:
+	from browser_use.browser import BrowserSession
+
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=False))
+	await session.start()
+	try:
+		with pytest.raises(Exception) as failure:
+			await session.navigate_to(url)
+		return str(failure.value)
+	finally:
+		await session.kill()
+
+
+async def test_the_proxy_ca_the_environment_trusts_is_learned_from_what_the_browser_was_shown(
+	https_site, a_certificate, tmp_path, monkeypatch
+):
+	"""Behind a proxy that re-signs TLS, curl and Python trust its CA through SSL_CERT_FILE; Chromium refuses every
+	page until someone finds BROWSER_USE_PROXY_CA_CERT. When a page fails on a chain that a CA in that bundle
+	verifiably signed, that CA is saved for this network, and the next browser trusts it with no setting."""
+	import certifi
+
+	from browser_use.browser import BrowserSession
+	from browser_use.browser.profile import PROXY_CA_LEARNED
+
+	monkeypatch.delenv('BROWSER_USE_PROXY_CA_CERT', raising=False)
+	bundle = tmp_path / 'bundle.crt'
+	bundle.write_text(Path(certifi.where()).read_text() + a_certificate.read_text())  # public roots plus the proxy's
+	monkeypatch.setenv('SSL_CERT_FILE', str(bundle))
+	url = https_site.url_for('/').replace('http://', 'https://')
+
+	message = await _fails_then(url)
+	assert PROXY_CA_LEARNED in message and 'Test Proxy CA' in message, message
+
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=False))
+	assert session.browser_profile.proxy_ca_cert and proxy_ca_pins(session.browser_profile.proxy_ca_cert) == proxy_ca_pins(
+		a_certificate
+	), 'the learned CA is exactly the one that signed the page'
+	await session.start()
+	try:
+		await session.navigate_to(url)
+		cdp = await session.get_or_create_cdp_session(focus=False)
+		body = await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'document.body.innerText', 'returnByValue': True}, session_id=cdp.session_id
+		)
+		assert body['result']['value'] == 'behind the proxy'
+	finally:
+		await session.kill()
+
+
+async def test_a_ca_that_did_not_sign_what_the_browser_was_shown_is_never_learned(https_site, tmp_path, monkeypatch):
+	"""Only the CA that verifiably signed the refused chain, and only if the environment's own bundle holds it."""
+	from browser_use.browser.profile import PROXY_CA_LEARNED, learned_proxy_ca
+
+	monkeypatch.delenv('BROWSER_USE_PROXY_CA_CERT', raising=False)
+	monkeypatch.setenv('SSL_CERT_FILE', str(_other_certificate(tmp_path)))
+	message = await _fails_then(https_site.url_for('/').replace('http://', 'https://'))
+	assert 'ERR_CERT_AUTHORITY_INVALID' in message and PROXY_CA_LEARNED not in message, message
+	assert 'BROWSER_USE_PROXY_CA_CERT' in message and 'SSL_CERT_FILE' in message, 'the error still names the setting'
+	assert learned_proxy_ca() is None
+
+	# a CA with the very name of the one that signed the page, but another key: the name alone proves nothing
+	monkeypatch.setenv('SSL_CERT_FILE', str(_other_certificate(tmp_path, '/CN=Test Proxy CA')))
+	message = await _fails_then(https_site.url_for('/').replace('http://', 'https://'))
+	assert PROXY_CA_LEARNED not in message and learned_proxy_ca() is None, message
+
+
+async def test_the_first_open_on_such_a_network_succeeds_through_the_mcp_server(https_site, a_certificate, tmp_path, monkeypatch):
+	"""An agent should not have to know any of this: Retinat's first retinat_open learns the CA, restarts its browser
+	and opens the page in the same call."""
+	from browser_use.mcp.server import types
+	from browser_use.retinat.server import RetinatServer
+
+	monkeypatch.delenv('BROWSER_USE_PROXY_CA_CERT', raising=False)
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	monkeypatch.setenv('SSL_CERT_FILE', str(a_certificate))
+	server = RetinatServer()
+	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	handler = server.server.get_request_handler('tools/call')
+	assert handler is not None
+	try:
+		url = https_site.url_for('/').replace('http://', 'https://')
+		opened = await handler.handler(None, types.CallToolRequestParams(name='retinat_open', arguments={'url': url}))  # type: ignore[arg-type]
+		assert isinstance(opened, types.CallToolResult)
+		said = ' '.join(b.text for b in opened.content if isinstance(b, types.TextContent))
+		assert not opened.is_error and 'proxy CA' in said, said
+		assert server.browser_session is not None
+		cdp = await server.browser_session.get_or_create_cdp_session(focus=False)
+		body = await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'document.body.innerText', 'returnByValue': True}, session_id=cdp.session_id
+		)
+		assert body['result']['value'] == 'behind the proxy'
+	finally:
+		await server._close_all_sessions()

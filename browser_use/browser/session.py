@@ -1243,9 +1243,8 @@ class BrowserSession(BaseModel):
 			raise RuntimeError(f'Page.navigate() timed out after {nav_timeout}s ({duration_ms:.0f}ms) for {url}')
 
 		if nav_result.get('errorText'):
-			raise RuntimeError(
-				f'Navigation failed: {nav_result["errorText"]}{_certificate_hint(nav_result["errorText"], self.browser_profile)}'
-			)
+			error_text = nav_result['errorText']
+			raise RuntimeError(f'Navigation failed: {error_text}{await self._certificate_note(error_text, cdp_session)}')
 
 		if wait_until == 'commit':
 			duration_ms = (asyncio.get_event_loop().time() - nav_start_time) * 1000
@@ -2628,6 +2627,54 @@ class BrowserSession(BaseModel):
 			target = self.session_manager.get_target(self.agent_focus_target_id)
 			return target.title
 		return 'Unknown page title'
+
+	async def _certificate_note(self, error_text: str, cdp_session: Any) -> str:
+		"""What to add to a failed navigation's error. On ERR_CERT_AUTHORITY_INVALID with no proxy CA in effect, learn
+		the proxy's CA from the chain the page was refused on, when this environment's own CA bundle trusts it."""
+		from browser_use.browser.profile import PROXY_CA_LEARNED, learn_proxy_ca
+
+		hint = _certificate_hint(error_text, self.browser_profile)
+		if not hint or 'ERR_CERT_AUTHORITY_INVALID' not in error_text:
+			return hint
+		subject = learn_proxy_ca(await self._refused_chain(cdp_session))
+		if not subject:
+			return hint
+		return (
+			f" - the CA that signed it ({subject}) is one this environment's own CA bundle already trusts, so it was "
+			f'{PROXY_CA_LEARNED}: a browser started from now on trusts it (its key only; verification stays on for '
+			'everything else). Restart the browser and try again.'
+		)
+
+	async def _refused_chain(self, cdp_session: Any, timeout: float = 3.0) -> list[bytes]:
+		"""The certificate chain (DER, leaf first) the tab was just shown, from Chromium's own security state."""
+		import base64
+
+		got: asyncio.Future[list[bytes]] = asyncio.get_running_loop().create_future()
+
+		def on_state(event: Any, session_id: str | None = None) -> None:
+			state = (event.get('visibleSecurityState') or {}).get('certificateSecurityState') or {}
+			if state.get('certificate') and session_id == cdp_session.session_id and not got.done():
+				got.set_result([base64.b64decode(c) for c in state['certificate']])
+
+		self.cdp_client.register.Security.visibleSecurityStateChanged(on_state)
+		try:
+			for attempt in range(10):  # just after the refusal the error page is still committing: "Not attached..."
+				try:
+					await cdp_session.cdp_client.send.Security.enable(session_id=cdp_session.session_id)
+					break
+				except Exception:
+					if attempt == 9:
+						raise
+					await asyncio.sleep(0.1)
+			return await asyncio.wait_for(got, timeout)
+		except Exception as e:
+			self.logger.debug(f'No certificate chain to learn from: {type(e).__name__}: {e}')
+			return []
+		finally:
+			try:
+				await cdp_session.cdp_client.send.Security.disable(session_id=cdp_session.session_id)
+			except Exception:
+				pass
 
 	async def navigate_to(self, url: str, new_tab: bool = False) -> None:
 		"""Navigate to a URL using the standard event system.
