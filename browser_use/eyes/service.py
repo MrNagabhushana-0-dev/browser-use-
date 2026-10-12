@@ -132,7 +132,7 @@ class Eyes:
 		self.journal_path = self.now_path.with_name('journal.jsonl') if self.now_path is not None else None
 		self._journaled: dict[str, Any] = {}
 		self._pending_text: list[str] = []  # text that appeared since the last journal write
-		self._readout_shapes: set[str] = set()  # readouts (clocks, percentages) already journaled on this page
+		self._readouts: dict[str, dict[str, Any]] = {}  # readouts (clocks, figures) seen on this page, for the journal
 		# Keyframes copied to disk as they are taken, so recall reaches past the page's ring.
 		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
 		self._archiver: asyncio.Task | None = None
@@ -1005,9 +1005,9 @@ class Eyes:
 		if vid != last.get('vid') and last.get('vid') and not last.get('paused'):
 			self._note_sounds_soon(last['vid'])  # leaving an item mid-play: say what it sounded like
 		if f.get('url') != last.get('url'):
-			self._readout_shapes = set()  # a new page: its readouts are new
+			self._readouts = {}  # a new page: its readouts are new
 		self._journaled = {**last, **{k: f.get(k) for k in ('url', 'vid', 'sound', 'paused')}}
-		texts, self._pending_text = _first_of_each_readout(self._pending_text, self._readout_shapes), []
+		texts, self._pending_text = _journal_worthy(self._pending_text, self._readouts), []
 		entries += [('text', f'text appeared: "{t}') for t in texts]  # each already closes its quote and carries its note
 		if entries:
 			self._append_journal(entries, vid, t)
@@ -1198,22 +1198,54 @@ _FIND_JS = """(q, cap) => {
 }"""
 
 
+SHORT_SEQUENCE = 8  # a readout with at most this many values is listed in full
+
+
+def _extremes(members: list[tuple[str, float, bool]]) -> list[tuple[str, float, bool]]:
+	"""The values at the low and high of a readout's most varying number, in the order they appeared: a figure that
+	peaks for one tick keeps its peak when the rest of the ticking is folded away."""
+	numbers = [[float(n) for n in re.findall(r'\d+(?:\.\d+)?', m[0])] for m in members]
+	width = min(len(n) for n in numbers)
+	if not width:
+		return []
+	k = max(range(width), key=lambda i: max(n[i] for n in numbers) - min(n[i] for n in numbers))
+	low = min(range(len(members)), key=lambda j: numbers[j][k])
+	high = max(range(len(members)), key=lambda j: numbers[j][k])
+	return [members[j] for j in sorted({low, high})]
+
+
 def _readout_shape(text: str) -> str | None:
 	"""A readout's shape: its text with every number masked ("0:07" and "0:08" share "#:#"); None without digits."""
 	return re.sub(r'\d+', '#', text) if re.search(r'\d', text) else None
 
 
-def _first_of_each_readout(texts: list[str], shapes: set[str]) -> list[str]:
-	"""Drop the later values of a ticking readout (a clock, a percentage) once its first value is noted: the journal is
-	about what changed on the page, and a clock changing every second is one thing, not one per second."""
+def _numbers(text: str) -> tuple[float, ...]:
+	return tuple(float(n) for n in re.findall(r'\d+(?:\.\d+)?', text))
+
+
+def _journal_worthy(texts: list[str], readouts: dict[str, dict[str, Any]]) -> list[str]:
+	"""Which new texts the journal should note. A readout (a shape that repeats with other numbers) has its first
+	SHORT_SEQUENCE values noted, as a carousel's slides are each content. After that, a counter that only rises (a
+	clock, a loading percentage) is folded away, while a figure that moves both ways is noted at each new high or
+	low: the journal is about what changed, and a dashboard value that peaks for one tick is exactly that."""
 	kept = []
 	for t in texts:
 		shape = _readout_shape(t)
-		if shape is not None:
-			if shape in shapes:
-				continue
-			shapes.add(shape)
-		kept.append(t)
+		if shape is None:
+			kept.append(t)
+			continue
+		value = _numbers(t)
+		r = readouts.get(shape)
+		if r is None:
+			readouts[shape] = {'n': 1, 'lo': value, 'hi': value, 'last': value, 'rising': True}
+			kept.append(t)
+			continue
+		r['n'] += 1
+		r['rising'] = r['rising'] and value >= r['last']
+		new_extreme = value > r['hi'] or value < r['lo']
+		r['hi'], r['lo'], r['last'] = max(r['hi'], value), min(r['lo'], value), value
+		if r['n'] <= SHORT_SEQUENCE or (new_extreme and not r['rising']):
+			kept.append(t)
 	return kept
 
 
@@ -1244,12 +1276,15 @@ def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_
 		t, w, faint = members[0]
 		if len(members) == 1:
 			lines.append(f'    "{t}" ({w - page_since:.1f}s after the page loaded)' + page_text_note(t, faint))
-		else:
-			last, w1, _ = members[-1]
-			lines.append(
-				f'    "{t}" -> "{last}" (a readout changing {len(members)} times, '
-				f'{w - page_since:.1f}s-{w1 - page_since:.1f}s after the page loaded)'
-			)
+			continue
+		w1 = members[-1][1]
+		when = f'{w - page_since:.1f}s-{w1 - page_since:.1f}s after the page loaded'
+		if len(members) <= SHORT_SEQUENCE:  # a carousel's slides, a few steps: each value is content
+			lines.append('    ' + ' -> '.join(f'"{m[0]}"' for m in members) + f' ({when})')
+			continue
+		shown = [members[0], *_extremes(members), members[-1]]
+		kept = [m for k, m in enumerate(shown) if m not in shown[:k]]
+		lines.append('    ' + ' -> '.join(f'"{m[0]}"' for m in kept) + f' (a readout changing {len(members)} times, {when})')
 	more = f'\n    ... {len(groups) - limit} more' if len(groups) > limit else ''
 	return '\n    text that appeared:\n' + '\n'.join(lines) + more
 

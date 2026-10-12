@@ -1212,22 +1212,28 @@ def test_colours_are_named_by_hue_as_people_name_them():
 	assert got == named, {rgb: (got[rgb], want) for rgb, want in named.items() if got[rgb] != want}
 
 
-def test_a_ticking_readout_is_one_line_not_one_per_tick():
-	"""Hands-on on Wikimedia Commons: the player's clock and buffer readout came back as "text that appeared" once per
-	second ("0:01", "0:02", ... "Loaded: 2.72%"), crowding out what actually appeared. Values of one readout share a
-	shape once their digits are masked; each readout is now one line, first value to last."""
+def test_a_ticking_readout_is_one_line_but_keeps_its_peak_and_a_short_sequence_stays_whole():
+	"""Hands-on on Wikimedia Commons: the player's clock came back as "text that appeared" once per second, crowding
+	out what actually appeared. A long-ticking readout is now one line, first value to last, plus the values at its
+	extremes: a dashboard figure that peaks for one tick must keep that peak (eyesbench's ticker). A short sequence
+	(a carousel's five slides) is content, and every value of it stays."""
 	from browser_use.eyes.retina import RetinaEvent
 	from browser_use.eyes.service import _text_lines
 
 	events = [RetinaEvent('state', 0.0, {'doc': 'd1'})]
-	events += [RetinaEvent('text', 10.0 + s, {'text': f'0:0{s}', 'doc': 'd1'}) for s in range(1, 6)]
-	events += [RetinaEvent('text', 10.5 + s, {'text': f'Loaded: {2.0 + s / 10:.2f}%', 'doc': 'd1'}) for s in range(3)]
+	events += [RetinaEvent('text', 10.0 + s, {'text': f'0:{s:02d}', 'doc': 'd1'}) for s in range(1, 13)]
+	load = [41, 43, 42, 44, 97, 45, 43, 42, 44, 41, 43, 42]
+	events += [RetinaEvent('text', 10.1 + i / 4, {'text': f'CPU {v}%', 'doc': 'd1'}) for i, v in enumerate(load)]
+	events += [
+		RetinaEvent('text', 13.0 + i / 2, {'text': f'Code QX-{c}', 'doc': 'd1'})
+		for i, c in enumerate([4711, 8302, 5519, 6604, 7120])
+	]
 	events += [RetinaEvent('text', 12.0, {'text': 'Saved #4242', 'doc': 'd1'})]
 	text = _text_lines(events, since=0.0, page_since=9.0)
-	lines = [line for line in text.splitlines() if line.strip().startswith('"')]
-	assert len(lines) == 3, text
-	assert '"0:01"' in text and '"0:05"' in text and '0:03' not in text, 'a clock: its first and last values only'
-	assert 'changing' in text and '"Saved #4242"' in text, text
+	assert '"0:01"' in text and '"0:12"' in text and '0:05' not in text, 'a clock: its first and last values'
+	assert '"CPU 97%"' in text, f'the one-tick peak survives: {text}'
+	assert all(f'QX-{c}' in text for c in (4711, 8302, 5519, 6604, 7120)), f'every slide of a short sequence: {text}'
+	assert '"Saved #4242"' in text, text
 
 
 async def test_a_look_at_a_page_with_a_paused_video_shows_the_page(eyes, session, site):
@@ -1290,13 +1296,17 @@ async def test_a_player_built_on_click_from_another_origin_is_watched(eyes, sess
 	assert any(len(i.sight.cuts) >= 1 for i in p.items), f'the higher-quality source was not seen: {p.text}'
 
 
-def test_the_journal_notes_a_readout_once_not_every_tick():
-	"""retinat_changes listed a player's clock once per second ("0:09", "0:10", ...). The journal now notes each readout
-	once per page; text without numbers, and a different readout, still come through."""
-	from browser_use.eyes.service import _first_of_each_readout
+def test_the_journal_folds_a_ticking_clock_but_keeps_a_peak_and_every_slide():
+	"""retinat_changes listed a player's clock once per second ("0:09", "0:10", ...). After a readout's first values,
+	a counter that only rises is folded away; a figure that moves both ways is still noted at a new high or low (the
+	one-tick peak eyesbench asks about), and a short sequence (a carousel's slides) is kept whole."""
+	from browser_use.eyes.service import _journal_worthy
 
-	shapes: set[str] = set()
-	first = _first_of_each_readout(['0:09"', '4.09%"', 'Saved"'], shapes)
-	later = _first_of_each_readout(['0:10"', '0:11"', '4.79%"', 'Saved"', 'Loaded: 4.79%"'], shapes)
-	assert first == ['0:09"', '4.09%"', 'Saved"'], first
-	assert later == ['Saved"', 'Loaded: 4.79%"'], later
+	state: dict = {}
+	clock = _journal_worthy([f'0:{s:02d}"' for s in range(1, 21)], state)
+	assert clock == [f'0:{s:02d}"' for s in range(1, 9)], clock
+	load = [41, 43, 42, 44, 40, 45, 43, 42, 44, 97, 43, 42, 39]
+	figures = _journal_worthy([f'CPU {v}%"' for v in load], state)
+	assert 'CPU 97%"' in figures and 'CPU 39%"' in figures and 'CPU 42%"' not in figures[8:], figures
+	slides = _journal_worthy([f'Code QX-{c}"' for c in (4711, 8302, 5519, 6604, 7120)] + ['Saved"'], state)
+	assert len(slides) == 6, slides
