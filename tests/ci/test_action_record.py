@@ -91,6 +91,33 @@ async def test_start_stop_recording_produces_video(browser_session: BrowserSessi
 		reader.close()
 
 
+async def test_a_recording_lasts_as_long_as_it_was_watched_and_ends_on_the_last_page(
+	browser_session: BrowserSession, httpserver, tmp_path: Path
+):
+	"""The screencast sends a frame only when the page repaints. Each one used to become one video frame, so three
+	seconds on a still page played for a fraction of a second, and the picture a navigation left behind was lost.
+	Frames are now written at the set rate from the latest picture."""
+	import numpy as np
+
+	httpserver.expect_request('/magenta').respond_with_data('<body style="background:#f0f">', content_type='text/html')
+	httpserver.expect_request('/teal').respond_with_data('<body style="background:#00807f">', content_type='text/html')
+	watchdog = browser_session._recording_watchdog
+	assert watchdog is not None
+	await browser_session.event_bus.dispatch(NavigateToUrlEvent(url=httpserver.url_for('/magenta'), new_tab=False))
+	await asyncio.sleep(1.0)
+	out = await watchdog.start_recording(tmp_path / 'still.mp4', framerate=10)
+	await asyncio.sleep(1.5)
+	await browser_session.event_bus.dispatch(NavigateToUrlEvent(url=httpserver.url_for('/teal'), new_tab=False))
+	await asyncio.sleep(1.5)
+	await watchdog.stop_recording()
+
+	frames = list(iio.mimread(str(out), memtest=False))
+	assert 24 <= len(frames) <= 45, f'{len(frames)} frames for about 3 s at 10 fps'
+	first, last = frames[0][100, 100].astype(int), frames[-1][100, 100].astype(int)
+	assert np.abs(first - (255, 0, 255)).max() < 40, f'first frame is not the magenta page: {first}'
+	assert np.abs(last - (0, 128, 127)).max() < 40, f'last frame is not the teal page: {last}'
+
+
 async def test_start_recording_twice_raises(browser_session: BrowserSession, tmp_path: Path):
 	watchdog = browser_session._recording_watchdog
 	assert watchdog is not None

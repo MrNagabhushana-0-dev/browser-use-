@@ -25,6 +25,7 @@ class RecordingWatchdog(BaseWatchdog):
 	EMITS: ClassVar[list[type[BaseEvent]]] = []
 
 	_recorder: VideoRecorderService | None = PrivateAttr(default=None)
+	_ticker: asyncio.Task | None = PrivateAttr(default=None)
 	_current_session_id: str | None = PrivateAttr(default=None)
 	_screencast_params: dict[str, Any] | None = PrivateAttr(default=None)
 
@@ -89,7 +90,19 @@ class RecordingWatchdog(BaseWatchdog):
 			'everyNthFrame': 1,
 		}
 		await self._start_screencast()
+		self._ticker = asyncio.create_task(self._tick(recorder), name='video_recorder_tick')
 		return output_path
+
+	async def _tick(self, recorder: VideoRecorderService) -> None:
+		"""Write the latest picture at the frame rate, on a clock rather than per screencast frame, so the video lasts
+		as long as the session did."""
+		loop = asyncio.get_running_loop()
+		period = 1.0 / max(1, recorder.framerate)
+		due = loop.time()
+		while True:
+			recorder.tick()
+			due += period
+			await asyncio.sleep(max(0.0, due - loop.time()))
 
 	async def stop_recording(self) -> Path | None:
 		"""
@@ -102,6 +115,10 @@ class RecordingWatchdog(BaseWatchdog):
 
 		recorder = self._recorder
 		session_id = self._current_session_id
+		if self._ticker is not None:
+			self._ticker.cancel()
+			self._ticker = None
+		recorder.tick()  # the last picture closes the video
 		self._recorder = None
 		self._current_session_id = None
 		self._screencast_params = None

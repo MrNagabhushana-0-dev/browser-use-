@@ -14,6 +14,7 @@ turn at a time:
 - `retinat_explore`: a whole site crawled and checked, with a bug report and a page sheet.
 - `retinat_now`: one line on what is on screen and audible right now.
 - `retinat_console`: what the page logged and threw, masked like the requests.
+- `retinat_record`: a video of what the browser showed, started and stopped by the agent.
 - `retinat_requests`: what the page fetched (status, type, size, time, failures), and one response body,
   with tokens, passwords and keys masked.
 
@@ -482,6 +483,23 @@ def _browser_tools() -> list['types.Tool']:
 			annotations=ro,
 		),
 		types.Tool(
+			name='retinat_record',
+			description=(
+				'Record what the browser shows to a video file, for the person to review what you did (a screen '
+				'recording of the session). action=start begins; action=stop finishes the file and returns its path. '
+				'Files go to $BROWSER_USE_RECORD_VIDEO_DIR, else ~/.config/browseruse/recordings. It changes nothing on the page.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'action': {'type': 'string', 'enum': ['start', 'stop']},
+					'framerate': {'type': 'integer', 'default': 8, 'minimum': 1, 'maximum': 30},
+				},
+				'required': ['action'],
+			},
+			annotations=ro,
+		),
+		types.Tool(
 			name='retinat_now',
 			description='One line on what is on screen and audible right now. No image; nearly free.',
 			input_schema={'type': 'object', 'properties': {}},
@@ -680,6 +698,8 @@ class RetinatServer(BrowserUseServer):
 			if sheet:
 				blocks.append(types.ImageContent(type='image', data=base64.b64encode(sheet).decode(), mime_type='image/jpeg'))
 			return blocks
+		if name == 'retinat_record':
+			return await self._record(str(args['action']), int(args.get('framerate', 8)))
 		eyes = await self._eyes()
 		if name == 'retinat_console':
 			from browser_use.eyes.console import render as render_console
@@ -802,6 +822,34 @@ class RetinatServer(BrowserUseServer):
 			await eyes.retina.wait_for_data(1.0)
 			return eyes.now_line()
 		raise Refused(f'Unknown tool: {name}')
+
+	async def _record(self, action: str, framerate: int) -> str:
+		"""Start or finish a screencast video of the browser. The session's own recording only closes its file when the
+		browser stops, which an MCP server's browser never does while the agent works."""
+		import time
+		from pathlib import Path
+
+		from browser_use.config import CONFIG
+		from browser_use.mcp.effects import Refused
+
+		assert action in ('start', 'stop'), action
+		assert self.browser_session is not None
+		recorder = self.browser_session._recording_watchdog
+		if recorder is None:
+			raise Refused('this browser session has no recorder')
+		if action == 'stop':
+			saved = await recorder.stop_recording()
+			if saved is None:
+				raise Refused('no recording is running: start one with action=start')
+			size = Path(saved).stat().st_size if Path(saved).exists() else 0
+			return f'Saved the recording: {saved} ({size / 1e6:.1f} MB).'
+		folder = Path(os.environ.get('BROWSER_USE_RECORD_VIDEO_DIR') or CONFIG.BROWSER_USE_CONFIG_DIR / 'recordings').expanduser()
+		folder.mkdir(parents=True, exist_ok=True)
+		try:
+			out = await recorder.start_recording(folder / f'retinat-{time.strftime("%Y%m%d-%H%M%S")}.mp4', framerate=framerate)
+		except RuntimeError as e:  # one already running, or no viewport yet
+			raise Refused(str(e)) from e
+		return f'Recording to {out} at {framerate} fps. Call retinat_record with action=stop to finish the file.'
 
 	async def _close_all_sessions(self) -> str:
 		if self._control is not None:

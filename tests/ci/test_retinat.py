@@ -403,3 +403,31 @@ async def test_console_shows_what_the_page_logged_and_threw_with_secrets_masked(
 	assert 'slow response' not in errors
 	cart = _text(await _call(retinat, 'retinat_console', {'pattern': 'cart'}))
 	assert 'cart is undefined' in cart and 'slow response from the cart' in cart and 'payment failed' not in cart, cart
+
+
+async def test_record_saves_a_video_of_what_the_browser_showed(retinat, site, tmp_path, monkeypatch):
+	"""After Claude in Chrome's gif_creator: the agent records its session for the person to review. Start, act, stop:
+	a finished video file whose frames show the pages changing. An MCP server keeps its browser open, so a recording
+	that only closed with the browser was never playable."""
+	import asyncio
+	from pathlib import Path
+
+	import imageio.v3 as iio
+	import numpy as np
+
+	monkeypatch.setenv('BROWSER_USE_RECORD_VIDEO_DIR', str(tmp_path / 'videos'))
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/')})
+	started = _text(await _call(retinat, 'retinat_record', {'action': 'start', 'framerate': 5}))
+	assert 'Recording to' in started, started
+	await asyncio.sleep(1.5)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/find')})
+	await asyncio.sleep(1.5)
+	saved = _text(await _call(retinat, 'retinat_record', {'action': 'stop'}))
+	path = Path(saved.split('Saved the recording: ')[1].split(' (')[0])
+	assert path.parent == tmp_path / 'videos' and path.stat().st_size > 1000, saved
+	frames = list(iio.imiter(path))
+	assert len(frames) >= 4, f'{len(frames)} frames'
+	change = float(np.abs(frames[0].astype(int) - frames[-1].astype(int)).mean())
+	assert change > 1.0, f'the first and last frames are the same page ({change:.2f})'
+	again = await _call(retinat, 'retinat_record', {'action': 'stop'})
+	assert again.is_error and 'no recording is running' in _text(again), _text(again)

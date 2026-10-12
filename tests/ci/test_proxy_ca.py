@@ -127,6 +127,24 @@ async def test_an_untrusted_proxy_ca_fails_with_the_fix_in_the_message(https_sit
 		await session.kill()
 
 
+def test_a_setting_that_points_at_nothing_still_explains_the_error(tmp_path, monkeypatch, a_certificate):
+	"""A CA path that is missing (a config shared between machines) or a whole trust bundle trusts nothing. The
+	error used to go quiet whenever the setting was present; it must say the file gave no certificate."""
+	from browser_use.browser.session import _certificate_hint
+
+	monkeypatch.setenv('SSL_CERT_FILE', str(a_certificate))
+	error = 'net::ERR_CERT_AUTHORITY_INVALID'
+	missing = tmp_path / 'not-here.crt'
+	hint = _certificate_hint(error, BrowserProfile(proxy_ca_cert=str(missing), user_data_dir=None))
+	assert str(missing) in hint and 'no readable certificate' in hint, hint
+	bundle = tmp_path / 'bundle.crt'
+	bundle.write_text(a_certificate.read_text() * (MAX_PROXY_CA_CERTS + 1))
+	assert 'no readable certificate' in _certificate_hint(error, BrowserProfile(proxy_ca_cert=str(bundle), user_data_dir=None))
+	assert _certificate_hint(error, BrowserProfile(proxy_ca_cert=str(a_certificate), user_data_dir=None)) == '', (
+		'a CA that pins is in effect: the hint would mislead'
+	)
+
+
 async def test_the_named_setting_then_opens_the_page(https_site, a_certificate):
 	from browser_use.browser import BrowserSession
 

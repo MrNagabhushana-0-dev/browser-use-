@@ -53,6 +53,7 @@ class VideoRecorderService:
 		self._writer: Optional['Format.Writer'] = None
 		self._is_active = False
 		self.padded_size = _get_padded_size(self.size)
+		self._latest: 'np.ndarray | None' = None  # the newest picture; tick() writes it at the frame rate
 
 	def start(self) -> None:
 		"""
@@ -86,8 +87,9 @@ class VideoRecorderService:
 
 	def add_frame(self, frame_data_b64: str) -> None:
 		"""
-		Decodes a base64-encoded PNG frame, resizes it, pads it to be codec-compatible,
-		and appends it to the video.
+		Decodes a base64-encoded PNG frame, resizes it and pads it to be codec-compatible, and keeps it as the latest
+		picture. Nothing is written here: a screencast sends a frame only when the page repaints, so writing each one
+		as one video frame squeezed a still page into a few frames. tick() writes the latest picture at the frame rate.
 
 		Args:
 		    frame_data_b64: A base64-encoded string of the PNG frame data.
@@ -116,11 +118,18 @@ class VideoRecorderService:
 					img = new_img
 
 				# 3. Convert to numpy array for imageio
-				img_array = np.array(img)
-
-			self._writer.append_data(img_array)
+				self._latest = np.array(img.convert('RGB'))
 		except Exception as e:
 			logger.warning(f'Could not process and add video frame: {e}')
+
+	def tick(self) -> None:
+		"""Write the latest picture as the next video frame (the same one again while the page is still)."""
+		if not self._is_active or not self._writer or self._latest is None:
+			return
+		try:
+			self._writer.append_data(self._latest)
+		except Exception as e:
+			logger.warning(f'Could not write video frame: {e}')
 
 	def stop_and_save(self) -> None:
 		"""

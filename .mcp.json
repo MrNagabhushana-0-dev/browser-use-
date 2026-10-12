@@ -2,11 +2,13 @@
 	"mcpServers": {
 		"retinat": {
 			"command": "uv",
-			"args": ["run", "python", "-m", "browser_use.retinat"]
+			"args": ["run", "python", "-m", "browser_use.retinat"],
+			"env": {"BROWSER_USE_PROXY_CA_CERT": "${BROWSER_USE_PROXY_CA_CERT:-/root/.ccr/agent-proxy-ca.crt}"}
 		},
 		"browser-use": {
 			"command": "uv",
-			"args": ["run", "python", "-m", "browser_use.mcp"]
+			"args": ["run", "python", "-m", "browser_use.mcp"],
+			"env": {"BROWSER_USE_PROXY_CA_CERT": "${BROWSER_USE_PROXY_CA_CERT:-/root/.ccr/agent-proxy-ca.crt}"}
 		}
 	}
 }

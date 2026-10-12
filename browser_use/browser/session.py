@@ -147,8 +147,17 @@ def _certificate_hint(error_text: str, profile: 'BrowserProfile') -> str:
 	CA cannot be picked out of the bundle automatically without risking trusting public CAs with
 	verification off, so name the knob instead.
 	"""
-	if 'ERR_CERT_AUTHORITY_INVALID' not in error_text or profile.proxy_ca_cert:
+	if 'ERR_CERT_AUTHORITY_INVALID' not in error_text:
 		return ''
+	if profile.proxy_ca_cert:
+		from browser_use.browser.profile import proxy_ca_pins
+
+		if proxy_ca_pins(profile.proxy_ca_cert):
+			return ''  # a proxy CA is trusted, so this chain is someone else's: the raw error says it
+		return (
+			f' - the proxy CA setting points at {profile.proxy_ca_cert}, which holds no readable certificate (a missing '
+			"file, or a whole trust bundle), so nothing was trusted. Point it at the PEM of the proxy's own CA."
+		)
 	bundles = [v for v in ('SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS', 'CURL_CA_BUNDLE') if os.environ.get(v)]
 	proxied = bool(os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy'))
 	if not bundles and not proxied:
