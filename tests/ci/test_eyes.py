@@ -1310,3 +1310,33 @@ def test_the_journal_folds_a_ticking_clock_but_keeps_a_peak_and_every_slide():
 	assert 'CPU 97%"' in figures and 'CPU 39%"' in figures and 'CPU 42%"' not in figures[8:], figures
 	slides = _journal_worthy([f'Code QX-{c}"' for c in (4711, 8302, 5519, 6604, 7120)] + ['Saved"'], state)
 	assert len(slides) == 6, slides
+
+
+async def test_page_content_filling_in_as_it_loads_is_one_line_and_a_later_toast_stays_its_own(eyes, session, site):
+	"""Hands-on on Wikimedia Commons: eight blocks of the page's own content, rendered by script while it loaded, came
+	back one by one as "text that appeared", next to (and longer than) what actually appeared later. Text arriving
+	before the page's load event is the page filling in: one line; a toast after it is still its own line."""
+	import time as _time
+
+	def slow_image(request):
+		_time.sleep(1.2)  # holds the load event open while the script fills the page in
+		return Response(b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;', content_type='image/gif')
+
+	site.expect_request('/slow.gif').respond_with_handler(slow_image)
+	page = (
+		'<!doctype html><body style="font:16px sans-serif"><main id="m"></main><img src="/slow.gif">'
+		'<script>document.addEventListener("DOMContentLoaded", () => { for (let i = 1; i <= 6; i++) setTimeout(() => {'
+		' const p = document.createElement("p"); p.textContent = "Section " + i + " of the article, filled in by script";'
+		' document.getElementById("m").appendChild(p); }, i * 80); });'
+		'addEventListener("load", () => setTimeout(() => { const t = document.createElement("div");'
+		' t.textContent = "Saved #4242"; t.style = "position:fixed;top:10px;right:10px"; document.body.appendChild(t); }, 900));'
+		'</script></body>'
+	)
+	site.expect_request('/filling-in').respond_with_data(page, content_type='text/html')
+	await eyes.open()  # as retinat_open does: the eyes are on before the page starts, and see it fill in
+	await session.navigate_to(site.url_for('/filling-in'))
+	await asyncio.sleep(2.5)
+	p = await eyes.look()
+	lines = [line for line in p.text.splitlines() if 'Section' in line]
+	assert len(lines) == 1 and 'filled in as it loaded' in lines[0] and '6 blocks' in lines[0], p.text
+	assert '"Saved #4242"' in p.text, f'a toast after the load is still its own line: {p.text}'

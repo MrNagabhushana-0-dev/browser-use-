@@ -133,6 +133,7 @@ class Eyes:
 		self._journaled: dict[str, Any] = {}
 		self._pending_text: list[str] = []  # text that appeared since the last journal write
 		self._readouts: dict[str, dict[str, Any]] = {}  # readouts (clocks, figures) seen on this page, for the journal
+		self._filled_in = 0  # blocks of the page's own text rendered while it loaded, since the last journal entry
 		# Keyframes copied to disk as they are taken, so recall reaches past the page's ring.
 		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
 		self._archiver: asyncio.Task | None = None
@@ -1008,6 +1009,9 @@ class Eyes:
 			self._readouts = {}  # a new page: its readouts are new
 		self._journaled = {**last, **{k: f.get(k) for k in ('url', 'vid', 'sound', 'paused')}}
 		texts, self._pending_text = _journal_worthy(self._pending_text, self._readouts), []
+		if self._filled_in:
+			entries.append(('text', f'the page filled in {self._filled_in} block(s) of its own text as it loaded'))
+			self._filled_in = 0
 		entries += [('text', f'text appeared: "{t}') for t in texts]  # each already closes its quote and carries its note
 		if entries:
 			self._append_journal(entries, vid, t)
@@ -1028,8 +1032,9 @@ class Eyes:
 		self._pending_text += [
 			str(e.data['text'])[:160] + '"' + page_text_note(str(e.data['text']), bool(e.data.get('faint')))
 			for e in events
-			if e.type == 'text' and e.data.get('text')
+			if e.type == 'text' and e.data.get('text') and not (e.data.get('loading') and not e.data.get('faint'))
 		]
+		self._filled_in += sum(1 for e in events if e.type == 'text' and e.data.get('loading') and not e.data.get('faint'))
 		now = time.monotonic()
 		if self.now_path is None or now - self._last_now < 1.0:
 			return
@@ -1258,14 +1263,24 @@ def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_
 	docs = [e.data['doc'] for e in events if e.type == 'state' and e.data.get('doc')]
 	current = docs[-1] if docs else None
 	seen: dict[str, tuple[float, bool]] = {}
+	filled: dict[str, float] = {}  # the page's own content, rendered by script while it loaded
 	for e in events:
 		doc = e.data.get('doc')
 		if current and doc and doc != current and (fresh_from is None or e.wall < fresh_from):
 			continue
 		if e.type == 'text' and e.wall >= since and e.data.get('text'):
-			seen.setdefault(' '.join(str(e.data['text']).split())[:240], (e.wall, bool(e.data.get('faint'))))
+			text = ' '.join(str(e.data['text']).split())[:240]
+			if e.data.get('loading') and not e.data.get('faint'):
+				filled.setdefault(text, e.wall)
+			else:
+				seen.setdefault(text, (e.wall, bool(e.data.get('faint'))))
+	head = ''
+	if filled:
+		shown = ', '.join(f'"{t[:60]}{"..." if len(t) > 60 else ""}"' for t in list(filled)[:3])
+		more = ', ...' if len(filled) > 3 else ''
+		head = f'\n    page content filled in as it loaded: {len(filled)} block{"s" if len(filled) != 1 else ""} ({shown}{more})'
 	if not seen:
-		return ''
+		return head
 	# A readout that ticks (a player's clock, a buffer percentage, a countdown) is one thing changing, not new text
 	# each second: values of one readout share a shape once their digits are masked.
 	groups: dict[str, list[tuple[str, float, bool]]] = {}
@@ -1286,7 +1301,7 @@ def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_
 		kept = [m for k, m in enumerate(shown) if m not in shown[:k]]
 		lines.append('    ' + ' -> '.join(f'"{m[0]}"' for m in kept) + f' (a readout changing {len(members)} times, {when})')
 	more = f'\n    ... {len(groups) - limit} more' if len(groups) > limit else ''
-	return '\n    text that appeared:\n' + '\n'.join(lines) + more
+	return head + '\n    text that appeared:\n' + '\n'.join(lines) + more
 
 
 def _moved_on(frames: list[FrameSample]) -> bool:

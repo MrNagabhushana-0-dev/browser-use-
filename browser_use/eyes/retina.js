@@ -589,9 +589,16 @@ registerProcessor('retina-ear', RetinaEar);
 		if (now - (lastText.get(text) || -1e9) < 1000) return;
 		lastText.set(text, now);
 		const faint = contrast(el) < 1.5;
-		R.events.push(Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}));
+		R.events.push(
+			Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}, stillLoading(now) ? { loading: true } : {})
+		);
 	};
 	let textReady = false; // false while the page is still being parsed: its own content has not "appeared"
+	// The page is still filling itself in until its load event (and a moment after): text that arrives then is the
+	// page's own content rendered by script, not something that appeared on a page already there.
+	let loadedAt = document.readyState === 'complete' ? -1e9 : null;
+	addEventListener('load', () => (loadedAt = performance.now()), { once: true });
+	const stillLoading = (now) => loadedAt === null || now - loadedAt < 300;
 	const watchText = () => {
 		if (textObserver) return;
 		// Observe the document node itself: it exists from the first instant, before <html> and <body> (the retina
