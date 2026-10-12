@@ -590,7 +590,7 @@ registerProcessor('retina-ear', RetinaEar);
 		lastText.set(text, now);
 		const faint = contrast(el) < 1.5;
 		R.events.push(
-			Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}, stillLoading(now, added) ? { loading: true } : {})
+			Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}, stillLoading(now, added, el, text) ? { loading: true } : {})
 		);
 	};
 	let textReady = false; // false while the page is still being parsed: its own content has not "appeared"
@@ -603,14 +603,25 @@ registerProcessor('retina-ear', RetinaEar);
 	let lastFill = loadedAt === null ? null : -1e9;
 	let settled = loadedAt !== null;
 	addEventListener('load', () => (loadedAt = lastFill = performance.now()), { once: true });
-	const stillLoading = (now, added) => {
+	// Only content-like text fills a page in after its load: a new block of some length in the page's flow. Short
+	// text, and anything positioned over the page or in a live region (a toast, an alert, a status line), is news
+	// however soon it comes.
+	const overlay = (el) => {
+		for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+			if (/^(alert|status|log|alertdialog)$/.test(n.getAttribute('role') || '') || n.hasAttribute('aria-live')) return true;
+			if (/^(fixed|absolute|sticky)$/.test(getComputedStyle(n).position)) return true;
+		}
+		return false;
+	};
+	const stillLoading = (now, added, el, text) => {
 		if (loadedAt === null) return true;
 		if (settled) return false;
 		if (now - lastFill > 800) {
 			settled = true;
 			return false;
 		}
-		if (added) lastFill = now;
+		if (!added || text.length < 40 || overlay(el)) return false;
+		lastFill = now;
 		return true;
 	};
 	const watchText = () => {
