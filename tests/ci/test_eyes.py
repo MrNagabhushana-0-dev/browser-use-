@@ -1261,3 +1261,30 @@ async def test_find_finds_an_icon_only_control_by_its_name(eyes, session, site):
 	assert 'img named "Company logo"' in logo.text, logo.text
 	words = await eyes.find('playing')
 	assert 'Some text about playing' in words.text and 'named' not in words.text, 'visible text still matches as text'
+
+
+async def test_a_player_built_on_click_from_another_origin_is_watched(eyes, session, site, elsewhere):
+	"""Wikimedia Commons, as found hands-on: an empty placeholder <video> on the page; a click builds a dialog with a
+	new <video> streaming from another origin without CORS, sized once its metadata is in, and switched to a higher
+	quality a moment later (as Video.js does). Each source is a new item; the eyes saw none, because taint was kept per
+	element and the second source was never reported. Every item must be seen, through the compositor."""
+	page = (
+		'<!doctype html><body style="margin:0;background:#fff;font:16px sans-serif">'
+		'<video id="poster" style="width:400px;height:225px;background:#333"></video>'
+		'<button id="play" style="position:absolute;left:160px;top:90px;width:80px;height:44px">Play</button>'
+		'<script>document.getElementById("play").onclick = () => {'
+		' const d = document.createElement("div"); d.style = "position:fixed;left:60px;top:40px;width:900px;height:520px;background:#000";'
+		' const v = document.createElement("video"); v.style = "width:0;height:0"; v.playsInline = true;'
+		' v.addEventListener("loadedmetadata", () => setTimeout(() => { v.style = "width:900px;height:506px"; }, 400), {once: true});'
+		f' setTimeout(() => {{ v.src = "{elsewhere.url_for("/calib.webm")}?quality=1080"; v.play(); }}, 1500);'
+		f' v.src = "{elsewhere.url_for("/calib.webm")}"; d.appendChild(v); document.body.appendChild(d); v.play(); }};</script></body>'
+	)
+	site.expect_request('/dialog-player').respond_with_data(page, content_type='text/html')
+	await _open(eyes, session, site.url_for('/dialog-player'))
+	cdp = await session.get_or_create_cdp_session(focus=False)
+	await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'document.getElementById("play").click()'}, session_id=cdp.session_id
+	)
+	p = await eyes.watch(seconds=2 * SECTION + 1.5, until='time')
+	assert p.items and all(i.tainted for i in p.items), p.text
+	assert any(len(i.sight.cuts) >= 1 for i in p.items), f'the higher-quality source was not seen: {p.text}'

@@ -181,6 +181,9 @@
 		const v = pick();
 		const src = v ? (isCanvas(v) ? 'canvas' : srcOf(v)) : '';
 		if (v === R.attended && src === R.attendedSrc) return;
+		// Taint belongs to a source, not an element: a player that switches quality gives the same <video> a new
+		// source, which must be tested (and reported) afresh, or the new item is never seen at all.
+		if (v && src !== R.attendedSrc) R.tainted.delete(v);
 		R.attended = v;
 		R.attendedSrc = src;
 		// Coming back to something already watched (scrolling up, correcting an overshoot) is
