@@ -28,6 +28,9 @@ class RecordingWatchdog(BaseWatchdog):
 	_ticker: asyncio.Task | None = PrivateAttr(default=None)
 	_current_session_id: str | None = PrivateAttr(default=None)
 	_screencast_params: dict[str, Any] | None = PrivateAttr(default=None)
+	# The newest screencast frame as sent (base64): a view that joins this stream starts from it, since a still page
+	# sends no further frame
+	latest_frame: str | None = None
 
 	async def on_BrowserConnectedEvent(self, event: BrowserConnectedEvent) -> None:
 		"""
@@ -121,6 +124,7 @@ class RecordingWatchdog(BaseWatchdog):
 		recorder.tick()  # the last picture closes the video
 		self._recorder = None
 		self._current_session_id = None
+		self.latest_frame = None
 		self._screencast_params = None
 
 		if session_id:
@@ -212,6 +216,7 @@ class RecordingWatchdog(BaseWatchdog):
 
 		if not self._recorder:
 			return
+		self.latest_frame = event['data']
 		self._recorder.add_frame(event['data'])
 		create_task_with_error_handling(
 			self._ack_screencast_frame(event, session_id),

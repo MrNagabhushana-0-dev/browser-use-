@@ -136,6 +136,7 @@ class LiveView:
 		# someone else's (the video recorder's) rather than ours to start and stop.
 		self._incumbent = None
 		self._shared = False
+		self._max_width, self._quality = 640, 60
 		# Bound once. `self._on_frame` builds a fresh bound method on every attribute access,
 		# so `self._on_frame is self._on_frame` is False and an identity check against the
 		# registry would never match — which silently skipped the unregister on stop.
@@ -179,6 +180,11 @@ class LiveView:
 		recorder = getattr(self.browser_session, '_recording_watchdog', None)
 		self._shared = bool(recorder is not None and recorder.is_recording)
 		self.browser_session.cdp_client.register.Page.screencastFrame(self._handler)
+		self._max_width, self._quality = max_width, quality
+		if self._shared and recorder is not None and recorder.latest_frame:
+			# A still page sends nothing more, so a view joining the recorder's stream starts from its newest frame
+			data = base64.b64decode(recorder.latest_frame)
+			self._frames.append(Frame(at=0.0, data=data, signature=frame_signature(data)))
 		if not self._shared:
 			await cdp.cdp_client.send.Page.startScreencast(
 				params={
@@ -191,6 +197,29 @@ class LiveView:
 			)
 		self._running = True
 		self.logger.debug(f'🎥 Live view started on {cdp.target_id[-4:]}')
+
+	def fit(self, data: bytes) -> bytes:
+		"""A frame as this view asked for it: JPEG, no wider than its max_width. Frames from a stream this view shares
+		(the video recorder's: the whole viewport, as PNG) are shrunk here, when one is used, not as each arrives."""
+		if not self._shared:
+			return data
+		try:
+			from PIL import Image
+
+			with Image.open(BytesIO(data)) as img:
+				if img.format == 'JPEG' and img.width <= self._max_width:
+					return data
+				img = img.convert('RGB')
+				if img.width > self._max_width:
+					img = img.resize(
+						(self._max_width, max(1, round(img.height * self._max_width / img.width))), Image.Resampling.BILINEAR
+					)
+				out = BytesIO()
+				img.save(out, format='JPEG', quality=self._quality)
+				return out.getvalue()
+		except Exception as e:
+			self.logger.debug(f'🎥 Could not fit a shared frame: {type(e).__name__}: {e}')
+			return data
 
 	@property
 	def _registry(self):

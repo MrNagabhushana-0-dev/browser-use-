@@ -1382,3 +1382,20 @@ async def test_a_film_page_names_its_video_by_the_page_not_by_the_player_badges(
 	assert eyes.journal_path is not None
 	watching = [e['text'] for e in map(json.loads, eyes.journal_path.read_text().splitlines()) if e['kind'] == 'item']
 	assert watching and 'File:Calibration film.webm' in watching[0], watching
+
+
+async def test_a_look_during_a_recording_costs_what_a_look_costs(eyes, session, site, tmp_path):
+	"""Found at retinat_record's first live use: while a recording ran, a look sent the recorder's own frame, the
+	whole viewport as PNG (1920x1080, ~2,700 tokens where a look is ~330). The eyes share the recorder's stream, so
+	the recording is not cut short, and fit what they send to their own size."""
+	await _open(eyes, session, site.url_for('/none'))
+	recorder = session._recording_watchdog
+	assert recorder is not None
+	await recorder.start_recording(tmp_path / 'during.mp4', framerate=5)
+	try:
+		p = await eyes.look()
+	finally:
+		saved = await recorder.stop_recording()
+	assert p.image is not None and p.image_size[0] <= 640, f'{p.image_size}: {p.text}'
+	assert p.image[:3] == b'\xff\xd8\xff', 'sent as JPEG, as a look always is'
+	assert saved is not None and saved.stat().st_size > 0, 'the recording is whole'
