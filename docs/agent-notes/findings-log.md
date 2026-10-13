@@ -3099,7 +3099,21 @@ passed 36/36 inside it. There were 3 stalls, the longest 1.5 s.
 
 ## Round 56 (owner's request, then the unattended loop): reflexes, sight through the compositor, and hands-on use
 
-**Full `tests/ci` on `65f798c`:** running; the result is added when it ends.
+**Full `tests/ci` runs this round, stated plainly:**
+- **`9a3d6a1`: died part-way** (925 passed, 0 failed). A desktop-control X error exited the process; fixed in
+  `65f798c`.
+- **`65f798c`: red.** It stopped at the first failure, `test_eyes.py::test_browse_watches_each_reel_once...[/feed]`,
+  after 1,027 passed.
+  - The run overlapped a hands-on session.
+  - Alone on HEAD the test passed 18 of 19 runs; on `6eb147c`, 6 of 6. It is load-sensitive, and I have not
+    shown whether today's changes raised its failure rate. It stays open.
+- **`aec0d20`, on a quiet machine: red at one test.** 1,424 passed, 29 skipped, then 1 failed,
+  `test_screenrec.py::test_a_recording_is_finalized_into_a_playable_file`.
+  - The test files from `test_screenrec.py` on, run next on the same commit: 264 passed, 1 skipped.
+  - So all of `tests/ci` ran on `aec0d20`: 1,688 passed, 30 skipped, and that one failure, which passed on the rerun.
+  - Root cause and fix: `409482f` (below). The screen-recorder file passes 6/6 on it, three runs.
+- **Leftovers:** the crashed run had left 4 test browsers and an Xvfb running for 35 minutes. They were killed by PID
+  before the quiet run.
 
 PR #11. The owner asked for a real-time perception stream rather than screenshot tools. Each item here was found by
 driving a real browser through the Retinat MCP tools, or measured that way. Hands-on notes and recordings are in
@@ -3164,6 +3178,14 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
     change.
 - **`find`'s crop of a large match is shrunk to fit 720x300** (`7844340`): ~665 tokens for an 800x450 player before.
 - **`see.track`** (`7844340`): `locate` plus velocity in px/s, so rules need not guess a game's speed.
+- **What a block says is said once** (`aec0d20`): Wikipedia's Appearance panel, built by script after load, was
+  reported once per nesting level. Changed blocks are now reported outermost first.
+- **A screen recording ended early is not empty** (`409482f`):
+  - ffmpeg probes x11grab for ~2 s, keeping what it reads, before it sets up its output. Its first `-progress`
+    report says frame=0 at 2.06 s, then frame=25 at 2.66 s.
+  - A `q` before that writes nothing. The end of a recording now waits for the first report.
+  - The new test fails every time on the old code, with the full run's exact error.
+  - My first attempt (`680e33c`) waited at the start and made every recording ~2 s longer. It was replaced.
 - **A desktop-control X error is no longer fatal** (`65f798c`). The full run on `9a3d6a1` died part-way, after 925
   passed and 0 failed: a window closed between listing and reading it, Xlib answered BadWindow, and its default
   error handler exited the process. The MCP server would have died the same way. A process-wide handler now makes
@@ -3184,8 +3206,13 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
   call a transition when the sum crosses the cut threshold while no single frame does. That fits the 16x16 luma
   frames the retina already sends.
 
+**Checked live after the fixes** (`docs/hands-on/2026-10-13/`):
+- **The Commons film:** named "Big Buck Bunny 4K.webm", 1920x1080, 10:34.6. Its title card is its own shot
+  (labelled `cut->`: at 6 fps the dissolve is a few large steps). 5 correct keyframes, ~767 tokens for 30 s.
+- **`find "play video"` on the player:** ~231 tokens (was ~665).
+
 **Next, in order:**
-1. Check the fade detector live on the Commons film: its title card should now be its own shot.
+1. The intermittent feed test (`browse ...[/feed]`): find what makes the first flick not land under load.
 2. Play the T-Rex runner again with `see.track` and a region scaled by the measured speed, recorded.
 3. Reflexes on cross-origin video: the compositor path is Python-side at 6 fps; per-frame reads need a page-side
    source.
