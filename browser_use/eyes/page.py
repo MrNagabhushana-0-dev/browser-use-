@@ -158,7 +158,9 @@ class PageWatcher:
 			frames = self.live.frames if self.live else []
 			y = float(await self._eval('scrollY') or 0)
 			for f in frames[seen:]:
-				captured.append(PageFrame(time.monotonic() - started, y, f.data))
+				# Where Chrome drew the frame, not where the page is now: frames from mid-scroll were labelled with
+				# where it ended up (found on the Guardian: two frames "6.4 screens down" with different stories)
+				captured.append(PageFrame(time.monotonic() - started, f.scroll_y if f.scroll_y is not None else y, f.data))
 			seen = len(frames)
 
 		screens = 0

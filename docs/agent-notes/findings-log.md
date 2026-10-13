@@ -3346,9 +3346,13 @@ The retina now runs in the top frame only (test first; eyes 69/69; checked live)
 
 **Full `tests/ci` on `13e8b2b`: 1,700 passed, 31 skipped, 0 failed** (35m54s; the play-arena test passed).
 
+**Scan labels fixed** (test first). On a page of six solid bands, 18 of 50 scan frames showed another band than
+their label said. Each live frame now keeps Chrome's own `scrollOffsetY`, and the scan labels by it: 0 wrong.
+Eyes, live view, vision, arena and Retinat files: 129 passed, 1 failed (the feed test, the known intermittent; it
+then passed 3 of 3 alone).
+
 **Next, in order:**
-1. The scan: label frames with the screencast's own scroll offset, and say when a fixed banner covers much of every
-   frame.
+1. The scan: say when a fixed banner covers much of every frame (the Guardian's "Who pays" banner: ~40%).
 2. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
    its CC-BY transcode, but the Wikimedia API answered 429 (rate limited, shared address); not retried. Try later at
    a low rate.

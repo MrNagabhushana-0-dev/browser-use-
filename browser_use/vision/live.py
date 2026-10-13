@@ -89,6 +89,7 @@ class Frame:
 	at: float  # seconds since the watch began
 	data: bytes = field(repr=False)
 	signature: bytes = field(default=b'', repr=False)
+	scroll_y: float | None = None  # where the page was scrolled when Chrome drew it (CSS px), from the frame itself
 
 	def to_base64(self) -> str:
 		return base64.b64encode(self.data).decode()
@@ -307,7 +308,15 @@ class LiveView:
 			data = base64.b64decode(event['data'])
 		except Exception:
 			return
-		self._frames.append(Frame(at=time.monotonic() - self._started_at, data=data, signature=frame_signature(data)))
+		scroll_y = (event.get('metadata') or {}).get('scrollOffsetY')
+		self._frames.append(
+			Frame(
+				at=time.monotonic() - self._started_at,
+				data=data,
+				signature=frame_signature(data),
+				scroll_y=float(scroll_y) if isinstance(scroll_y, int | float) else None,
+			)
+		)
 		if self._shared:
 			# The recorder owns this stream and does its own acking; a second ack would ask
 			# Chrome for frames it has already queued.

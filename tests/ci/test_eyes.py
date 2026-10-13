@@ -1060,6 +1060,36 @@ async def test_scan_covers_the_whole_page_and_notices_what_moves_on_its_own(eyes
 	)
 
 
+BANDS_PAGE = (
+	'<!doctype html><style>body{margin:0} div{height:100vh}</style><body>'
+	+ ''.join(f'<div style="background:{c}"></div>' for c in ('#f00', '#0f0', '#00f', '#ff0', '#0ff', '#f0f'))
+	+ '</body>'
+)
+BAND_COLOURS = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)]
+
+
+async def test_a_scan_labels_each_frame_with_where_it_was_scrolled(eyes, session, site):
+	"""Found hands-on on the Guardian's front page: two frames of a scan were both "6.4 screens down" with different
+	stories in them. Frames taken while the page was still scrolling were labelled with where it ended up. Each frame
+	now carries the scroll offset Chrome drew it at."""
+	site.expect_request('/bands').respond_with_data(BANDS_PAGE, content_type='text/html')
+	await _open(eyes, session, site.url_for('/bands'))
+	scan = await eyes._page_watcher().scan(max_screens=6, dwell_s=0.4, keyframes=4)
+	vh = scan.viewport[1]
+	assert vh > 0 and len(scan.frames) > 6, (scan.viewport, len(scan.frames))
+	wrong = []
+	for frame in scan.frames:
+		centre = frame.scroll_y + vh / 2
+		if abs(centre / vh - round(centre / vh)) < 0.05:
+			continue  # a band boundary runs through the middle: no single colour to expect
+		expected = BAND_COLOURS[min(5, int(centre // vh))]
+		with Image.open(io.BytesIO(frame.jpeg)) as img:
+			got = img.convert('RGB').getpixel((img.width // 2, img.height // 2))
+		if sum(abs(a - b) for a, b in zip(got, expected)) > 90:
+			wrong.append((round(frame.scroll_y / vh, 2), got))
+	assert not wrong, f'{len(wrong)} of {len(scan.frames)} frames show another band than their label says: {wrong[:5]}'
+
+
 # -- recall: the model pulls frames by time instead of only receiving a pushed sheet -------------
 
 
