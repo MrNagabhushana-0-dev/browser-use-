@@ -522,3 +522,21 @@ second into playback, which caused false cuts in 3-4 of 10 plays.
   9.41 and 9.93 s; those were probably the same leaked captures, but that is a likely reading, not proven. The lag,
   0.13-0.18 s of video, is longer than in the test (19-27 ms): pictures were 44.6 ms old at the median on this busy
   page (521 from the screencast).
+
+## Evening: what the crop path costs
+
+Measured through the library on a local page with a 1080p test-pattern video and a CSS animation, a capture of the
+video's box at 320 px wide, 30 of each at 6 a second:
+
+| Capture | p50 | p90 |
+|---|---|---|
+| clipped, as before `859df30` (leaks into the screencast) | 32 ms | 35 ms |
+| cropped from a viewport capture (`859df30`) | 98-100 ms | 106-110 ms |
+| cropped, decoding the JPEG at reduced size (`draft`) | 84-94 ms | 97-104 ms |
+
+- **Where the time goes:** Chrome's capture of the whole 1920x1080 viewport takes 93-101 ms at any JPEG quality,
+  and 92 ms with `optimizeForSpeed`. Decoding and cropping in Python took 20 ms, and 6 ms with `draft`. A clip is
+  fast because Chrome draws only that region, at its size.
+- **What it means:** compositor sight still keeps 6 pictures a second, but spends ~60% of the time capturing. The
+  real fix is to stop capturing for it: crop the video's box from screencast frames, which Chrome sends anyway. It
+  needs its own DevTools connection, as the reflexes' screen feed has.

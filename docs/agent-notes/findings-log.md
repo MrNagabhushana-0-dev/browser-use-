@@ -3442,8 +3442,9 @@ and nowhere else; this morning it had also fired on the opening.
 **Full `tests/ci` on `c1c0e39`: 1,713 passed, 30 skipped, 0 failed** (37m10s).
 
 **Next, in order:**
-1. **The cost of the crop path:** a full-viewport JPEG at quality 90, decoded and cropped in Python, for each
-   compositor picture (6 a second). Measure it on a busy page against the clipped capture.
+1. **Compositor sight from the screencast.** The crop path was measured: 84-100 ms a picture against 32 ms clipped,
+   almost all of it Chrome's full-viewport capture (decoding is now 6 ms with `draft`). Cropping the video's box out
+   of screencast frames, on a DevTools connection of its own as the reflexes do, would need no capture at all.
 2. **The live lag of a cut rule** on Commons (0.13-0.18 s of video) against 19-27 ms in the test: pictures were 45 ms
    old there. Find where the rest goes.
 3. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
