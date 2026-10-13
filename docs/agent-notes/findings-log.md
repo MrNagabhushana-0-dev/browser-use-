@@ -3351,6 +3351,8 @@ their label said. Each live frame now keeps Chrome's own `scrollOffsetY`, and th
 Eyes, live view, vision, arena and Retinat files: 129 passed, 1 failed (the feed test, the known intermittent; it
 then passed 3 of 3 alone).
 
+**Full `tests/ci` on `3bd1501`: 1,702 passed, 30 skipped, 0 failed** (36m22s).
+
 **Next, in order:**
 1. The scan: say when a fixed banner covers much of every frame (the Guardian's "Who pays" banner: ~40%).
 2. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
