@@ -3360,9 +3360,10 @@ Guardian?...")").
 - The scan now asks the page for fixed or sticky elements across most of the screen's width at each step. Bands seen
   at half the steps or more are reported, with their text.
 
+**Full `tests/ci` on `1fe0904`: 1,702 passed, 31 skipped, 0 failed** (36m40s).
+
 **Next, in order:**
-1. A full `tests/ci` on the head, then the PR update.
-2. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
+1. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
    its CC-BY transcode, but the Wikimedia API answered 429 (rate limited, shared address); not retried. Try later at
    a low rate.
 2. The player's overlay is inside the video's box on screen: decide whether `{from: 'video'}` read on screen should
