@@ -1434,3 +1434,52 @@ async def test_looks_during_a_recording_follow_the_page_through_a_reload(eyes, s
 		await recorder.stop_recording()
 	assert first[0] > 120 and first[1] < 100, f'the reloaded page, magenta: {first}'
 	assert then[1] > 120 and then[0] < 100, f'and then green: {then}'
+
+
+def _pictures(pictures: list) -> list[FrameSample]:
+	"""16x16 luma pictures (numpy arrays) -> frames at 10 fps."""
+	import numpy as np
+
+	return [
+		FrameSample(i + 1, 1, round(0.1 * i, 2), float(i), np.clip(p, 0, 255).astype(np.uint8).tobytes(), (0, 0, 0), True)
+		for i, p in enumerate(pictures)
+	]
+
+
+def test_a_dissolve_and_a_fade_through_black_are_shot_changes_and_a_pan_is_not():
+	"""Found on the Commons film: its title card dissolves into the clouds, and the eyes kept them as one shot (no
+	frame differs from the last by a cut's worth). A gradual transition is found the twin-comparison way: a run of
+	small changes whose ends differ like a cut, every frame between them a blend of the two. A pan's frames are not."""
+	import numpy as np
+
+	y, x = np.mgrid[0:16, 0:16].astype(np.float32)
+	a = 20 + 14 * x  # bright to the right
+	b = 230 - 13 * y  # bright at the top
+	blend = [a + (b - a) * k / 10 for k in range(1, 10)]
+
+	dissolve = sight.read(_pictures([a] * 20 + blend + [b] * 20))
+	assert len(dissolve.cuts) == 1 and 2.0 <= dissolve.cuts[0] <= 2.9, dissolve.cuts
+	assert dissolve.shots[1].gradual, dissolve.shots
+	from browser_use.eyes.hearing import Hearing
+	from browser_use.eyes.percept import ItemPercept, describe_item
+
+	frames = _pictures([a] * 20 + blend + [b] * 20)
+	timeline = describe_item(ItemPercept(1, 1, {}, frames, [], dissolve, Hearing(segments=[])))
+	assert 'fade->' in timeline and 'cut->' not in timeline, timeline
+
+	black = np.zeros((16, 16))
+	out_in = [a * (1 - k / 8) for k in range(1, 8)] + [black] * 5 + [b * k / 8 for k in range(1, 8)]
+	through_black = sight.read(_pictures([a] * 20 + out_in + [b] * 20))
+	assert len(through_black.cuts) == 2, through_black.cuts
+	assert through_black.shots[1].brightness < 40 and through_black.shots[2].gradual, through_black.shots
+
+	# A smooth pan by one cell over a second: at 16x16 its frames are nearly blends of its ends, so only motion
+	# compensation (the first frame shifted matches the last) tells it from a dissolve
+	def view(shift: float):
+		return 128 + 90 * np.sin((x - shift) * 0.8) * np.cos(y * 0.5)
+
+	pan = sight.read(_pictures([view(0)] * 20 + [view(k / 10) for k in range(1, 11)] + [view(1)] * 20))
+	assert pan.cuts == [], f'a slow pan is one shot: {pan.cuts}'
+	rng = np.random.default_rng(7)
+	still = sight.read(_pictures([a + rng.normal(0, 1.5, (16, 16)) for _ in range(50)]))
+	assert still.cuts == [], f'a still picture with noise is one shot: {still.cuts}'

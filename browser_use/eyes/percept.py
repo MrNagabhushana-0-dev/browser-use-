@@ -181,7 +181,7 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 			if _overlap(s.t0, s.t1, shot.t0, shot.t1) >= min(0.3, 0.25 * max(shot.duration, 0.01))
 		]
 		sound = ', '.join(dict.fromkeys(hearing_mod.describe_segment(s) for s in sounds)) or '-'
-		opener = 'cut->' if k else 'start'
+		opener = ('fade->' if shot.gradual else 'cut->') if k else 'start'
 		lines.append(f'    {_fmt(shot.t0):>6}-{_fmt(shot.t1):<6} {opener:6} {sight_mod.describe_shot(shot):24} | {sound}')
 	if len(shots) > 12:
 		lines.append(f'    ... {len(shots) - 12} more shots')
