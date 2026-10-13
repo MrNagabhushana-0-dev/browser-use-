@@ -70,8 +70,11 @@
 			return null;
 		}
 	};
-	const off = document.createElement('canvas');
-	const offCtx = off.getContext('2d', { willReadFrequently: true });
+	let off = document.createElement('canvas');
+	let offCtx = off.getContext('2d', { willReadFrequently: true });
+	// Sources the page may not read (getImageData threw once): read on screen from then on. Drawing one taints the
+	// scratch canvas for good, so it is replaced, or every later reading of a readable canvas would fail too.
+	const unreadable = new WeakSet();
 	const SAMPLE_WIDTH = 256;
 
 	const largestCanvas = () => {
@@ -132,7 +135,14 @@
 			memo.set(key, out);
 			return out;
 		}
-		const [sw, sh] = canvas ? sizeOf(canvas) : [0, 0];
+		if (canvas && unreadable.has(canvas)) {
+			const r = canvas.getBoundingClientRect();
+			out = screenPixels([r.left, r.top, r.width, r.height]);
+			memo.set(key, out);
+			return out;
+		}
+		// A video with no current frame draws nothing, without complaint: transparent black, not its picture
+		const [sw, sh] = canvas && !(canvas instanceof HTMLVideoElement && canvas.readyState < 2) ? sizeOf(canvas) : [0, 0];
 		if (canvas && sw && sh) {
 			const W = Math.min(SAMPLE_WIDTH, sw);
 			const H = Math.max(1, Math.round((sh * W) / sw));
@@ -145,6 +155,9 @@
 				out = { data: offCtx.getImageData(0, 0, W, H).data, W, H, rect: canvas.getBoundingClientRect(), clip: null, seq: null, t: see.t };
 			} catch (e) {
 				// tainted (a cross-origin video without CORS, a canvas drawn from one): read it on screen instead
+				unreadable.add(canvas);
+				off = document.createElement('canvas');
+				offCtx = off.getContext('2d', { willReadFrequently: true });
 				const r = canvas.getBoundingClientRect();
 				out = screenPixels([r.left, r.top, r.width, r.height]);
 			}

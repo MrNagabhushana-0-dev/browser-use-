@@ -517,7 +517,7 @@ def _browser_tools() -> list['types.Tool']:
 				'A rule: {"when": <JS expression over see>, then one of "hold": key (held while true), "key": key '
 				'(tapped as it becomes true), "click": <expression giving [x, y]>, "notify": label (wakes retinat_wait)}. '
 				'see.locate([r,g,b], {tol, from, in}) finds a colour on the largest canvas (from: "video", "screen" '
-				'(all on screen as drawn, frames from other sites too, ~20 pictures/s) or a CSS selector; a video '
+				'(all on screen as the compositor draws it, frames from other sites too) or a CSS selector; a video '
 				'the page may not read is read on screen; in: [x, y, w, h] viewport px to look only there, e.g. '
 				'just ahead of a runner) -> {x, y, n} '
 				'viewport px; see.track([r,g,b], {...}) -> the same plus vx, vy in px per second; '

@@ -364,6 +364,10 @@ async def test_reflexes_see_a_cross_origin_video_on_screen(clip):
 	await session.start()
 	try:
 		await session.navigate_to(page.url_for('/v'))
+		for _ in range(50):  # an empty video draws without complaint: check once it has a frame
+			if await _value(session, "document.querySelector('video').readyState >= 2"):
+				break
+			await asyncio.sleep(0.1)
 		tainted = await _value(
 			session,
 			"(() => { const v = document.querySelector('video'), c = document.createElement('canvas').getContext('2d');"
@@ -391,7 +395,8 @@ async def test_reflexes_see_a_cross_origin_video_on_screen(clip):
 		for label, at in seen.items():
 			# currentTime can trail the frame on screen a little (1.99-2.04 s over six runs, read on screen)
 			assert at is not None and abs(at - 2.0) < 0.2, f'{label} at {at}s of the video, expected 2.0s: {stats}'
-		assert stats['screen_pictures'] > 10 and stats['screen_ms_p50'] < 150, stats
+		# the screen comes as the compositor draws it (a screencast), not forced captures (~50 ms each)
+		assert stats['screen_pictures'] > 10 and stats['screen_ms_p50'] < 25, stats
 	finally:
 		await session.kill()
 		for server in (media, page):
@@ -448,3 +453,26 @@ async def test_rules_read_a_cross_origin_frame_on_screen_and_click_it(session):
 		for server in (game, host):
 			server.clear()
 			server.stop()
+
+
+async def test_the_screen_feed_ends_with_its_browser(game):
+	"""Rules left installed when their browser goes away: the screen feed stops by itself rather than polling a dead
+	browser for the rest of the process (found while testing: it fell back to captures that failed every 0.25 s)."""
+	game.expect_request('/still').respond_with_data(
+		'<!doctype html><body style="background:#0a0"></body>', content_type='text/html'
+	)
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=False))
+	await session.start()
+	await session.navigate_to(game.url_for('/still'))
+	reflexes = Reflexes(session)
+	await reflexes.install([{'when': "see.locate([0, 170, 0], {from: 'screen'}) && false", 'notify': 'never'}])
+	for _ in range(50):
+		if reflexes.stats().get('screen_pictures'):
+			break
+		await asyncio.sleep(0.1)
+	assert reflexes.stats().get('screen_pictures'), reflexes.stats()
+	feed = reflexes._screen_task
+	assert feed is not None
+	await session.kill()
+	await asyncio.wait({feed}, timeout=8)
+	assert feed.done(), f'the screen feed still runs after its browser closed: {reflexes.stats()}'

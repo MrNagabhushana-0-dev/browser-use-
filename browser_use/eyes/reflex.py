@@ -36,8 +36,17 @@ BINDING = '__browserUseReflex'
 _BINDING_EVENT = 'Runtime.bindingCalled'
 _SCRIPT = (Path(__file__).parent / 'reflex.js').read_text()
 # The screen picture fed to the rules for what the page cannot read itself (a cross-origin video or frame): this wide,
-# as PNG so colours are exact. A capture takes ~50 ms whatever its size (measured headless), so ~20 pictures a second.
+# as PNG so colours are exact
 SCREEN_WIDTH = 240
+# A screencast this long without a frame is topped up with one capture, in case it dropped the frame an animation ended on
+SCREEN_QUIET_S = 0.3
+# Captures failing for this long mean the tab or its browser is gone: the feed stops
+SCREEN_GIVE_UP_S = 5.0
+# A screencast frame that changes some region of the picture almost entirely (9 of the 12 grid cells of any 4x3 block,
+# a block being 1/8 of the width) is checked with a capture, which is fed instead: it may be a cut, or one of the
+# stream's broken frames (a playing video missing from it for one frame, about half a second into playback: found as
+# false cuts, 1-4 in 10 plays). Local, because a video may fill a small part of the screen: 11% in the test that found it.
+SCREEN_CHECK_BLOCK = 9
 
 # windowsVirtualKeyCode for the keys games and players use most; letters and digits are their ASCII codes
 _KEY_CODES = {
@@ -86,6 +95,30 @@ class ReflexEvent(BaseModel):
 	wall: float  # time.monotonic() when it reached Python
 
 
+class _NoScreencast(Exception):
+	"""No DevTools connection of its own could be opened for the screencast."""
+
+
+def _grid(png: bytes) -> bytes:
+	"""A picture's 32x18 luma grid, as the rules' changed() samples it."""
+	from PIL import Image
+
+	with Image.open(io.BytesIO(png)) as img:
+		return img.convert('L').resize((32, 18), Image.Resampling.BOX).tobytes()
+
+
+def _region_replaced(a: bytes, b: bytes) -> bool:
+	"""Whether some 4x3 block of two 32x18 grids changed almost entirely (cells moving by more than 24, as changed()
+	counts them): a region of the picture replaced at once, as by a cut or a video missing from a frame."""
+	assert len(a) == len(b) == 32 * 18
+	for by in range(0, 18, 3):
+		for bx in range(0, 32, 4):
+			moved = sum(1 for y in range(by, by + 3) for x in range(bx, bx + 4) if abs(a[y * 32 + x] - b[y * 32 + x]) > 24)
+			if moved >= SCREEN_CHECK_BLOCK:
+				return True
+	return False
+
+
 def _rgb(png: bytes) -> tuple[int, int, bytes]:
 	"""(width, height, raw RGB) of a picture."""
 	from PIL import Image
@@ -124,6 +157,7 @@ class Reflexes:
 		self._screen_task: asyncio.Task | None = None
 		self._screen_ms: list[float] = []  # how long each screen picture took, capture to fed
 		self._screen_fed = 0
+		self._screen_seq = 0
 
 	@property
 	def installed(self) -> bool:
@@ -257,46 +291,161 @@ class Reflexes:
 		return None
 
 	async def _feed_screen(self) -> None:
-		"""Keep the rules fed with the screen as the compositor draws it, for what the page cannot read itself."""
+		"""Keep the rules fed with the screen as the compositor draws it, for what the page cannot read itself.
+
+		From a screencast on a connection of its own when this session launched the browser: frames arrive as the
+		compositor makes them, ~1 ms old, at the page's own rate. Otherwise, or if that connection cannot be opened,
+		from captures: each forces a frame and takes ~50 ms, more on a busy page (~150 ms on a 1080p film, measured
+		live). Either way the feed ends with its browser, not with the process.
+		"""
 		assert self._cdp is not None and self._context_id is not None
-		send = self._cdp.cdp_client.send
-		seq = 0
+		try:
+			if self.session.is_local:
+				try:
+					await self._feed_by_screencast()
+					return
+				except _NoScreencast as e:
+					logger.debug(f'reflex: no screencast for the screen ({e}); capturing instead')
+			await self._feed_by_capture()
+		except asyncio.CancelledError:
+			raise
+		except Exception as e:
+			self._screen_error(e)
+		finally:
+			self._screen_task = None if self._screen_task is asyncio.current_task() else self._screen_task
+
+	async def _feed_by_capture(self) -> None:
+		failing_since: float | None = None
 		while self._handler is not None:
-			started = time.monotonic()
+			started = time.time()
 			try:
-				vp = (await send.Page.getLayoutMetrics(session_id=self._session_id))['cssLayoutViewport']
-				clip = {
-					'x': vp['pageX'],
-					'y': vp['pageY'],
-					'width': vp['clientWidth'],
-					'height': vp['clientHeight'],
-					'scale': SCREEN_WIDTH / max(1, vp['clientWidth']),
-				}
-				shot = await send.Page.captureScreenshot(
-					params={'format': 'png', 'clip': clip},  # type: ignore[typeddict-item]
-					session_id=self._session_id,
-				)
-				w, h, rgb = await asyncio.to_thread(_rgb, base64.b64decode(shot['data']))
-				seq += 1
-				await send.Runtime.evaluate(
-					params={
-						'expression': f'window.__reflex && window.__reflex.feed({w}, {h}, "{base64.b64encode(rgb).decode()}", {seq})',
-						'contextId': self._context_id,
-					},
-					session_id=self._session_id,
-				)
+				png = await self._capture()
 			except asyncio.CancelledError:
 				raise
 			except Exception as e:
-				if self._handler is None:
-					return
-				self.errors.append(f'screen: {type(e).__name__}: {e}')
-				del self.errors[:-50]
-				await asyncio.sleep(0.25)  # a navigation or a closing tab: try again shortly
+				self._screen_error(e)
+				failing_since = failing_since or started
+				if started - failing_since > SCREEN_GIVE_UP_S:
+					return  # no capture for that long: the tab or its browser is gone
+				await asyncio.sleep(0.25)  # a navigation: try again shortly
 				continue
-			self._screen_fed += 1
-			self._screen_ms.append((time.monotonic() - started) * 1000)
-			del self._screen_ms[:-500]
+			failing_since = None
+			await self._feed(png, started)
+
+	async def _feed_by_screencast(self) -> None:
+		"""A screencast of this tab on a DevTools connection of its own, so it shares no event slot with the recorder
+		or the eyes. A still page sends nothing; and the repaint that ends an animation can be dropped while a frame
+		is in flight (as the recorder found), so a stream gone quiet is topped up with one capture. And it sometimes
+		sends a broken frame: a playing video missing from it, or the whole frame black, white page and all. So a frame
+		that changes most of the picture at once is checked with a capture, which is fed instead: a real cut costs one
+		capture (~40 ms), a broken frame is never seen."""
+		from urllib.parse import urlparse
+
+		import websockets
+
+		assert self._cdp is not None
+		where = urlparse(self.session.cdp_url or '')
+		assert where.hostname and where.port, f'no local DevTools address in {self.session.cdp_url!r}'
+		url = f'ws://{where.hostname}:{where.port}/devtools/page/{self._cdp.target_id}'
+		try:
+			connection = await websockets.connect(url, max_size=None, proxy=None, open_timeout=5)
+		except Exception as e:
+			raise _NoScreencast(f'{type(e).__name__}: {e}') from e
+		async with connection as ws:
+			newest: list[tuple[bytes, float] | None] = [None]
+			arrived = asyncio.Event()
+
+			async def read() -> None:
+				async for raw in ws:
+					msg = json.loads(raw)
+					if msg.get('method') != 'Page.screencastFrame':
+						continue
+					params = msg['params']
+					ack = {'id': 2, 'method': 'Page.screencastFrameAck', 'params': {'sessionId': params['sessionId']}}
+					await ws.send(json.dumps(ack))  # at once: Chrome sends the next frame only after this
+					drawn = float(params.get('metadata', {}).get('timestamp') or time.time())
+					newest[0] = (base64.b64decode(params['data']), drawn)  # an older frame not yet fed is dropped
+					arrived.set()
+
+			reader = asyncio.create_task(read())
+			try:
+				start = {'format': 'png', 'maxWidth': SCREEN_WIDTH, 'maxHeight': SCREEN_WIDTH * 4, 'everyNthFrame': 1}
+				await ws.send(json.dumps({'id': 1, 'method': 'Page.startScreencast', 'params': start}))
+				shown = await self._capture()  # a still page sends no frame until it changes
+				await self._feed(shown, time.time())
+				last = await asyncio.to_thread(_grid, shown)
+				topped_up = True
+				while self._handler is not None:
+					if reader.done():
+						reader.result()
+						return  # the connection closed: the tab or its browser is gone
+					try:
+						await asyncio.wait_for(arrived.wait(), SCREEN_QUIET_S)
+					except TimeoutError:
+						if not topped_up:
+							topped_up = True
+							shown = await self._capture()
+							await self._feed(shown, time.time())
+							last = await asyncio.to_thread(_grid, shown)
+						continue
+					arrived.clear()
+					frame, newest[0] = newest[0], None
+					if frame is not None:
+						topped_up = False
+						grid = await asyncio.to_thread(_grid, frame[0])
+						if _region_replaced(grid, last):
+							frame = (await self._capture(), time.time())
+							grid = await asyncio.to_thread(_grid, frame[0])
+						last = grid
+						await self._feed(*frame)
+			finally:
+				reader.cancel()
+				await asyncio.gather(reader, return_exceptions=True)
+
+	async def _capture(self) -> bytes:
+		"""The viewport now, as a PNG SCREEN_WIDTH wide (forces a frame: ~50 ms headless, more on a busy page)."""
+		assert self._cdp is not None
+		send = self._cdp.cdp_client.send
+		vp = (await send.Page.getLayoutMetrics(session_id=self._session_id))['cssLayoutViewport']
+		clip = {
+			'x': vp['pageX'],
+			'y': vp['pageY'],
+			'width': vp['clientWidth'],
+			'height': vp['clientHeight'],
+			'scale': SCREEN_WIDTH / max(1, vp['clientWidth']),
+		}
+		shot = await send.Page.captureScreenshot(
+			params={'format': 'png', 'clip': clip},  # type: ignore[typeddict-item]
+			session_id=self._session_id,
+		)
+		return base64.b64decode(shot['data'])
+
+	async def _feed(self, png: bytes, drawn: float) -> None:
+		"""Hand one picture to the rules; `drawn` is when the compositor drew it (time.time())."""
+		assert self._cdp is not None and self._context_id is not None
+		try:
+			w, h, rgb = await asyncio.to_thread(_rgb, png)
+			self._screen_seq += 1
+			await self._cdp.cdp_client.send.Runtime.evaluate(
+				params={
+					'expression': f'window.__reflex && window.__reflex.feed({w}, {h}, "{base64.b64encode(rgb).decode()}", {self._screen_seq})',
+					'contextId': self._context_id,
+				},
+				session_id=self._session_id,
+			)
+		except asyncio.CancelledError:
+			raise
+		except Exception as e:
+			self._screen_error(e)
+			return
+		self._screen_fed += 1
+		self._screen_ms.append((time.time() - drawn) * 1000)
+		del self._screen_ms[:-500]
+
+	def _screen_error(self, e: Exception) -> None:
+		if self._handler is not None:
+			self.errors.append(f'screen: {type(e).__name__}: {e}')
+			del self.errors[:-50]
 
 	async def _notify_after(self, before: list[asyncio.Task], msg: dict[str, Any]) -> None:
 		if before:

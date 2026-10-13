@@ -234,10 +234,14 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
     (the T-Rex runner): "is something grey just ahead of me" is `see.locate(grey, {in: ahead})`.
   - `from`: the largest canvas by default, else `'video'`, a CSS selector, or `'screen'`: everything on screen as
     the compositor draws it, frames from other sites included (a game embedded from another origin, as on itch.io).
-    The screen is fed to the rules ~20 times a second (a capture takes ~50 ms). In a test, a square drawn in a
-    frame from another origin was clicked 16-51 ms after it was drawn; a same-page canvas, read directly, is still
-    faster (~2 ms). A video the page may not read (another origin without CORS, as on Wikimedia Commons) is read on
-    screen automatically, within its box: its cut was caught within 0.05 s of where it is in the video.
+    The screen comes to the rules as the compositor draws it (a screencast on its own DevTools connection): a
+    picture is ~10 ms old when they get it. A frame that replaces some region of the picture at once (a cut, or one
+    of the screencast's broken frames, which drop a playing video for a frame) is confirmed with a capture first, so
+    a cut costs ~50 ms. In tests, a square drawn in a frame from another origin was clicked 34-39 ms after it was
+    drawn, and a cross-origin clip's cut was caught 45-72 ms after it happened; a same-page canvas, read directly, is
+    still faster (~2 ms). A browser this session did not launch (remote, or the person's own through the bridge) is
+    captured instead, ~50 ms a picture or more on a busy page. A video the page may not read (another origin without
+    CORS, as on Wikimedia Commons) is read on screen automatically, within its box.
   - `see.changed({in})`: the share of the picture, or of that region, that changed since the last frame.
   - `see.track([r,g,b], {in})`: `locate` plus `vx`, `vy` in px per second, so a rule can act on where a thing will
     be: `see.track(red).x + see.track(red).vx * 0.2` is where it will be in 200 ms.
