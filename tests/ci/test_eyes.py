@@ -1582,6 +1582,75 @@ def test_a_dissolve_and_a_fade_through_black_are_shot_changes_and_a_pan_is_not()
 	assert still.cuts == [], f'a still picture with noise is one shot: {still.cuts}'
 
 
+def _film_shots(edits: dict, frames: list[FrameSample]) -> tuple[list[tuple[float, bool]], float, float, list, list]:
+	"""Shot changes `sight.read` finds in a film's frames, scored against its edit list: (changes, precision, recall,
+	false ones, missed ones). A change counts for a cut within one sample period (+50 ms); one inside a gradual
+	transition counts for it (others inside it are not counted against); none is counted near an ambiguous one."""
+	tol = 1 / edits['samples_per_second'] + 0.05
+	lo, hi = edits['window']
+	changes = [(s.t0, s.gradual) for s in sight.read(frames).shots[1:]]
+	cuts, used, through, false = edits['cuts'], set(), set(), []
+	for t, _ in changes:
+		if not lo <= t <= hi or any(abs(t - a) <= tol for a in edits['ambiguous']):
+			continue
+		span = next((i for i, (a, b) in enumerate(edits['gradual']) if a - tol <= t <= b + tol), None)
+		if span is not None:
+			through.add(span)
+			continue
+		near = [i for i, c in enumerate(cuts) if i not in used and abs(c - t) <= tol]
+		if near:
+			used.add(min(near, key=lambda i: abs(cuts[i] - t)))
+		else:
+			false.append(round(t, 2))
+	found = len(used) + len(through)
+	missed = [c for i, c in enumerate(cuts) if i not in used] + [g for i, g in enumerate(edits['gradual']) if i not in through]
+	return changes, found / max(1, found + len(false)), found / (len(cuts) + len(edits['gradual'])), false, missed
+
+
+def test_the_shots_of_a_real_film_match_its_edit_list():
+	"""Every other test of shots uses made-up pictures. On a real film (Big Buck Bunny, CC BY 3.0, all 10.5 minutes,
+	as compositor sight samples a cross-origin video: 6 a second, area-averaged) the eyes found 94% of its 130 shot
+	changes but called 34 more that were not there: a bird falling out of a still shot, a squirrel's head passing the
+	lens, a whip pan. A hard cut inside a run of small motion was also reported as a fade at the run's middle, and a
+	clean cut right after busy motion was missed because the threshold had climbed with the motion.
+
+	A cut is now a spike (twice the change just before and after it) that reaches most of the picture. The film's edit
+	list was built from ffmpeg's scene scores and checked by eye (see assets/big_buck_bunny). The spike was chosen on
+	this film alone, then scored on a second one (Tears of Steel, live action); dropping the old threshold and adding
+	the spread were judged on both. Numbers in docs/hands-on/2026-10-13/notes.md."""
+	import json
+	import lzma
+
+	import numpy as np
+
+	folder = ASSETS / 'big_buck_bunny'
+	edits = json.loads((folder / 'edits.json').read_text())
+	rows = np.frombuffer(lzma.decompress((folder / 'grids_6fps.xz').read_bytes()), dtype=np.uint8).reshape(-1, 304)
+	step = 1 / edits['samples_per_second']
+	frames = [
+		FrameSample(
+			i + 1,
+			1,
+			round(i * step, 3),
+			i * step,
+			row[:256].tobytes(),
+			(int(row[256::3].mean()), int(row[257::3].mean()), int(row[258::3].mean())),
+			False,
+			row[256:].tobytes(),
+		)
+		for i, row in enumerate(rows)
+	]
+	changes, precision, recall, false, missed = _film_shots(edits, frames)
+	assert precision >= 0.93 and recall >= 0.9, f'precision {precision:.3f}, recall {recall:.3f}; false {false}; missed {missed}'
+
+	def change_near(t: float) -> tuple[float, bool] | None:
+		return next(((at, fade) for at, fade in changes if abs(at - t) <= step + 0.05), None)
+
+	assert change_near(25.0) is None, 'the bird knocked off its branch at 24.9 s is the same shot'
+	assert change_near(433.73) == (pytest.approx(433.83, abs=0.01), False), f'a hard cut, at its own time: {change_near(433.73)}'
+	assert change_near(258.1) is not None, 'the cut right after busy motion at 258.1 s'
+
+
 async def test_find_s_crop_of_a_large_match_is_shrunk_to_fit(eyes, session, site):
 	"""Found twice on Wikimedia Commons: find "play video" matched the whole 800x450 player, and its crop came back at
 	960x510, ~665 tokens, three looks' worth, to confirm a match whose place the text already gave. A crop is now

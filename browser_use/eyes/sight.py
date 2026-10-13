@@ -37,11 +37,20 @@ from browser_use.eyes.retina import FrameSample
 # Mean absolute luma difference (0-255) between consecutive samples. A hard cut between
 # unrelated shots scores 25-90; camera motion and moving subjects score 2-15.
 CUT_FLOOR = 16.0
-# ...and must also stand out from the recent run of differences by this many MADs, so a
-# shaky handheld clip that differs by 14 every frame does not cut on every frame.
-CUT_MADS = 6.0
-# Differences considered "recent" for that comparison, in samples.
-CUT_WINDOW = 20
+# ...and a cut is a spike: the change into its first frame is at least this many times the change just before it and
+# the one just after. Motion changes the picture for several samples running (a head passing the lens, a whip pan, a
+# shaky handheld shot); a cut changes it once. It replaced a threshold that rose with the recent run of differences,
+# which let motion through as cuts and then missed clean cuts after it.
+CUT_SPIKE = 2.0
+# ...and a cut changes most of the picture: at least this share of its cells (of the 16x16 luma grid, or of the 4x4
+# colour grid) changes by a cut's worth. Something large leaving a still shot within one sample (a bird knocked off its
+# branch, at 6 samples a second) changes only its own part. Real cuts changed 70% of the cells or more nine times in ten.
+#
+# Both were scored against the checked edit lists of two whole films (Big Buck Bunny, tests/ci/assets/big_buck_bunny,
+# and Tears of Steel, live action), sampled at 6 a second as compositor sight samples: changes wrongly called cuts fell
+# from 34 to 2 and from 29 to 3 a film, F1 rose from 0.85 to 0.97 and to 0.93. Cuts into or out of fast action are
+# missed more (16 of Tears of Steel's 135, from 14): the shot beside the cut moves about as much as the cut changes.
+CUT_SPREAD = 0.45
 # Shots shorter than this are merged into the previous one: a flash, not a shot.
 MIN_SHOT_S = 0.25
 # Media time going backwards by more than this is a loop (or a seek back).
@@ -61,6 +70,10 @@ GRADUAL_MAX_S = 3.0
 # ...whose two ends differ by a cut's worth (CUT_FLOOR), and whose every frame is a blend of the two ends to within
 # this (mean luma levels). A pan or a moving subject changes as much, but its frames are not blends of its ends.
 BLEND_RESIDUAL = 4.0
+# ...and in which no one step carries more than this share of the change between its ends. A dissolve spreads its
+# change over its frames; a run of small motion with a cut in it passes the blend test too (the frames before the cut
+# look like one end, the frames after it like the other), and was reported as a fade at the run's middle.
+GRADUAL_STEP_SHARE = 0.6
 # At 16x16 a small pan's frames are nearly blends of its ends too (F(x + t*dx) ~ F(x) + t*dx*F'(x)). So, as detectors
 # compensate for camera motion: if the first frame shifted by up to this many cells matches the last to within half
 # a cut's worth, the camera moved; it was not a dissolve.
@@ -266,7 +279,9 @@ def gradual(
 	the last frame before the change, the last frame of it).
 
 	A run of steady small changes whose ends differ like a cut, every frame between them a blend of the two. A fade
-	through black is two of them: the run is split where it is darkest, when that is far darker than both ends.
+	through black is two of them: the run is split where it is darkest, when that is far darker than both ends. A fade
+	through another colour (Big Buck Bunny's title fades to plain lilac, then the clouds fade in) is often missed:
+	splitting such runs where they turn found it, but called more changes that were not there on both films scored.
 	"""
 	out: list[tuple[int, float, int, int]] = []
 	i = start + 1
@@ -286,9 +301,11 @@ def gradual(
 		for a, b in pieces:
 			span_s = frames[b].t - frames[a].t
 			strength = float(np.abs(matrix[b] - matrix[a]).mean())
+			largest_step = float(np.abs(np.diff(matrix[a : b + 1], axis=0)).mean(axis=1).max())
 			if (
 				GRADUAL_MIN_S <= span_s <= GRADUAL_MAX_S
 				and strength >= CUT_FLOOR
+				and largest_step <= GRADUAL_STEP_SHARE * strength
 				and _blends(matrix, a, b)
 				and not _moved(matrix[a], matrix[b])
 			):
@@ -297,13 +314,29 @@ def gradual(
 	return out
 
 
+def _spread(matrix: np.ndarray, colours: np.ndarray | None, i: int) -> bool:
+	"""Whether the change into frame i reaches most of the picture, as a cut's does (see CUT_SPREAD)."""
+	share = float((np.abs(matrix[i] - matrix[i - 1]) > CUT_FLOOR).mean())
+	if colours is not None:
+		cells = np.abs(colours[i] - colours[i - 1]).reshape(16, 3).mean(axis=1)
+		share = max(share, float((cells > CUT_FLOOR).mean()))
+	return share >= CUT_SPREAD
+
+
+def _spike(d: np.ndarray, i: int, skip: set[int]) -> bool:
+	"""Whether the change into frame i stands out from the changes just before and after it, as a cut's does."""
+	around = [d[j] for j in (i - 1, i + 1) if 1 <= j < len(d) and j not in skip]
+	return not around or d[i] >= CUT_SPIKE * max(around)
+
+
 def read(frames: list[FrameSample], duration: float | None = None) -> Sight:
 	"""Segment one item's frames (in arrival order) into shots."""
 	if frames:
 		drop = strays([f.t for f in frames], LOOP_JUMP_S)
 		frames = [f for i, f in enumerate(frames) if i not in drop]
 	matrix = grids(frames)
-	d = deltas(matrix, colour_grids(frames))
+	colours = colour_grids(frames)
+	d = deltas(matrix, colours)
 	loops: list[float] = []
 	rewinds: list[float] = []
 	jumps: list[int] = []  # where media time went back: a loop or a rewind opens a shot of its own
@@ -337,14 +370,7 @@ def read(frames: list[FrameSample], duration: float | None = None) -> Sight:
 			continue
 		if i in inside:
 			continue
-		recent = d[max(1, i - CUT_WINDOW) : i]
-		if len(recent) >= 3:
-			med = float(np.median(recent))
-			mad = float(np.median(np.abs(recent - med))) + 0.5
-			threshold = max(CUT_FLOOR, med + CUT_MADS * mad)
-		else:
-			threshold = CUT_FLOOR
-		if d[i] >= threshold:
+		if d[i] >= CUT_FLOOR and _spike(d, i, {*jumps, *restarts}) and _spread(matrix, colours, i):
 			last_start = starts[-1][0]
 			if frames[i].t - frames[last_start].t < MIN_SHOT_S and last_start != 0 and not starts[-1][2]:
 				# Too soon after the previous cut: keep one cut, at the stronger change.

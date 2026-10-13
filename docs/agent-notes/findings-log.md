@@ -3362,15 +3362,45 @@ Guardian?...")").
 
 **Full `tests/ci` on `1fe0904`: 1,702 passed, 31 skipped, 0 failed** (36m40s).
 
+**The eyes' cuts scored against two whole films** (details and the table: `docs/hands-on/2026-10-13/notes.md`).
+The Wikimedia API and upload.wikimedia.org still answered 429. Each tried once.
+- **The reference.** Blender's mirror has the same edit (634.6 s), CC BY 3.0, plus Tears of Steel (live action) as a
+  second check. Edit lists came from ffmpeg's scene scores, with every candidate checked by eye: the Bunny has 125
+  cuts and 5 fades; Steel has 135 cuts.
+- **Before.** At 6 samples a second, area-averaged (compositor sight), F1 was 0.854 and 0.850, with 34 and 29 false
+  cuts a film: a bird leaving a still shot, a head passing the lens, a whip pan. A cut inside a run of small motion
+  was reported as a fade at the run's middle. Clean cuts right after motion were missed, because the threshold
+  (median + 6 MADs of the last 20 differences) had risen with the motion.
+- **After** (`sight.py`, test first; the Bunny's grids and edit list are committed as a 490 KB test asset). A cut must
+  be a spike, twice the change just before and after it, and must reach 45% of the cells. The rising threshold is
+  gone. No one step may carry more than 60% of a fade. F1 is 0.966 and 0.926 at 6/s, with 2.2 and 2.6 false cuts.
+  Cuts into fast action are missed more: Steel at 10/s misses 13.2 of 135, up from 7.2.
+- **Chosen how.** The spike ratio was chosen on the Bunny alone. The other two choices were judged on both films.
+  Tried and dropped:
+  - a two-sample cut;
+  - splitting fades through a colour (found the title, but more false changes);
+  - a histogram test;
+  - shift compensation.
+- **Live after the change:** 3 of 3 real cuts, none at the bird. The title fade was not found.
+- **Seen, not fixed:**
+  - `until=bored` stopped a 35 s watch of a 10-minute film at 6.7 s, on a slow pan;
+  - the header said "watched 78.8s" for a 30 s watch, and "on screen" was stale;
+  - two recording frames showed compositor sight's clipped picture instead of the page.
+
 **Next, in order:**
-1. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
-   its CC-BY transcode, but the Wikimedia API answered 429 (rate limited, shared address); not retried. Try later at
-   a low rate.
-2. The player's overlay is inside the video's box on screen: decide whether `{from: 'video'}` read on screen should
-   leave out the player's controls.
-3. Raise the compositor sight from 6 to 10 fps and check live whether the Commons dissolve then reads as `fade->`.
-4. The feed test, the region-runner test and the play-arena title-screen test: intermittent, not reproduced. Watch
-   the next full runs.
-5. Carried over:
+1. **The retina's own grid on a readable video.** Its `drawImage` uses low smoothing, which I modelled as point
+   sampling; that model is not checked against Chrome. Play a fine test pattern and compare the retina's grid to
+   area and nearest reductions. If it is point-sampled, try area averaging and measure what it costs per frame.
+2. **`until=bored` on long films.** Two seconds of a slow pan are no evidence that a 10-minute film has nothing new,
+   least of all when its sound cannot be read. Base the stop on the item's length and cutting rhythm, test first.
+3. **The watch header:** "watched" counts wall time across watches, and "on screen" keeps the first reading.
+4. **The recording's clipped frames.** Check whether compositor sight's clipped captures reach the screencast, and
+   whether they are the reflex feed's "broken frames".
+5. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+6. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
+7. **Compositor sight at 10 fps instead of 6.** Offline it gains F1 0.966 -> 0.970 on the Bunny and 0.926 -> 0.941
+   on Steel. Weigh that against the capture cost live.
+8. **Intermittents to watch in full runs:** the feed test, the region-runner test, the play-arena title screen.
+9. **Carried over:**
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).

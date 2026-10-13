@@ -298,3 +298,75 @@ banners, cookie bars and sticky headers are page elements even on canvas pages.
 **Live:** "stays put while the page scrolls (what is under it was not seen): the bottom 37% ("The Guardian Who guards
 the Guardian? Our readers do. Author")". The frame labels were distinct as well (0.0, 2.4, 4.0, 4.8, 5.6, 5.9 screens
 down), after `3bd1501`.
+
+## Early afternoon: the eyes' cuts scored against two whole films
+
+**Recordings**, both made by `retinat_record` on Wikimedia Commons:
+- `commons-film-watched-for-the-edit-list.mp4`: the two watches whose shot lists were checked (before the change).
+- `commons-film-new-cut-rule-live.mp4`: the same film after the change, watched for 40 s.
+
+**Tools:** `retinat_open`, `retinat_find`, `retinat_click`, `retinat_watch`, `retinat_record`.
+
+**The reference.** upload.wikimedia.org still answered 429 (tried once). Blender's own mirror has the same edit: the
+Commons file is 634.6 s, and so is `bbb_sunflower_1080p_30fps_normal.mp4`. Big Buck Bunny and Tears of Steel are
+both CC BY 3.0. I built each film's edit list from ffmpeg's scene scores, then checked every candidate by eye: frame
+pairs for every score of 0.1 or more, every-frame strips where unclear, and brightness traces for fades.
+- **Big Buck Bunny:** 125 cuts, 5 fades (the title, two fades through black, an iris-out, the post-credits fade), and
+  one whip tilt left as ambiguous.
+- **Tears of Steel** (live action, kept as a second check): 135 cuts in 9.5-588.5 s. The animated end credits are not
+  scored, and two in-shot lighting and hologram effects are ambiguous.
+
+**What the watches said, checked.** On Commons, `retinat_watch` reported a cut at 24.9 s that is not in the film: a
+bird knocked off its branch in a still shot. The title's fade to lilac and the clouds fading in were right. A watch
+asked for 35 s also stopped after 6.7 s ("nothing new for 2s") on a slow pan over clouds, 10 s before the next cut.
+
+**Measuring.** The film is sampled as the eyes sample it, 16x16 luma and 4x4 colour grids, 5 sampling phases.
+`area` is area-averaged, as compositor sight reduces a cross-origin video. `point` is nearest-neighbour, my model of
+the retina's `drawImage` with low smoothing on a readable video; that model is not checked against Chrome yet. Each
+cell is F1 (false changes / missed, per film):
+
+| | Bunny, area 6/s | Bunny, area 10/s | Bunny, point 10/s | Steel, area 6/s | Steel, area 10/s | Steel, point 10/s |
+|---|---|---|---|---|---|---|
+| before | 0.854 (34.4 / 7.4) | 0.898 (26.2 / 2.8) | 0.843 (40.0 / 6.2) | 0.850 (28.6 / 14.2) | 0.895 (22.8 / 7.2) | 0.870 (25.4 / 11.4) |
+| after | 0.966 (2.2 / 6.6) | 0.970 (2.2 / 5.4) | 0.969 (1.6 / 6.2) | 0.926 (2.6 / 16.4) | 0.941 (2.0 / 13.2) | 0.921 (1.0 / 18.8) |
+
+**What changed in `sight.py`:**
+- **A cut must be a spike:** its change is at least twice the change just before it and just after. Motion changes
+  the picture for several samples running: a head passing the lens, a whip pan, shaky hands.
+- **A cut must reach most of the picture:** 45% of the cells change by a cut's worth, counting luma or colour cells.
+  Something large leaving a still shot within one sample changes only its own part. That is the bird at 6/s, which
+  is still a one-sample spike. Real cuts changed 70% or more of the cells nine times in ten.
+- **The old threshold is gone.** It rose with the last 20 differences (median plus 6 MADs), and it missed clean cuts
+  right after motion: 218.2, 258.1, 326.6 and 328.1 s in the Bunny.
+- **Bug fixed: a hard cut inside a run of small motion was reported as a fade.** At 433.7 s a 102-level cut sat in a
+  run of 2-3 level changes. The blend test passed it, because the frames before the cut look like one end and the
+  frames after it like the other. It was reported as a fade at the run's middle, 0.27 s late. Now no one step may
+  carry more than 60% of a fade's change.
+- **The test** scores the whole Bunny film from a committed 490 KB file of grids (`tests/ci/assets/big_buck_bunny`,
+  with the attribution) against its edit list. Precision was 0.788 (33 false changes) before the change. The test
+  also checks the bird, the cut at 433.7 s and the cut after motion at 258.1 s.
+
+**How it was chosen, plainly.** The spike ratio was chosen on the Bunny before Tears of Steel was looked at. Dropping
+the old threshold and adding the spread test were judged on both films.
+
+Tried and dropped:
+- **Treating a change across two samples as one cut.** Worse on the Bunny, no better on Steel.
+- **Splitting a run where it turns, to catch fades through a colour.** It found the Bunny's title fade but called
+  more false changes on both films.
+- **A histogram test.** Lost recall.
+- **Motion-compensated rejection** (the shift test used for fades). It changed nothing.
+
+**What it costs:** cuts into or out of fast action. The shot beside the cut moves about as much as the cut changes,
+so the spike test fails. Steel at 10/s misses 13.2 of 135, up from 7.2.
+
+**Checked live after the change:** cuts at 16.1, 20.3 and 27.3 s, against the film's 16.30, 20.17 and 27.47. There
+was no cut at the bird, and 16.1 now reads `cut->` (it read `fade->` before). The title fade was not found this time:
+1.3-16.1 s came back as one shot.
+
+**Seen, not fixed:**
+- **`until=bored` stopped a 35 s watch of a 10.5-minute film at 6.7 s.** The film is cross-origin, so its sound
+  cannot be read. Two seconds of a slow pan give no evidence that a long film has nothing new.
+- **The watch header said "watched 78.8s" for a 30 s watch.** "On screen" still showed the controls at "0:00".
+- **Two frames of the first recording, around 1:12, show a clipped picture instead of the page:** a small thumbnail,
+  then the film full-frame. They are probably compositor sight's clipped captures showing up in the screencast. If so,
+  they may also be what the reflex screen feed saw as "broken frames". Not verified.
