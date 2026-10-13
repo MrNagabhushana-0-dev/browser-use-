@@ -65,6 +65,7 @@ class ItemPercept:
 	keyframes: list[Keyframe] = field(default_factory=list)
 	coverage: float = 0.0
 	watched_s: float = 0.0
+	earlier: bool = False  # an earlier percept reported this item (what came before this one was seen there)
 	muted: bool | None = None
 	tainted: bool = False
 	motion: motion_mod.Motion | None = None
@@ -155,8 +156,11 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 		head += f', looped {len(item.sight.loops)}x (seen in full)'
 	lines.append(head + (page_text_note(name) if name else ''))
 	if (item.frames or item.hops) and t0 > 1.0:
-		# what played before t0 was not held: silence or stillness in this percept says nothing about it
-		lines.append(f'    the first {_fmt(t0)} was not held: sound and pictures before it are unknown, not absent')
+		if item.earlier:
+			lines.append(f'    before {_fmt(t0)}: in an earlier percept, not repeated here')
+		else:
+			# what played before t0 was not held: silence or stillness in this percept says nothing about it
+			lines.append(f'    the first {_fmt(t0)} was not held: sound and pictures before it are unknown, not absent')
 	text = (info.get('text') or '').strip()
 	if text:
 		lines.append(f'    on screen: "{text[:240]}"' + page_text_note(text))

@@ -373,6 +373,16 @@ class Eyes:
 		# The retina says a video is unreadable once, when it finds out: from all it said, not only since `since` (a
 		# watch begun after that forgot it, found on Commons: no compositor line, its sound "none captured")
 		tainted = {e.data.get('vid', 0) for e in list(self.retina.events) if e.type == 'tainted'}
+		# What is on screen around the attended video now: its description was read when it was found (found on Commons:
+		# "0:00 / -:- Loaded 3.46%" at 0:14)
+		attended = self.retina.attended.get('vid')
+		if attended in info_by_vid:
+			try:
+				fresh = (await asyncio.wait_for(self.retina.page_state(), timeout=1.0)).get('attended') or {}
+				if fresh.get('vid') == attended:
+					info_by_vid[attended] = {**info_by_vid[attended], 'text': fresh.get('text', '')}
+			except Exception as e:
+				logger.debug(f'eyes: the attended item could not be described again: {type(e).__name__}: {e}')
 		k = keyframes or KEYFRAMES[detail]
 		do_speech = self.speech if transcribe is None else (transcribe and asr.available())
 		items: list[ItemPercept] = []
@@ -404,7 +414,6 @@ class Eyes:
 				jpegs: list[bytes | None] = [None] * len(seqs)
 			else:
 				jpegs, trouble = await self.retina.read_keyframes(seqs)
-			walls = [x.wall for x in f] + [x.wall for x in h]
 			self._items_seen = max(self._items_seen, vid)
 			items.append(
 				ItemPercept(
@@ -417,7 +426,8 @@ class Eyes:
 					hearing=heard,
 					keyframes=[Keyframe(f[i].t, f[i].seq, j) for i, j in zip(selection.indices, jpegs)],
 					coverage=selection.coverage,
-					watched_s=(max(walls) - min(walls)) if walls else 0.0,
+					watched_s=_watched_time([x.wall for x in f] or [x.wall for x in h]),
+					earlier=vid in self._reported,
 					muted=muted_by_vid.get(vid),
 					tainted=vid in tainted,
 					motion=motion.track(f),
@@ -1301,6 +1311,18 @@ def _describe_bands(bands: list[tuple[float, float, str]]) -> str:
 			where = f'a band {round(top * 100)}-{round(bottom * 100)}% down'
 		parts.append(where + (f' ("{text}")' if text else ''))
 	return ', '.join(parts)
+
+
+# Samples further apart than this were not watched in between (the item was paused, held or out of sight).
+WATCHED_GAP_S = 1.0
+
+
+def _watched_time(walls: list[float]) -> float:
+	"""Seconds an item was watched: the time between its picture samples (its sound's, if it has no pictures), without
+	the gaps where it was not playing. The span of them counted the hold between two watches (found on Commons:
+	"watched 27.4s" for a 10 s watch). Sound is not used when there are pictures: it is tapped through a hold too."""
+	ws = sorted(walls)
+	return sum(min(b - a, WATCHED_GAP_S) for a, b in zip(ws, ws[1:]))
 
 
 # HTMLMediaElement error codes (MediaError), and what each means for whoever reads the percept.

@@ -3412,19 +3412,28 @@ The Wikimedia API and upload.wikimedia.org still answered 429. Each tried once.
 stripes give mean 126, spread 0). The readable path matches the area rows (F1 0.970 and 0.941 at 10/s), not the
 point rows; a test now keeps it so.
 
+**Times and summaries, from two watches of the Commons film** (each test first, then checked live):
+- **Compositor pictures carry the time the film was at.** They took the page's once-a-second report of media time,
+  run forward by the clock. That runs ahead while a stream stalls ("keyframes at 2.2s 3.9s 3.5s 4.8s", the 3.5 s one
+  showing a later shot). The video's `currentTime` is now read on both sides of each capture.
+- **"watched" counts what was watched.** It counted the hold between two watches ("27.4s" for 10 s).
+- **What an earlier percept saw is said to be there,** not "unknown".
+- **"on screen" is read when the percept is built,** not when the video was found.
+
 **Next, in order:**
-1. **The watch header:** "watched" (`watched_s`, the span of wall times) counts across watches, and "on screen"
-   keeps the first reading.
-2. **A live stream or an item of unknown length** still gets the 2 s window. Check one live.
-3. **The recording's clipped frames.** Check whether compositor sight's clipped captures reach the screencast, and
+1. **A live stream or an item of unknown length** still gets the 2 s window. Check one live.
+2. **The recording's clipped frames.** Check whether compositor sight's clipped captures reach the screencast, and
    whether they are the reflex feed's "broken frames".
-4. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
-5. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
-   or CORS WebM/VP9 source, or use a Chrome build with H.264 if one is available here.
-6. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
-7. **Compositor sight at 10 fps instead of 6.** Offline it gains F1 0.966 -> 0.970 on the Bunny and 0.926 -> 0.941
-   on Steel. Weigh that against the capture cost live.
-8. **Intermittents to watch in full runs:** the feed test, the region-runner test, the play-arena title screen.
-9. **Carried over:**
+3. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+4. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
+   or CORS WebM/VP9 source.
+5. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
+6. **Compositor sight at 10 fps instead of 6.** Offline it gains F1 0.966 -> 0.970 on the Bunny and 0.926 -> 0.941
+   on Steel. Each picture now costs two time reads as well; weigh that live.
+7. **Intermittents to watch in full runs:** the feed test, the region-runner test, the play-arena title screen,
+   and now `test_reflex.py::test_a_rule_reads_how_fast_something_moves`. It failed once in a run of four files
+   (["right at ~300", "right at ~300"]: the leftward speed never fell inside -210..-150 px/s) and passed 3 of 3 alone.
+   It reads a canvas's own pixels through reflex rules: none of the code changed in that round is on its path.
+8. **Carried over:**
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).

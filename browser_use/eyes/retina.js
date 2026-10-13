@@ -829,6 +829,14 @@ registerProcessor('retina-ear', RetinaEar);
 		};
 	};
 
+	// The attended video's media time now: compositor sight reads it on both sides of each capture, so a picture is
+	// labelled with where the film was, not where it would be had it played on since the last report (a stalled stream
+	// stays "playing" with its clock stopped).
+	R.mediaTime = () => {
+		const v = R.attended;
+		return v && !isCanvas(v) ? [R.attendedId, v.currentTime] : null;
+	};
+
 	// Keyframes by sequence number, as data URLs. Missing ones (evicted) come back null.
 	R.keyframes = async (seqs) => {
 		const read = (blob) =>

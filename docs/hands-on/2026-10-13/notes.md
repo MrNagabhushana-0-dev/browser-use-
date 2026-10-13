@@ -437,3 +437,34 @@ look image and clicked there, and missed.
 **Checked, and I was wrong:** this morning I modelled the retina's `drawImage` with low smoothing as picking pixels.
 In Chrome it averages: 1-px black and white stripes give a grid with mean 126 and spread 0. So the readable path
 behaves like this morning's area rows (F1 0.970 and 0.941 at 10/s), not the point rows. A test now keeps it so.
+
+## Late afternoon: when each picture was, and what a second watch says
+
+**Recordings**, both made by `retinat_record` on Wikimedia Commons:
+- `commons-film-labels-ran-ahead-before.mp4`: the film watched twice, before the fixes.
+- `commons-film-two-watches-after.mp4`: the same two watches after them.
+
+**Tools:** `retinat_open`, `retinat_click`, `retinat_watch`, `retinat_record`.
+
+**Bug: compositor pictures were labelled with times the film was not at.** A 6 s watch listed keyframes "at 2.2s 3.9s
+3.5s 4.8s": out of order, and the one at 3.5 s showed clouds, which come in after 4.2 s.
+- **The cause:** a picture of a cross-origin video took its media time from the page's last report of it, which is
+  made once a second, run forward by the wall clock. A stream that stalls to buffer stays "playing" with its clock
+  stopped, so the labels ran ahead, then went back. The stream had loaded 2-4%.
+- **Reproduced** with a red, green and blue film whose clock stops for 1.5 s (playback rate 0). The labels ran to
+  1.93 while the film stood at ~1.3, then went back to 1.36. A pause is reported at once and was already handled.
+- **Fixed:** compositor sight reads the video's `currentTime` in the retina's world just before and just after each
+  capture, and labels the picture with the mean. If a read fails, it falls back to the old estimate. In the test the
+  labels now hold at 1.32 during the stall, and the colours change at exactly 2.0 and 4.0 s.
+- **Live:** keyframes at 2.0, 2.4, 4.1 (the title fading) and 4.6 s (the clouds coming in), in order and right.
+
+**Bugs in a second watch's summary.** After a 6 s watch, a hold, then a 10 s watch:
+- **"watched 27.4s".** It spanned from the first watch's last picture, through the hold. It is now the time between
+  picture samples, gaps over 1 s left out. Sound is not used for this, because it is tapped through a hold.
+  Live: "watched 10.1s".
+- **"the first 5.1s was not held: ... unknown, not absent",** although the first watch had seen it. It now says
+  "before 5.0s: in an earlier percept, not repeated here".
+- **"on screen: "0:00 / -:- Loaded 3.46%"" at 0:14.** It was read when the video was found. It is now read again when
+  the percept is built. Live, the first watch said "0:04 / 10:34 Loaded 2.64%".
+- **The test:** a captioned video watched, held while the caption changes, and watched again. It failed first
+  ("watched 3.8s in a 1.5 s watch").

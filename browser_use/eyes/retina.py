@@ -126,6 +126,7 @@ class Retina:
 		self._compositor_seq = COMPOSITOR_SEQ
 		self._local_keyframes: dict[int, bytes] = {}
 		self._state_wall = 0.0
+		self._compositor_context: int | None = None
 
 	@property
 	def running(self) -> bool:
@@ -308,21 +309,53 @@ class Retina:
 			'height': height,
 			'scale': min(1.0, thumb_width / width),
 		}
+		before = await self._media_time(vid)
 		shot = await capture_screenshot(self._cdp.cdp_client, {'format': 'jpeg', 'quality': 70, 'clip': clip}, self._session_id)
+		after = await self._media_time(vid)
 		jpeg = base64.b64decode(shot['data'])
 		with Image.open(io.BytesIO(jpeg)) as img:
 			rgb_img = img.convert('RGB')
 			luma = rgb_img.convert('L').resize((16, 16), Image.Resampling.BOX).tobytes()
 			colours = rgb_img.resize((4, 4), Image.Resampling.BOX).tobytes()
 			mean = rgb_img.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
-		# media time: the page's last report of it, run forward to now while it plays
-		t = float(state.get('t') or 0.0) + max(0.0, time.monotonic() - self._state_wall) if state else 0.0
+		# Media time: read from the video on both sides of the capture. Failing that, the page's last report of it run
+		# forward to now, which runs ahead while a stream stalls (found on Wikimedia Commons: labels ran a second
+		# ahead, then went back).
+		reads = [r for r in (before, after) if r is not None]
+		if reads:
+			t = sum(reads) / len(reads)
+		else:
+			t = float(state.get('t') or 0.0) + max(0.0, time.monotonic() - self._state_wall) if state else 0.0
 		self._compositor_seq += 1
 		seq = self._compositor_seq
 		self._local_keyframes[seq] = jpeg
 		while len(self._local_keyframes) > MAX_LOCAL_KEYFRAMES:
 			self._local_keyframes.pop(next(iter(self._local_keyframes)))
 		return FrameSample(seq, vid, t, time.monotonic(), luma, tuple(mean)[:3], True, colours)  # type: ignore[arg-type]
+
+	async def _media_time(self, vid: int) -> float | None:
+		"""The attended video's currentTime, read in the retina's world now, or None if it is another item or the read
+		failed. The world's context is kept between reads and found again when it goes (a navigation)."""
+		assert self._cdp is not None
+		try:
+			if self._compositor_context is None:
+				self._compositor_context = await self._context_id()
+			r = await self._cdp.cdp_client.send.Runtime.evaluate(
+				params={
+					'expression': 'window.__retina ? window.__retina.mediaTime() : null',
+					'contextId': self._compositor_context,
+					'returnByValue': True,
+				},
+				session_id=self._session_id,
+			)
+		except Exception:
+			self._compositor_context = None
+			return None
+		if r.get('exceptionDetails'):
+			self._compositor_context = None
+			return None
+		value = (r.get('result') or {}).get('value')
+		return float(value[1]) if isinstance(value, list) and len(value) == 2 and value[0] == vid else None
 
 	async def _why_no_answer(self, probe_s: float = 2.0) -> str:
 		"""After a read timed out: is the renderer answering at all, or only that read stuck?"""

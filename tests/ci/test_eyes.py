@@ -407,6 +407,44 @@ async def test_a_cross_origin_video_watched_later_is_still_said_to_be_cross_orig
 	assert 'sound cannot be read' in p.text and 'none captured' not in p.text, 'unreadable is not absent: ' + p.text
 
 
+async def test_compositor_pictures_carry_the_time_the_film_was_at(eyes, session, site, elsewhere, tmp_path):
+	"""Found on Wikimedia Commons: keyframes of a cross-origin film listed "at 2.2s 3.9s 3.5s 4.8s", and the one at
+	3.5 s showed clouds that come in after 4.2 s. A compositor picture was labelled with the page's last report of
+	media time (once a second) run forward by the wall clock, so while the stream stalled to buffer the labels ran
+	ahead, then went back. A stall leaves a film "playing" with its clock stopped; here a playback rate of 0 for a
+	second does the same."""
+	film = tmp_path / 'rgb.webm'
+	_run(
+		*['-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=2', '-f', 'lavfi', '-i', 'color=c=lime:s=320x180:r=30:d=2'],
+		*['-f', 'lavfi', '-i', 'color=c=blue:s=320x180:r=30:d=2'],
+		*['-filter_complex', '[0][1][2]concat=n=3:v=1:a=0,format=yuv420p[v]', '-map', '[v]'],
+		*['-c:v', 'libvpx-vp9', '-b:v', '100k', '-deadline', 'realtime', '-cpu-used', '8', str(film)],
+	)
+	_serve(elsewhere, '/rgb.webm', film.read_bytes())
+	stall = (
+		"<script>const v = document.querySelector('video'); let stalled = false;"
+		"v.addEventListener('timeupdate', () => { if (!stalled && v.currentTime > 1.2) { stalled = true;"
+		' v.playbackRate = 0; setTimeout(() => { v.playbackRate = 1; }, 1500); } });</script>'
+	)
+	site.expect_request('/stalls').respond_with_data(
+		PLAYER.format(src=elsewhere.url_for('/rgb.webm'), attrs='autoplay muted', extra=stall), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/stalls'))
+	p = await eyes.watch(seconds=7.5, until='time')
+	assert p.items and p.items[0].tainted, p.text
+	wrong = []
+	for f in p.items[0].frames:
+		r, g, b = f.rgb
+		colour = 'red' if r > max(g, b) + 60 else 'green' if g > max(r, b) + 60 else 'blue' if b > max(r, g) + 60 else ''
+		expected = 'red' if f.t < 2 else 'green' if f.t < 4 else 'blue'
+		near_a_change = min(abs(f.t - 2), abs(f.t - 4)) < 0.25
+		if colour and colour != expected and not near_a_change:
+			wrong.append((round(f.t, 2), colour))
+	assert not wrong, f'pictures labelled with a time the film was not at: {wrong}'
+	ts = [f.t for f in p.items[0].frames]
+	assert all(b >= a - 0.05 for a, b in zip(ts, ts[1:])), f'labels went backwards: {ts}'
+
+
 async def test_the_eyes_keep_to_the_page_not_the_frames_inside_it(eyes, session, site, elsewhere):
 	"""Found hands-on on the Guardian's front page: a look said "no video playing on
 	https://assets.guim.co.uk/commercial/tpc-test/v2/index.html", an advertising frame inside the page. The retina ran
@@ -651,6 +689,27 @@ async def test_watch_until_bored_waits_longer_on_a_film_than_on_a_reel(eyes, ses
 	p = await eyes.watch(seconds=12.0, until='bored', min_seconds=1.0)
 	assert p.ended_at - p.started_at > 8.0, f'stopped on the calm opening of a 2-minute film: {p.stop_reason}'
 	assert p.items and any(abs(c - 7.0) < 0.5 for c in p.items[-1].sight.cuts), p.text
+
+
+async def test_a_second_watch_says_what_it_watched_not_what_came_before(eyes, session, site):
+	"""Found on Wikimedia Commons, a second watch of the film said: "watched 27.4s" for 10 s (the span ran from the
+	first watch's last picture, through the hold between them); "the first 5.1s was not held: ... unknown" (the first
+	watch had seen it); and "on screen: 0:00 / -:- Loaded 3.46%" at 0:14 (read when the video was found)."""
+	caption = (
+		'<div id="c" style="position:fixed;bottom:0;left:0;color:#fff;font:20px sans-serif">Caption one is showing</div>'
+		'<script>setTimeout(() => { document.getElementById("c").textContent = "Caption two replaced it"; }, 2000)</script>'
+	)
+	site.expect_request('/captioned').respond_with_data(
+		PLAYER.format(src='/calib.webm', attrs='autoplay muted', extra=caption), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/captioned'))
+	await eyes.watch(seconds=1.5, until='time', hold=True)
+	await asyncio.sleep(2.5)  # held: nothing plays, and the caption changes
+	second = await eyes.watch(seconds=1.5, until='time')
+	item = second.items[0]
+	assert item.watched_s < 2.5, f'watched {item.watched_s:.1f}s in a 1.5 s watch: {second.text}'
+	assert 'was not held' not in second.text and 'earlier percept' in second.text, second.text
+	assert 'Caption two replaced it' in second.text and 'Caption one' not in second.text, second.text
 
 
 async def test_hold_pauses_the_video_and_the_next_watch_resumes_it(eyes, session, site):
