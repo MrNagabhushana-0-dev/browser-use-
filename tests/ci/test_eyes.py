@@ -1399,3 +1399,38 @@ async def test_a_look_during_a_recording_costs_what_a_look_costs(eyes, session, 
 	assert p.image is not None and p.image_size[0] <= 640, f'{p.image_size}: {p.text}'
 	assert p.image[:3] == b'\xff\xd8\xff', 'sent as JPEG, as a look always is'
 	assert saved is not None and saved.stat().st_size > 0, 'the recording is whole'
+
+
+async def test_looks_during_a_recording_follow_the_page_through_a_reload(eyes, session, site, tmp_path):
+	"""A guard, from a live look on the T-Rex runner that showed its start screen after the game had (as far as the
+	rules could tell) started: with a recording running and its frames paced, a look right after a reload shows the
+	reloaded page, and a later look the change that followed. This passes; the live case is not reproduced."""
+	from PIL import Image
+
+	site.expect_request('/tint').respond_with_data(
+		'<!doctype html><body style="margin:0;height:100vh;background:#f0f">'
+		"<script>setTimeout(() => document.body.style.background = '#0a0', 2000)</script></body>",
+		content_type='text/html',
+	)
+
+	def middle(p) -> tuple[int, ...]:
+		assert p.image is not None, p.text
+		with Image.open(io.BytesIO(p.image)) as img:
+			return img.convert('RGB').getpixel((img.width // 2, img.height // 2))  # type: ignore[return-value]
+
+	await _open(eyes, session, site.url_for('/tint'))
+	recorder = session._recording_watchdog
+	assert recorder is not None
+	await recorder.start_recording(tmp_path / 'reload.mp4', framerate=10)
+	try:
+		await asyncio.sleep(2.5)
+		assert middle(await eyes.look())[1] > 120, 'green once the page has turned'
+		await session.navigate_to(site.url_for('/tint'))  # reloaded: magenta again, then green
+		await asyncio.sleep(0.2)
+		first = middle(await eyes.look())
+		await asyncio.sleep(2.5)
+		then = middle(await eyes.look())
+	finally:
+		await recorder.stop_recording()
+	assert first[0] > 120 and first[1] < 100, f'the reloaded page, magenta: {first}'
+	assert then[1] > 120 and then[0] < 100, f'and then green: {then}'
