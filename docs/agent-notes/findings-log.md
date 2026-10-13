@@ -3353,8 +3353,15 @@ then passed 3 of 3 alone).
 
 **Full `tests/ci` on `3bd1501`: 1,702 passed, 30 skipped, 0 failed** (36m22s).
 
+**The scan names what covers the screen** (test first; live on the Guardian: "the bottom 37% ("...Who guards the
+Guardian?...")").
+- A pixel-based detector (rows that stay the same across frames scrolled apart) also flagged uniform page areas, so
+  it was dropped.
+- The scan now asks the page for fixed or sticky elements across most of the screen's width at each step. Bands seen
+  at half the steps or more are reported, with their text.
+
 **Next, in order:**
-1. The scan: say when a fixed banner covers much of every frame (the Guardian's "Who pays" banner: ~40%).
+1. A full `tests/ci` on the head, then the PR update.
 2. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
    its CC-BY transcode, but the Wikimedia API answered 429 (rate limited, shared address); not retried. Try later at
    a low rate.

@@ -1090,6 +1090,28 @@ async def test_a_scan_labels_each_frame_with_where_it_was_scrolled(eyes, session
 	assert not wrong, f'{len(wrong)} of {len(scan.frames)} frames show another band than their label says: {wrong[:5]}'
 
 
+async def test_a_scan_says_what_stays_on_screen_while_the_page_scrolls(eyes, session, site):
+	"""Found hands-on on the Guardian's front page: from the second screen on, a "Who pays for the journalism" banner
+	covered the bottom ~40% of every frame of a scan, and the scan did not say so: what was under it went unseen without
+	a word. A band of the screen that stays the same while the page scrolls under it is now named."""
+	banner = (
+		'<div style="position:fixed;left:0;right:0;bottom:0;height:40vh;background:#fff;'
+		'border-top:6px solid #000;font:40px sans-serif">Support us</div>'
+	)
+	site.expect_request('/banner').respond_with_data(BANDS_PAGE.replace('</body>', banner + '</body>'), content_type='text/html')
+	await _open(eyes, session, site.url_for('/banner'))
+	p = await eyes.scan(max_screens=5, keyframes=3)
+	line = next((ln for ln in p.text.splitlines() if 'stays put' in ln), '')
+	assert 'bottom' in line, p.text
+	share = int(line.split('bottom ')[1].split('%')[0])
+	assert 30 <= share <= 50, line
+
+	site.expect_request('/no-banner').respond_with_data(BANDS_PAGE, content_type='text/html')
+	await _open(eyes, session, site.url_for('/no-banner'))
+	q = await eyes.scan(max_screens=5, keyframes=3)
+	assert 'stays put' not in q.text, q.text
+
+
 # -- recall: the model pulls frames by time instead of only receiving a pushed sheet -------------
 
 

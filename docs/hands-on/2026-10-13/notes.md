@@ -277,3 +277,24 @@ https://assets.guim.co.uk/commercial/tpc-test/v2/index.html", an advertising fra
   position. Chrome's screencast frames carry their own scroll offset, which would label them exactly.
 - From the second screen on, the Guardian's "Who pays for the journalism" banner covers the bottom ~40% of every
   frame, and the scan does not say so.
+
+## Noon: the scan names what covers the screen
+
+**Recording:** `guardian-scan-names-the-banner.mp4`, made by `retinat_record`: a scan of the Guardian's front page.
+
+**Why:** in the last session, the Guardian's "Who pays for the journalism" banner covered the bottom ~40% of every
+scan frame, and the scan said nothing. What was under the banner went unseen without a word.
+
+**First try: comparing pixels across frames scrolled apart.** Rows that stayed the same would be fixed. It found
+the banner. It also said a plain page of solid colour bands had one, because uniform areas look the same however far
+the page scrolls; white margins on real pages would too. Dropped.
+
+**What was kept: asking the page.** At each step, the scan asks which elements are fixed or sticky across most of the
+screen's width. A band reported at half the steps or more is said to stay put, with its text. Overlays such as
+banners, cookie bars and sticky headers are page elements even on canvas pages.
+- **Test:** the band page with a fixed banner 40% tall must get the line, and the same page without the banner must
+  not. It failed first; eyes and Retinat files 94/94.
+
+**Live:** "stays put while the page scrolls (what is under it was not seen): the bottom 37% ("The Guardian Who guards
+the Guardian? Our readers do. Author")". The frame labels were distinct as well (0.0, 2.4, 4.0, 4.8, 5.6, 5.9 screens
+down), after `3bd1501`.

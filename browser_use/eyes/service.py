@@ -702,6 +702,8 @@ class Eyes:
 				+ ', '.join(f'{y / vh:.1f}' for y in result.moving[:8])
 				+ ' screens down'
 			)
+		if result.fixed:
+			lines.append('    stays put while the page scrolls (what is under it was not seen): ' + _describe_bands(result.fixed))
 		image, size, tokens = (
 			(sheet[0], (sheet[1], sheet[2]), estimate_image_tokens(sheet[1], sheet[2])) if sheet else (None, None, 0)
 		)
@@ -1265,6 +1267,20 @@ def _journal_worthy(texts: list[str], readouts: dict[str, dict[str, Any]]) -> li
 		if r['n'] <= SHORT_SEQUENCE or (new_extreme and not r['rising']):
 			kept.append(t)
 	return kept
+
+
+def _describe_bands(bands: list[tuple[float, float, str]]) -> str:
+	"""Bands of the screen in words: 'the top 8%', 'the bottom 40% ("Support us")', or 'a band 30-45% down'."""
+	parts = []
+	for top, bottom, text in bands:
+		if top <= 0.03:
+			where = f'the top {round(bottom * 100)}%'
+		elif bottom >= 0.97:
+			where = f'the bottom {round((1 - top) * 100)}%'
+		else:
+			where = f'a band {round(top * 100)}-{round(bottom * 100)}% down'
+		parts.append(where + (f' ("{text}")' if text else ''))
+	return ', '.join(parts)
 
 
 def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_from: float | None = None) -> str:
