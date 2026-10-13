@@ -479,10 +479,11 @@ async def test_reflexes_through_retinat_act_within_a_frame_or_two(retinat, site)
 
 
 async def test_a_look_after_a_recorded_game_shows_how_it_ended(retinat, site, tmp_path, monkeypatch):
-	"""Found live on the T-Rex runner, through these tools: look, record, the game played for seconds and stopped,
-	look: the look showed the start screen from before the recording (a second look was right). Through the MCP
-	tools, as the agent uses them."""
-	import asyncio
+	"""Found live on the T-Rex runner, through these tools, four times: look, record, reflex rules start the game
+	and say when it stops, look: the look showed a frame from before the end. Three causes: the page view starved
+	when the recorder took its stream (ecac0a8); the recorder lost the repaint that ends an animation (5a16efe);
+	and with rules reading the canvas every frame the screencast kept sending the canvas as it was. A look now
+	captures the page at that moment."""
 	import base64
 	import io
 
@@ -500,11 +501,20 @@ async def test_a_look_after_a_recorded_game_shows_how_it_ended(retinat, site, tm
 		content_type='text/html',
 	)
 	await _call(retinat, 'retinat_open', {'url': site.url_for('/runs')})
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/runs')})
 	await _call(retinat, 'retinat_look', {})
 	await _call(retinat, 'retinat_record', {'action': 'start', 'framerate': 10})
 	try:
-		await _call(retinat, 'retinat_key', {'key': 'Space'})
-		await asyncio.sleep(3.0)  # played for 2 s, then stood still: green, full width
+		rules = [
+			{'when': "see.frame > 60 && see.frame % 60 === 0 && !!document.getElementById('h')", 'key': ' '},
+			{
+				'when': "!document.getElementById('h') && (see.memory.q = see.changed({from: '#c'}) === 0 ? (see.memory.q || 0) + 1 : 0) > 45",
+				'notify': 'stopped',
+			},
+		]
+		await _call(retinat, 'retinat_reflex', {'rules': rules})
+		woke = _text(await _call(retinat, 'retinat_wait', {'timeout': 20}))
+		assert '"stopped"' in woke, woke
 		look = await _call(retinat, 'retinat_look', {})
 	finally:
 		await _call(retinat, 'retinat_record', {'action': 'stop'})

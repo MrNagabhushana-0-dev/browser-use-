@@ -12,6 +12,7 @@ whole page as it looked while scrolling, including anything that animates as you
 """
 
 import asyncio
+import base64
 import io
 import time
 from dataclasses import dataclass, field
@@ -98,6 +99,32 @@ class PageWatcher:
 	def latest(self) -> bytes | None:
 		data = self.live.newest() if self.live else None
 		return self.live.fit(data) if self.live and data else None
+
+	async def capture(self) -> bytes | None:
+		"""The viewport as the compositor draws it now, as a JPEG at this watcher's width, or None if that failed.
+
+		A look takes this, not the stream's newest frame: the screencast is not 'now'. It drops the repaint that ends
+		an animation, and while a reflex reads a canvas every frame it kept sending the canvas as it was (found live:
+		looks after a game ended showed it running; a capture showed the end)."""
+		try:
+			cdp = await self.session.get_or_create_cdp_session(focus=False)
+			metrics = await cdp.cdp_client.send.Page.getLayoutMetrics(session_id=cdp.session_id)
+			vp = metrics['cssLayoutViewport']
+			width, height = vp['clientWidth'], vp['clientHeight']
+			clip = {
+				'x': vp['pageX'],
+				'y': vp['pageY'],
+				'width': width,
+				'height': height,
+				'scale': min(1.0, self.max_width / max(1, width)),
+			}
+			shot = await cdp.cdp_client.send.Page.captureScreenshot(
+				params={'format': 'jpeg', 'quality': self.quality, 'clip': clip},  # type: ignore[typeddict-item]
+				session_id=cdp.session_id,
+			)
+			return base64.b64decode(shot['data'])
+		except Exception:
+			return None
 
 	async def wait_latest(self, timeout: float = 4.0, settle: float = 0.3) -> bytes | None:
 		"""The newest frame, waiting up to `timeout` for the first one rather than a fixed nap.

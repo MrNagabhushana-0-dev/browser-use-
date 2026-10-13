@@ -423,9 +423,18 @@ class Eyes:
 			head += f'\n    no keyframe images: {trouble}'
 		return assemble(items, head, detail)
 
+	async def _page_now(self) -> tuple[bytes | None, str]:
+		"""The page as the compositor draws it now, and how it was got: captured at this moment, else the stream's
+		newest frame (which can be older than the page; see PageWatcher.capture)."""
+		watcher = self._page_watcher()
+		jpeg = await watcher.capture()
+		if jpeg:
+			return jpeg, 'captured from the compositor at this moment'
+		return await watcher.wait_latest(), "the screencast's newest frame (a capture failed): it may be older than the page"
+
 	async def _show_page(self, percept: Percept) -> None:
 		"""No video in the percept: attach the page as the compositor draws it, so a watch still shows the screen."""
-		jpeg = await self._page_watcher().wait_latest()
+		jpeg, _ = await self._page_now()
 		if not jpeg:
 			return
 		from PIL import Image
@@ -524,9 +533,9 @@ class Eyes:
 		playing = self.retina.state.get('vid') == self.retina.attended.get('vid') and self.retina.state.get('paused') is False
 		if self.retina.attended.get('vid') and self.retina.attended.get('kind') != 'canvas' and playing:
 			return await self.watch(seconds=seconds, until='time', min_seconds=seconds, detail=detail, keyframes=2)
-		jpeg = await self._page_watcher().wait_latest()
+		jpeg, how = await self._page_now()
 		url = self.retina.state.get('url', '')
-		text = f'👁 no video playing on {url[:120]}; this is the page as drawn now (a compositor frame, not a screenshot call)'
+		text = f'👁 no video playing on {url[:120]}; this is the page as drawn now ({how})'
 		now = time.monotonic()
 		text += _text_lines(self.retina.events, self._text_since(now), self.retina.page_since)
 		self._last_percept_end = now
