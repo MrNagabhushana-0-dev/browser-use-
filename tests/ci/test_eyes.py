@@ -1502,3 +1502,25 @@ async def test_find_s_crop_of_a_large_match_is_shrunk_to_fit(eyes, session, site
 	assert big.image_tokens <= 300, big.text
 	small = await eyes.find('Size of the preview')
 	assert small.image_size is not None and small.image_size[0] >= 600, f'a small match is still magnified: {small.text}'
+
+
+async def test_a_panel_built_after_load_is_one_line_not_one_per_nested_block(eyes, session, site):
+	"""Found on Wikipedia's main page: its Appearance panel, built by script 2 s after load, came back as "Text Small
+	Standard Large" and again as "Small Standard Large" (and the same for Width and Color): a block and the block
+	inside it, each reported. What a block says is said once, by the outermost block that says it."""
+	site.expect_request('/panel').respond_with_data(
+		'<!doctype html><body style="font:16px sans-serif"><p>An article.</p><script>'
+		'addEventListener("load", () => setTimeout(() => { const d = document.createElement("div");'
+		' document.body.appendChild(d); for (const [h, o] of [["Text", "Small Standard Large"], ["Width", "Standard Wide"]]) {'
+		' const g = document.createElement("div"); d.appendChild(g); const t = document.createElement("div");'
+		' t.textContent = h; g.appendChild(t); const v = document.createElement("div"); v.textContent = o; g.appendChild(v); }'
+		' }, 1500));</script></body>',
+		content_type='text/html',
+	)
+	await eyes.open()
+	await session.navigate_to(site.url_for('/panel'))
+	await asyncio.sleep(2.5)
+	p = await eyes.look()
+	lines = [line for line in p.text.splitlines() if 'Standard' in line]
+	assert len(lines) == 1, p.text
+	assert 'Text Small Standard Large Width Standard Wide' in lines[0], p.text

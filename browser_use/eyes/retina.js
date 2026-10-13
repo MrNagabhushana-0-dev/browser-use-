@@ -634,21 +634,41 @@ registerProcessor('retina-ear', RetinaEar);
 		const [a, b] = [luminance(fg), luminance(bg)].sort((x, y) => y - x);
 		return (a + 0.05) / (b + 0.05);
 	};
+	// Report what a changed element says. Returns the text when it was said (now, or within the last second), so a
+	// block inside it need not be said again.
 	const reportText = (el, added = false) => {
-		if (!el || el.nodeType !== 1 || !el.isConnected || el.closest('video, script, style, noscript')) return;
-		if (!isShown(el)) return;
+		if (!el || el.nodeType !== 1 || !el.isConnected || el.closest('video, script, style, noscript')) return null;
+		if (!isShown(el)) return null;
 		const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
-		if (!text || text.length > 240) return;
+		if (!text || text.length > 240) return null;
 		const now = performance.now();
+		if (now - (lastText.get(text) || -1e9) < 1000) return text;
 		const sec = Math.floor(now / 1000);
 		if (textBudget.second !== sec) textBudget = { second: sec, n: 0 };
-		if (++textBudget.n > 8) return; // a ticker repainting every frame is not news
-		if (now - (lastText.get(text) || -1e9) < 1000) return;
+		if (++textBudget.n > 8) return null; // a ticker repainting every frame is not news
 		lastText.set(text, now);
 		const faint = contrast(el) < 1.5;
 		R.events.push(
 			Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}, stillLoading(now, added, el, text) ? { loading: true } : {})
 		);
+		return text;
+	};
+	const depth = (el) => {
+		let n = 0;
+		for (let p = el; p; p = p.parentElement) n++;
+		return n;
+	};
+	// The outermost changed blocks first; a block whose words an enclosing block just said is not said again
+	// (found on Wikipedia: its Appearance panel came back once per nesting level).
+	const reportAll = (touched, added) => {
+		const said = [];
+		const order = [...touched].filter((el) => el && el.nodeType === 1).sort((a, b) => depth(a) - depth(b));
+		for (const el of order) {
+			const own = (el.innerText || '').replace(/\s+/g, ' ').trim();
+			if (said.some(([outer, text]) => outer !== el && outer.contains(el) && text.includes(own))) continue;
+			const text = reportText(el, added.has(el));
+			if (text) said.push([el, text]);
+		}
 	};
 	let textReady = false; // false while the page is still being parsed: its own content has not "appeared"
 	// The page is still filling itself in until its load event (and a moment after): text that arrives then is the
@@ -706,7 +726,7 @@ registerProcessor('retina-ear', RetinaEar);
 			// background tab, which is exactly where an agent's page often is.
 			setTimeout(() => {
 				for (const m of restyled) if (revealed(m)) touched.add(m.target);
-				touched.forEach((el) => reportText(el, added.has(el)));
+				reportAll(touched, added);
 			}, 0);
 		});
 		textObserver.observe(document, {
