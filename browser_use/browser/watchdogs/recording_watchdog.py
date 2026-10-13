@@ -1,6 +1,7 @@
 """Recording Watchdog for Browser Use Sessions."""
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -13,6 +14,9 @@ from browser_use.browser.events import AgentFocusChangedEvent, BrowserConnectedE
 from browser_use.browser.profile import ViewportSize
 from browser_use.browser.video_recorder import VideoRecorderService
 from browser_use.browser.watchdog_base import BaseWatchdog
+
+# A screencast quiet for this long after a frame is topped up with one capture of the page as it is
+QUIET_TOP_UP_S = 0.3
 
 
 class RecordingWatchdog(BaseWatchdog):
@@ -34,6 +38,12 @@ class RecordingWatchdog(BaseWatchdog):
 	# once the last is acknowledged, so the stream runs at the video's frame rate, not at every repaint of a 60 fps page
 	# (each one encoded by the browser and parsed on the event loop: that held the reflexes' input up ~50 ms)
 	_unacked: tuple[int, str | None] | None = PrivateAttr(default=None)
+	# When the newest frame arrived, and whether the page was captured since: Chrome's screencast drops the repaint
+	# that ends an animation (skipped while frames are in flight; a page that then stands still sends no other), so a
+	# stream gone quiet is topped up with one capture of the page as it is. Found live: a recorded game's video, and
+	# looks sharing its stream, ended on a frame from before the game stopped.
+	_last_frame_at: float = PrivateAttr(default=0.0)
+	_topped_up: bool = PrivateAttr(default=True)
 
 	async def on_BrowserConnectedEvent(self, event: BrowserConnectedEvent) -> None:
 		"""
@@ -112,6 +122,8 @@ class RecordingWatchdog(BaseWatchdog):
 			if self._unacked is not None:
 				(frame, session_id), self._unacked = self._unacked, None
 				await self._ack(frame, session_id)
+			elif not self._topped_up and time.monotonic() - self._last_frame_at > QUIET_TOP_UP_S:
+				await self._top_up(recorder)
 			due += period
 			await asyncio.sleep(max(0.0, due - loop.time()))
 
@@ -227,6 +239,23 @@ class RecordingWatchdog(BaseWatchdog):
 		self.latest_frame = event['data']
 		self._recorder.add_frame(event['data'])
 		self._unacked = (event['sessionId'], session_id)
+		self._last_frame_at, self._topped_up = time.monotonic(), False
+
+	async def _top_up(self, recorder: VideoRecorderService) -> None:
+		"""Capture the page once, now that its stream is quiet, and make that the newest picture."""
+		self._topped_up = True
+		if not self._current_session_id:
+			return
+		try:
+			shot = await self.browser_session.cdp_client.send.Page.captureScreenshot(
+				params={'format': 'jpeg', 'quality': 85}, session_id=self._current_session_id
+			)
+		except Exception as e:
+			self.logger.debug(f'Could not top up the recording with a capture: {e}')
+			return
+		if self._recorder is recorder and self._last_frame_at and not self._unacked:
+			self.latest_frame = shot['data']
+			recorder.add_frame(shot['data'])
 
 	async def _ack(self, frame: int, session_id: str | None) -> None:
 		"""Acknowledge a screencast frame, so the browser sends the next one."""

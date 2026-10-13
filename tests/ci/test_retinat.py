@@ -476,3 +476,39 @@ async def test_reflexes_through_retinat_act_within_a_frame_or_two(retinat, site)
 	stats = json.loads(_text(await _call(retinat, 'retinat_reflex', {'action': 'status'})))
 	assert stats['actions'] >= 4, stats
 	assert stats['latency_ms_p50'] is not None and stats['latency_ms_p50'] < 40, f'decision to key arriving: {stats}'
+
+
+async def test_a_look_after_a_recorded_game_shows_how_it_ended(retinat, site, tmp_path, monkeypatch):
+	"""Found live on the T-Rex runner, through these tools: look, record, the game played for seconds and stopped,
+	look: the look showed the start screen from before the recording (a second look was right). Through the MCP
+	tools, as the agent uses them."""
+	import asyncio
+	import base64
+	import io
+
+	from PIL import Image
+
+	monkeypatch.setenv('BROWSER_USE_RECORD_VIDEO_DIR', str(tmp_path / 'videos'))
+	site.expect_request('/runs').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#fff"><h1 id="h">Press Space to start</h1>'
+		'<canvas id="c" width="600" height="150" style="display:block;margin:auto"></canvas><script>'
+		'const c = document.getElementById("c"), g = c.getContext("2d"); let t0 = null;'
+		'addEventListener("keydown", () => { if (t0 === null) { t0 = performance.now(); document.getElementById("h").remove();'
+		' c.style.width = "100vw"; c.style.height = "50vh"; requestAnimationFrame(frame); } });'
+		'function frame(now) { const t = now - t0; g.fillStyle = t < 2000 ? `hsl(${t / 5}, 80%, 50%)` : "#0a0";'
+		' g.fillRect(0, 0, 600, 150); if (t < 2000) requestAnimationFrame(frame); }</script></body>',
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/runs')})
+	await _call(retinat, 'retinat_look', {})
+	await _call(retinat, 'retinat_record', {'action': 'start', 'framerate': 10})
+	try:
+		await _call(retinat, 'retinat_key', {'key': 'Space'})
+		await asyncio.sleep(3.0)  # played for 2 s, then stood still: green, full width
+		look = await _call(retinat, 'retinat_look', {})
+	finally:
+		await _call(retinat, 'retinat_record', {'action': 'stop'})
+	image = next(b for b in look.content if isinstance(b, types.ImageContent))
+	with Image.open(io.BytesIO(base64.b64decode(image.data))) as img:
+		middle = img.convert('RGB').getpixel((img.width // 2, img.height // 4))  # inside the canvas (top half)
+	assert middle[1] > 120 and middle[0] < 100, f'the look shows {middle}, not the game as it ended (green)'

@@ -200,6 +200,16 @@ class LiveView:
 		self._running = True
 		self.logger.debug(f'🎥 Live view started on {cdp.target_id[-4:]}')
 
+	def newest(self) -> bytes | None:
+		"""The newest picture of the page. Sharing the recorder's stream, that is the recorder's newest, which also
+		holds the capture it takes when the stream goes quiet (the screencast drops the repaint that ends an
+		animation); otherwise this view's last frame."""
+		recorder = getattr(self.browser_session, '_recording_watchdog', None)
+		if self._shared and recorder is not None and recorder.latest_frame:
+			return base64.b64decode(recorder.latest_frame)
+		frames = self.frames
+		return frames[-1].data if frames else None
+
 	def fit(self, data: bytes) -> bytes:
 		"""A frame as this view asked for it: JPEG, no wider than its max_width. Frames from a stream this view shares
 		(the video recorder's: the whole viewport, as PNG) are shrunk here, when one is used, not as each arrives."""

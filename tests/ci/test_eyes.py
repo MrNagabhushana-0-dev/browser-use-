@@ -1568,3 +1568,29 @@ async def test_looks_follow_the_page_whichever_way_a_recording_starts_or_stops(e
 		await paint('#0a0')
 		now = middle(await eyes.look())
 	assert now[1] > 120 and now[0] < 100, f'the page is green now; the look showed {now}'
+
+
+async def test_a_look_after_an_animation_stops_shows_where_it_stopped(eyes, session, site):
+	"""Found live on the T-Rex runner (looks after the game ended showed earlier frames) and pinned down by dumping
+	the frames: Chrome's screencast drops the repaint that ends an animation. Frames are in flight while it plays,
+	a repaint then is skipped, and a page that then stands still sends no other. So the newest streamed frame is not
+	'now' once the stream has gone quiet; a look then captures the page as it is."""
+	from PIL import Image
+
+	site.expect_request('/settles').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#fff"><canvas id="c" width="320" height="180"'
+		' style="display:block;width:100vw;height:100vh"></canvas><script>'
+		'const g = document.getElementById("c").getContext("2d"); const t0 = performance.now();'
+		'function frame(now) { const t = now - t0; g.fillStyle = t < 1500 ? `hsl(${t / 4}, 80%, 50%)` : "#0a0";'
+		' g.fillRect(0, 0, 320, 180); if (t < 1500) requestAnimationFrame(frame); } requestAnimationFrame(frame);'
+		'</script></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/settles'))
+	await eyes.look()  # the page view is streaming while the animation plays
+	await asyncio.sleep(2.5)
+	p = await eyes.look()
+	assert p.image is not None, p.text
+	with Image.open(io.BytesIO(p.image)) as img:
+		now = img.convert('RGB').getpixel((img.width // 2, img.height // 2))
+	assert now[1] > 120 and now[0] < 100, f'the animation ended green; the look showed {now}: {p.text}'

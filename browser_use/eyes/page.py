@@ -96,8 +96,8 @@ class PageWatcher:
 		return (r.get('result') or {}).get('value')
 
 	def latest(self) -> bytes | None:
-		frames = self.live.frames if self.live else []
-		return self.live.fit(frames[-1].data) if self.live and frames else None
+		data = self.live.newest() if self.live else None
+		return self.live.fit(data) if self.live and data else None
 
 	async def wait_latest(self, timeout: float = 4.0, settle: float = 0.3) -> bytes | None:
 		"""The newest frame, waiting up to `timeout` for the first one rather than a fixed nap.

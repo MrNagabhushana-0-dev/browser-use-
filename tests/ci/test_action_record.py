@@ -177,3 +177,34 @@ async def test_profile_record_video_dir_still_works(page_url: str, tmp_path: Pat
 	videos = list(tmp_path.glob('*.mp4'))
 	assert videos, f'expected at least one recorded mp4 in {tmp_path}'
 	assert videos[0].stat().st_size > 0
+
+
+async def test_a_recording_ends_on_the_picture_an_animation_stopped_on(
+	browser_session: BrowserSession, httpserver, tmp_path: Path
+):
+	"""Found live on the T-Rex runner: a look during a recording showed a frame from before the game ended. Chrome's
+	screencast drops the repaint that ends an animation (it is skipped while frames are in flight, and a page that
+	then stands still sends no other), and the recorder's full-size frames are in flight most of the time. So the
+	video ended on the animation's last streamed frame, not where it stopped. A quiet stream is now topped up with
+	one capture of the page as it is."""
+	import imageio.v3 as iio
+	import numpy as np
+
+	httpserver.expect_request('/settles').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#fff"><canvas id="c" width="320" height="180"'
+		' style="display:block;width:100vw;height:100vh"></canvas><script>'
+		'const g = document.getElementById("c").getContext("2d"); let t0 = null;'
+		'function frame(now) { t0 = t0 ?? now; const t = now - t0; g.fillStyle = t < 1500 ? `hsl(${t / 4}, 80%, 50%)` : "#0a0";'
+		' g.fillRect(0, 0, 320, 180); if (t < 1500) requestAnimationFrame(frame); } requestAnimationFrame(frame);'
+		'</script></body>',
+		content_type='text/html',
+	)
+	watchdog = browser_session._recording_watchdog
+	assert watchdog is not None
+	out = await watchdog.start_recording(tmp_path / 'settles.mp4', framerate=10)
+	await browser_session.event_bus.dispatch(NavigateToUrlEvent(url=httpserver.url_for('/settles'), new_tab=False))
+	await asyncio.sleep(3.5)
+	await watchdog.stop_recording()
+	last = list(iio.imiter(str(out)))[-1]
+	pixel = last[last.shape[0] // 2, last.shape[1] // 2].astype(int)
+	assert np.abs(pixel - (0, 170, 0)).max() < 50, f'the video ends on {pixel}, not the green the animation stopped on'
