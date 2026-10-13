@@ -3239,13 +3239,53 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
     compositing): ~50 ms for a simple clip, ~80 ms for a busy 720p pattern, ~150 ms for the 1080p film.
   - It is not contention with the eyes' compositor loop (~78 ms with and without it).
 
+**The screen as the compositor draws it** (`a30f837`):
+- **Measured first:** on a busy 1080p cross-origin video, forced captures came at ~22 a second, 36 ms each. A
+  screencast came at the video's 30 fps, each frame 1 ms old on arrival (p95 2 ms).
+- **Now:** when the session launched the browser, the rules get a screencast on a DevTools connection of their own.
+  It shares no event slot with the recorder or the eyes. Otherwise the capture loop stays.
+- **What the screencast got wrong, found by running the tests many times:**
+  - **Broken frames.** About half a second into a video's playback, a frame sometimes lacked the video (its box
+    near-black, the page drawn), or was black edge to edge, white page and all. The rules saw a cut that never
+    happened.
+  - **Each fix in turn, counted over plays:**
+
+    | Check | False cuts |
+    |---|---|
+    | none | 3 in 10 |
+    | a 250 ms warm-up | 3 in 10 (the glitch is tied to the video's playback, not the stream's start) |
+    | pure-black frames only | 0 in 20 with the video-only clip, but 4 in 30 with the test's clip (near-black frames slip through) |
+    | screen-wide share changed | 4 in 30 (the video filled 11% of the screen) |
+    | a region replaced almost entirely (9 of 12 cells of any 4x3 block), confirmed with a capture | **0 in 30** |
+  - **A still page sends nothing,** and the repaint ending an animation can be dropped: a stream quiet for 0.3 s is
+    topped up with one capture.
+- **Also fixed on the way:**
+  - the feed outlived its browser and failed every 0.25 s for the rest of the process (test);
+  - taint is now sticky per element;
+  - the scratch canvas a tainted draw spoils is replaced.
+- **Measured, six runs:**
+  - pictures are 9-11 ms old when fed (was ~50);
+  - a square in a cross-origin frame was clicked 34-39 ms after it was drawn (was 16-51);
+  - a cross-origin cut was caught at 2.045-2.072 s (truth 2.0; the confirming capture costs ~50 ms).
+- **Not explained:** the region runner test failed 2 of ~9 times in combined runs in a freshly restarted container,
+  and never alone. CPU throttling did not reproduce it (the page held ~52 fps even at 10x), so the test was left
+  unchanged.
+- **The stale look again:** `test_a_look_after_a_recorded_game_shows_how_it_ended` failed in 4 of 5 combined runs
+  after the container restarted.
+  - It fails the same way on `4f31b66` and `38380ab`, so it is not this work.
+  - The look said "captured from the compositor at this moment", so the capture itself returned a frame from the
+    middle of the animation, a second after it ended.
+  - With the page now reporting its own last frame time in the failure message, it has passed 5 runs since (3 of
+    the file alone, 2 combined). All its failures came in the first hour after the restart. A cold container is a
+    guess, not shown; if it recurs, the message now says whether the page's own frame loop stopped mid-animation.
+
 **Next, in order:**
-1. A faster screen feed for busy pages. Try the screencast (frames as the compositor makes them, no forced capture)
-   against the forced capture, on the Commons film, measured the same way.
-2. Ground-truth live accuracy: a rule tuned to cuts on a film whose shot list is known, checked against it.
-3. Raise the compositor sight from 6 to 10 fps and check live whether the Commons dissolve then reads as `fade->`.
-4. The feed test: not reproduced under synthetic load (8/8). Watch the next full runs.
-5. Play the T-Rex runner again with `see.track` and a region scaled by the measured speed, recorded.
+1. The stale look in a fresh container (4 of 5 combined runs in the first hour, 0 of 5 since): when it recurs, read
+   the page's last frame time from the failure message.
+2. Live: the Commons film with rules on the screencast feed (was 153 ms a picture with captures).
+3. Ground-truth live accuracy: a rule tuned to cuts on a film whose shot list is known, checked against it.
+4. Raise the compositor sight from 6 to 10 fps and check live whether the Commons dissolve then reads as `fade->`.
+5. The feed test and the region-runner test: not reproduced under synthetic load. Watch the next full runs.
 6. Carried over:
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).

@@ -497,7 +497,7 @@ async def test_a_look_after_a_recorded_game_shows_how_it_ended(retinat, site, tm
 		'const c = document.getElementById("c"), g = c.getContext("2d"); let t0 = null;'
 		'addEventListener("keydown", () => { if (t0 === null) { t0 = performance.now(); document.getElementById("h").remove();'
 		' c.style.width = "100vw"; c.style.height = "50vh"; requestAnimationFrame(frame); } });'
-		'function frame(now) { const t = now - t0; g.fillStyle = t < 2000 ? `hsl(${t / 5}, 80%, 50%)` : "#0a0";'
+		'function frame(now) { const t = now - t0; window.lastT = Math.round(t); g.fillStyle = t < 2000 ? `hsl(${t / 5}, 80%, 50%)` : "#0a0";'
 		' g.fillRect(0, 0, 600, 150); if (t < 2000) requestAnimationFrame(frame); }</script></body>',
 		content_type='text/html',
 	)
@@ -522,7 +522,17 @@ async def test_a_look_after_a_recorded_game_shows_how_it_ended(retinat, site, tm
 	image = next(b for b in look.content if isinstance(b, types.ImageContent))
 	with Image.open(io.BytesIO(base64.b64decode(image.data))) as img:
 		middle = img.convert('RGB').getpixel((img.width // 2, img.height // 4))  # inside the canvas (top half)
-	assert middle[1] > 120 and middle[0] < 100, f'the look shows {middle}, not the game as it ended (green)'
+	if not (middle[1] > 120 and middle[0] < 100):
+		cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+		r = await cdp.cdp_client.send.Runtime.evaluate(
+			params={
+				'expression': 'JSON.stringify({lastT: window.lastT, now: Math.round(performance.now() - t0)})',
+				'returnByValue': True,
+			},
+			session_id=cdp.session_id,
+		)
+		page = r.get('result', {}).get('value')
+		raise AssertionError(f'the look shows {middle}, not the game as it ended (green); the page: {page}; {_text(look)}')
 
 
 async def test_a_look_asked_while_a_wait_is_pending_says_so(retinat, site):
