@@ -3151,23 +3151,30 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
 - **Shutdown:** a SIGTERM'd Retinat server exits in 0.2 s with all 9 of its browser processes. Before `b669d69` it
   hung indefinitely.
 
-**Not reproduced, not fixed:**
-- Twice, with a recording running, a look showed the T-Rex start screen after the rules had seen the game start.
-  - A reload test passes on every variant tried, so it stays as a guard (`9a3d6a1`).
-  - A freshness check keyed on first paint fixed nothing I could show failing, so it was not kept.
-- In the same runs the game froze in mid-air at score 49:
-  - its frame loop was alive;
-  - it had focus;
-  - its console was empty;
-  - Space did nothing.
-
-  Unexplained; possibly this copy of the game.
+**The stale look, settled later that night** (`docs/hands-on/2026-10-13/notes.md`, "Night"):
+- **Two looks sent in order were stale for real.** One showed a mid-run frame after the rules saw the picture stop.
+  The other showed the dino in mid-air at 49, twice, 30 s apart. Three causes, each with a test that failed first:
+  - the page view starved when a recording took or released the shared screencast (`ecac0a8`);
+  - the recorder lost the repaint that ends an animation; a quiet recording is now topped up with one capture
+    (`5a16efe`);
+  - with rules reading the canvas every frame, the stream's newest frame still showed the animation mid-way a
+    second after it ended. A look now captures the page at that moment (`cfa7e96`). The test failed 5 of 6 runs
+    on `5a16efe`.
+- **The other "stale" looks were mine:** sent in the same batch as `retinat_wait`, they ran at the game's start.
+  That covers the start-screen sightings, the "fourth time" and the "still stale after the fix" runs. An hour of
+  capture variants chasing them was dropped unmerged.
+- **The tools now say so:** a seeing tool asked while a `retinat_wait` is pending adds "asked while a retinat_wait
+  was still waiting". The wait's description says to look after it returns.
+- **Live, in strict order** (look, record, rules, wait, look): GAME OVER, and the recording ends on it.
+- The mid-air "freeze" was a stale look: the game had crashed normally.
 
 **Mistakes of mine worth not repeating:**
 - `pkill -f` patterns matched my own shell.
 - A test page that changed at 600 ms raced a look that waits 300 ms to settle, and I chased that race as a
   browser bug for several runs. Give a page's change a margin longer than the look takes.
 - A reflex's p50 over two actions, one of them sent during page load, is noise, not a measurement.
+- A look sent in the same batch as `retinat_wait` runs at once. Check the call log's order before calling a picture
+  stale: I chased the start screen as a bug for an hour when it was simply the screen.
 
 **Later in the round:**
 - **Dissolves and fades are shot changes; a pan is not** (`fc41722`), done twin-comparison style:

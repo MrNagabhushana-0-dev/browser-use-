@@ -45,6 +45,12 @@ if TYPE_CHECKING:
 	from browser_use.desktop.service import DesktopControl
 
 TOOL_PREFIX = 'retinat_'
+# Said on what a seeing tool returns when it was asked while a retinat_wait was pending: a client may send both at
+# once, and the answer is then from before what the wait is for (found live: read as a stale picture for an hour)
+_WAIT_PENDING_NOTE = (
+	'\n⏳ asked while a retinat_wait was still waiting: this is from before what that wait is for. '
+	'Ask again after the wait returns.'
+)
 # Tools that send input, navigate, scroll or play: refused up front while the person holds the wheel.
 ACTING = frozenset(
 	{
@@ -531,7 +537,8 @@ def _browser_tools() -> list['types.Tool']:
 			name='retinat_wait',
 			description=(
 				'Sleep until a reflex rule with "notify" fires (or timeout), then say which, when, and what the '
-				'reflexes did meanwhile. Costs nothing while waiting: no images, no polling.'
+				'reflexes did meanwhile. Costs nothing while waiting: no images, no polling. Look after it returns, '
+				'not alongside it: a look sent with it runs at once.'
 			),
 			input_schema={
 				'type': 'object',
@@ -583,6 +590,7 @@ class RetinatServer(BrowserUseServer):
 		self.bridge = bridge
 		self.cdp_url = bridge.cdp_url if bridge else cdp_url
 		self._control: 'DesktopControl | None' = None  # computer use, made on first use
+		self._waits = 0  # retinat_wait calls in progress
 		self.server = Server('retinat', version=get_browser_use_version())
 		self._setup_retinat_handlers()
 
@@ -595,6 +603,10 @@ class RetinatServer(BrowserUseServer):
 
 			token = effects.begin()
 			listed = {t.name: t for t in [*_tools(), *self._network_tool_entries('retinat')]}
+			looking = {name for name, t in listed.items() if t.annotations and t.annotations.read_only_hint}
+			waiting = params.name == 'retinat_wait'
+			before_a_wait = self._waits > 0 and params.name in looking and not waiting
+			self._waits += waiting
 			try:
 				if params.name in listed:
 					effects.check_arguments(listed[params.name].input_schema, params.arguments or {})
@@ -604,12 +616,14 @@ class RetinatServer(BrowserUseServer):
 				content: list[types.ContentBlock] = (
 					result if isinstance(result, list) else [types.TextContent(type='text', text=result)]
 				)
+				if before_a_wait and content and isinstance(content[0], types.TextContent):
+					content[0] = types.TextContent(type='text', text=content[0].text + _WAIT_PENDING_NOTE)
 				return types.CallToolResult(content=content)
 			except Exception as e:
 				# Every input and navigation below goes through effects.act, so a failure says if anything happened.
-				looking = {name for name, t in listed.items() if t.annotations and t.annotations.read_only_hint}
 				return effects.failure(params.name, e, read_only=params.name in looking)
 			finally:
+				self._waits -= waiting
 				effects.end(token)
 
 		async def empty_resources(_context: Any, _params: 'types.PaginatedRequestParams') -> 'types.ListResourcesResult':

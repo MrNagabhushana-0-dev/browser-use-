@@ -479,11 +479,12 @@ async def test_reflexes_through_retinat_act_within_a_frame_or_two(retinat, site)
 
 
 async def test_a_look_after_a_recorded_game_shows_how_it_ended(retinat, site, tmp_path, monkeypatch):
-	"""Found live on the T-Rex runner, through these tools, four times: look, record, reflex rules start the game
-	and say when it stops, look: the look showed a frame from before the end. Three causes: the page view starved
-	when the recorder took its stream (ecac0a8); the recorder lost the repaint that ends an animation (5a16efe);
-	and with rules reading the canvas every frame the screencast kept sending the canvas as it was. A look now
-	captures the page at that moment."""
+	"""Found live on the T-Rex runner, through these tools: look, record, the game played and stopped, look: the
+	look showed a frame from before the end. Three causes: the page view starved when the recorder took its stream
+	(ecac0a8); the recorder lost the repaint that ends an animation (5a16efe); and with rules reading the canvas
+	every frame the screencast kept sending the canvas as it was (this test, with rules, failed 5 of 6 runs on
+	5a16efe). A look now captures the page at that moment. Send the last look after retinat_wait has returned:
+	sent alongside it, a look shows the page as it was when the wait began."""
 	import base64
 	import io
 
@@ -522,3 +523,25 @@ async def test_a_look_after_a_recorded_game_shows_how_it_ended(retinat, site, tm
 	with Image.open(io.BytesIO(base64.b64decode(image.data))) as img:
 		middle = img.convert('RGB').getpixel((img.width // 2, img.height // 4))  # inside the canvas (top half)
 	assert middle[1] > 120 and middle[0] < 100, f'the look shows {middle}, not the game as it ended (green)'
+
+
+async def test_a_look_asked_while_a_wait_is_pending_says_so(retinat, site):
+	"""Found live on the T-Rex runner: looks sent alongside retinat_wait ran at once, before the game ended, and I read
+	them as stale pictures of its end for an hour. A look asked while a wait is pending says so; one after it does not."""
+	import asyncio
+
+	site.expect_request('/later').respond_with_data(
+		'<!doctype html><body><p id="p">before</p>'
+		'<script>setTimeout(() => { document.getElementById("p").textContent = "after"; }, 4000)</script></body>',
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/later')})
+	await _call(retinat, 'retinat_reflex', {'rules': [{'when': "see.text('#p') === 'after'", 'notify': 'changed'}]})
+	waiting = asyncio.create_task(_call(retinat, 'retinat_wait', {'timeout': 20}))
+	await asyncio.sleep(0.2)
+	early = _text(await _call(retinat, 'retinat_look', {}))
+	woke = _text(await waiting)
+	assert '"changed"' in woke, woke
+	late = _text(await _call(retinat, 'retinat_look', {}))
+	assert 'still waiting' in early and 'retinat_wait' in early, early
+	assert 'still waiting' not in late, late

@@ -104,8 +104,8 @@ class PageWatcher:
 		"""The viewport as the compositor draws it now, as a JPEG at this watcher's width, or None if that failed.
 
 		A look takes this, not the stream's newest frame: the screencast is not 'now'. It drops the repaint that ends
-		an animation, and while a reflex reads a canvas every frame it kept sending the canvas as it was (found live:
-		looks after a game ended showed it running; a capture showed the end)."""
+		an animation, and while a reflex reads a canvas every frame it kept sending the canvas as it was (in a test of
+		a recorded game, 5 of 6 looks from the stream showed the animation mid-way, a second after it ended)."""
 		try:
 			cdp = await self.session.get_or_create_cdp_session(focus=False)
 			metrics = await cdp.cdp_client.send.Page.getLayoutMetrics(session_id=cdp.session_id)

@@ -249,6 +249,9 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
 - **The page can't forge input:** the rules run in an isolated world, and the page's own script cannot reach their
   input channel.
 - `action=status` gives counts and latency. `action=clear` stops the rules and releases held keys.
+- **Look after `retinat_wait` returns, not alongside it.** A client may send both at once, and the look then runs
+  straight away, before what you are waiting for. Such a look says so ("asked while a retinat_wait was still
+  waiting").
 
 ## Hard rules
 

@@ -27,7 +27,7 @@ were called live for the first time: the MCP tool list in this session now inclu
 | 2 | A rule could not say "something grey is just ahead". In this game the dino, the ground and the cacti are one grey. `see.locate` gave only where all of a colour sits on average. | **Fixed** (`67f13b1`): `see.locate` and `see.changed` take `{in: [x, y, w, h]}`. A runner test passes 6 obstacles with no hit; with nobody at the keys, 3 or more hits. |
 | 3 | `retinat_wait` returned "30 s up" from rules that had already been replaced. The status also reported the old rules' inputs. | **Fixed** (`a3ff316`): new rules start with an empty event queue and fresh stats. |
 | 4 | With a recording running, reflex decision to input went from ~2 ms to ~150 ms (in a test: p50 58 ms, p95 96 ms). Every repaint of the 60 fps game was a full-size PNG, decoded on the event loop. | **Fixed** (`63c2d52`): frames are paced to the video's rate, sent as JPEG and decoded in a worker thread. The test now measures p50 1.8 ms, p95 22 ms; live, p50 1.8 ms while recording. |
-| 5 | Twice with a recording running, a look showed the game's start screen after the rules had seen it start. | **Found and fixed later that night**, see "Night: the stale look" below. There were three causes. The reload guard (`9a3d6a1`) was the wrong reproduction. |
+| 5 | Twice with a recording running, a look showed the game's start screen after the rules had seen it start. | **My mistake, not the tools'.** Both looks were sent in the same batch as `retinat_wait`, so they ran at once, at the game's start (see "Correction" below). Two other looks, sent in order, were stale for real; their three causes are fixed (see "Night"). |
 
 **Measured live on this page (no recording):** 11 key taps, decision to input p50 1.6 ms, p95 2.1 ms.
 **With the recording running:** p50 3.8 ms on the start screen, 1.8 ms during play.
@@ -83,22 +83,52 @@ px wide.
 - "on screen" for the item is the player's control text ("0:00 / -:- Loaded 3.32%"), since the name now carries the
   title. Controls could be left out of "on screen".
 
-## Night: the stale look, found and fixed (three causes)
+## Night: the stale look (three causes, and a mistake of mine)
 
-**Recording:** `t-rex-recorded-to-game-over.mp4`, 14 s. It was made by `retinat_record`. It shows the rules starting the game
-and jumping a three-cactus group, then the crash at 60, and it now ends on the real GAME OVER screen.
+**Recordings:**
+- `t-rex-recorded-to-game-over.mp4`, 14 s, made by `retinat_record`. The rules start the game and jump a
+  three-cactus group, the game crashes at 60, and the video ends on the real GAME OVER screen.
+- `t-rex-in-strict-order-ends-on-game-over.mp4`, 32 s: the check, in strict order, described at the end.
 
-With a recording running, a look after the game ended kept showing an earlier frame: four times in all, twice before
-this section. The page itself was checked each time (canvas size, heading, a direct capture) and was at its end.
-Each cause was then reproduced in a test that failed first:
+Twice, a look sent after `retinat_wait` had returned showed an earlier frame of the game:
+- at 23:52, a mid-run frame, after the rules had seen the picture stop;
+- at 00:21, the dino in mid-air at 49, in two looks 30 s apart with Space pressed between them.
+
+Each cause below was reproduced in a test that failed first:
 
 | Cause | Fix |
 |---|---|
 | **The page view starved.** The eyes' page view and the recorder share one screencast and one frame slot. A recording started after a look took both; one stopped while the view shared it ended the stream. | `ecac0a8`: the view notices it is out of step and starts again in step. Both orders are tested. |
 | **The recorder lost the final repaint.** Chrome's screencast drops the repaint that ends an animation: it is skipped while frames are in flight, and a page that then stands still sends no other. Full-size frames are in flight most of the time; the eyes' 640 px stream was not affected (3/3). | `5a16efe`: a quiet recording is topped up with one capture. The video's last frame after an animation is tested; it failed about half the time before. |
-| **A stale stream that was not quiet.** With reflex rules reading the canvas every frame, the screencast kept sending frames (the newest 0.03 s old) that showed the canvas before the end. | `cfa7e96`: a look now captures the page at that moment and says so. The stream is only the fallback. Tested through the Retinat tools in the live order. |
+| **A stale stream that was not quiet.** With reflex rules reading the canvas every frame, the stream's newest frame still showed the animation mid-way, a second after it ended. | `cfa7e96`: a look now captures the page at that moment and says so; the stream is only the fallback. The test (look, record, rules, wait, look through the Retinat tools) failed 5 of 6 runs on `5a16efe`. |
 
-The earlier mystery of the game "freezing mid-air, with Space doing nothing" was these stale looks: the game had
-crashed normally, and Space had in fact restarted it.
+The game "freezing in mid-air, with Space doing nothing" was these stale looks: the game had crashed normally, and
+Space had in fact restarted it.
 
-The look test from 01:59 (look, record, rules, wait, look) is to be repeated live after the affected test files pass.
+### Correction: most of the stale looks that night were mine
+
+Re-reading the call log showed the problem. From 23:53 on, and in every run from 01:54 to 02:38, I sent
+`retinat_look` in the same batch as `retinat_wait`. The client ran them together:
+- the look came back within a second, at the game's start;
+- the wait came back about 10 s later, when the game ended.
+
+Those looks showed the start screen because that was the screen. I took them as the bug still there:
+- as a fourth sighting before `cfa7e96`;
+- after it, as the fix failing. I then spent an hour on capture variants (a clip at scale 1, no clip, a capture
+  Chrome scaled down). They all "still showed the start screen", for the same reason, and that change was dropped.
+
+What stands:
+- causes 1 and 2 rest on the two looks sent in order, and on their failing tests;
+- cause 3 rests on its test alone. It is a real bug, but no live look of mine showed it.
+
+**Checked live in strict order** on the committed code, at 02:44:
+1. a look;
+2. record;
+3. rules;
+4. a wait, which fired at 30.4 s;
+5. then a look: GAME OVER at 55.
+
+The recording ends on GAME OVER too.
+
+**The tools now catch this mistake.** A seeing tool asked while a `retinat_wait` is pending says "asked while a
+retinat_wait was still waiting". The wait's own description says to look after it returns.
