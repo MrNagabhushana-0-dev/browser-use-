@@ -27,7 +27,7 @@ were called live for the first time: the MCP tool list in this session now inclu
 | 2 | A rule could not say "something grey is just ahead". In this game the dino, the ground and the cacti are one grey. `see.locate` gave only where all of a colour sits on average. | **Fixed** (`67f13b1`): `see.locate` and `see.changed` take `{in: [x, y, w, h]}`. A runner test passes 6 obstacles with no hit; with nobody at the keys, 3 or more hits. |
 | 3 | `retinat_wait` returned "30 s up" from rules that had already been replaced. The status also reported the old rules' inputs. | **Fixed** (`a3ff316`): new rules start with an empty event queue and fresh stats. |
 | 4 | With a recording running, reflex decision to input went from ~2 ms to ~150 ms (in a test: p50 58 ms, p95 96 ms). Every repaint of the 60 fps game was a full-size PNG, decoded on the event loop. | **Fixed** (`63c2d52`): frames are paced to the video's rate, sent as JPEG and decoded in a worker thread. The test now measures p50 1.8 ms, p95 22 ms; live, p50 1.8 ms while recording. |
-| 5 | Twice with a recording running, a look showed the game's start screen after the rules had seen it start. | **Not reproduced.** A reload test passes on every variant tried, and I could not show that a freshness check fixes anything, so none was kept. The test stays as a guard (`9a3d6a1`). |
+| 5 | Twice with a recording running, a look showed the game's start screen after the rules had seen it start. | **Found and fixed later that night**, see "Night: the stale look" below. There were three causes. The reload guard (`9a3d6a1`) was the wrong reproduction. |
 
 **Measured live on this page (no recording):** 11 key taps, decision to input p50 1.6 ms, p95 2.1 ms.
 **With the recording running:** p50 3.8 ms on the start screen, 1.8 ms during play.
@@ -40,14 +40,8 @@ were called live for the first time: the MCP tool list in this session now inclu
 
 ## Still open
 
-- **In two recorded runs the game froze in mid-air at score 49**, just past the three-cactus group:
-  - the page's frame loop was alive (a rule still notified);
-  - it had focus and was visible;
-  - its console was empty;
-  - Space neither resumed nor restarted it.
-
-  Without a recording the game crashed normally. This is unexplained; it may be this copy of the game. It is not
-  reproduced in a test.
+- **In two recorded runs the game seemed to freeze in mid-air at score 49.** Explained later: the game had
+  crashed normally, and the looks were stale (see "Night: the stale look").
 - **The rules knew nothing about the game's speed**; they estimated it from the frame count. Since `7844340`,
   `see.track` gives a colour's velocity in px/s. It is not yet used live on this game.
 
@@ -88,3 +82,23 @@ px wide.
 - A 0.1 s first "shot" comes from the compositor's first sample.
 - "on screen" for the item is the player's control text ("0:00 / -:- Loaded 3.32%"), since the name now carries the
   title. Controls could be left out of "on screen".
+
+## Night: the stale look, found and fixed (three causes)
+
+**Recording:** `t-rex-recorded-to-game-over.mp4`, 14 s. It was made by `retinat_record`. It shows the rules starting the game
+and jumping a three-cactus group, then the crash at 60, and it now ends on the real GAME OVER screen.
+
+With a recording running, a look after the game ended kept showing an earlier frame: four times in all, twice before
+this section. The page itself was checked each time (canvas size, heading, a direct capture) and was at its end.
+Each cause was then reproduced in a test that failed first:
+
+| Cause | Fix |
+|---|---|
+| **The page view starved.** The eyes' page view and the recorder share one screencast and one frame slot. A recording started after a look took both; one stopped while the view shared it ended the stream. | `ecac0a8`: the view notices it is out of step and starts again in step. Both orders are tested. |
+| **The recorder lost the final repaint.** Chrome's screencast drops the repaint that ends an animation: it is skipped while frames are in flight, and a page that then stands still sends no other. Full-size frames are in flight most of the time; the eyes' 640 px stream was not affected (3/3). | `5a16efe`: a quiet recording is topped up with one capture. The video's last frame after an animation is tested; it failed about half the time before. |
+| **A stale stream that was not quiet.** With reflex rules reading the canvas every frame, the screencast kept sending frames (the newest 0.03 s old) that showed the canvas before the end. | `cfa7e96`: a look now captures the page at that moment and says so. The stream is only the fallback. Tested through the Retinat tools in the live order. |
+
+The earlier mystery of the game "freezing mid-air, with Space doing nothing" was these stale looks: the game had
+crashed normally, and Space had in fact restarted it.
+
+The look test from 01:59 (look, record, rules, wait, look) is to be repeated live after the affected test files pass.
