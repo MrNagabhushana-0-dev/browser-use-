@@ -3329,6 +3329,14 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
 - The reflexes' status now reports `screen_source` and `screen_confirmed`, so a slow page can be told from a slow path
   (test first).
 
+**Full `tests/ci` on `fb23f7c`: red, 1 failed, 1,698 passed, 31 skipped** (36m02s). The failure:
+`test_play_arena.py::test_a_game_behind_a_title_screen_gets_started_and_played` ("the title screen was never
+dismissed"). It passed in the three full runs before it today, and 3 of 3 alone after it.
+- The arena uses none of what changed today: no captures, reflexes or retina taint.
+- It has failed in full runs before, in Round 13, from background work leaked by earlier tests. Today's new background
+  work, the screen feed, only runs in files after this one.
+- Cause not found yet; the eyes, eyesbench and arena files are being run together to see whether it recurs.
+
 **Next, in order:**
 1. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
    its CC-BY transcode, but the Wikimedia API answered 429 (rate limited, shared address); not retried. Try later at
