@@ -435,9 +435,12 @@ class Eyes:
 		percept.image, percept.image_size, percept.image_tokens = jpeg, size, estimate_image_tokens(*size)
 		percept.text += f'\n    (no video: the page as drawn now, {size[0]}x{size[1]} ~{percept.image_tokens} tokens)'
 
-	async def zoom(self, x: float, y: float, width: float, height: float, max_width: int = 1200) -> Percept:
+	async def zoom(
+		self, x: float, y: float, width: float, height: float, max_width: int = 1200, max_height: int | None = None
+	) -> Percept:
 		"""A region of the viewport (CSS px, as on the look images and for clicks) captured fresh at up to 4x, so small
-		print is redrawn at that size, not upscaled from the ~640 px frame a look sends."""
+		print is redrawn at that size, not upscaled from the ~640 px frame a look sends. With max_height, a region
+		larger than max_width x max_height is shrunk to fit instead."""
 		assert width > 0 and height > 0, 'the region needs a size'
 		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
 		metrics = await cdp.cdp_client.send.Page.getLayoutMetrics(session_id=cdp.session_id)
@@ -445,7 +448,8 @@ class Eyes:
 		x, y = max(0.0, x), max(0.0, y)
 		width, height = min(width, vp['clientWidth'] - x), min(height, vp['clientHeight'] - y)
 		assert width > 0 and height > 0, 'the region is outside the viewport'
-		scale = max(1.0, min(4.0, max_width / width))
+		scale = min(4.0, max_width / width, max_height / height if max_height else float('inf'))
+		scale = scale if max_height else max(1.0, scale)
 		clip = {'x': vp['pageX'] + x, 'y': vp['pageY'] + y, 'width': width, 'height': height, 'scale': scale}
 		shot = await cdp.cdp_client.send.Page.captureScreenshot(
 			params={'format': 'jpeg', 'quality': 85, 'clip': clip},  # type: ignore[typeddict-item]
@@ -457,9 +461,9 @@ class Eyes:
 		with Image.open(io.BytesIO(jpeg)) as img:
 			size = img.size
 		tokens = estimate_image_tokens(*size)
+		how = '(redrawn, not upscaled)' if scale >= 1.0 else '(shrunk to fit)'
 		text = (
-			f'🔍 zoomed on ({x:.0f}, {y:.0f}) {width:.0f}x{height:.0f} px of the viewport at {scale:.1f}x '
-			f'(redrawn, not upscaled); ~{tokens} tokens'
+			f'🔍 zoomed on ({x:.0f}, {y:.0f}) {width:.0f}x{height:.0f} px of the viewport at {scale:.1f}x {how}; ~{tokens} tokens'
 		)
 		return Percept([], text, jpeg, size, tokens, len(text) // 4)
 
@@ -503,7 +507,9 @@ class Eyes:
 		w, h = max(240.0, in_view['w'] + 160), max(80.0, in_view['h'] + 60)
 		x0 = min(max(0.0, in_view['x'] + in_view['w'] / 2 - w / 2), max(0.0, vw - w))
 		y0 = min(max(0.0, in_view['y'] + in_view['h'] / 2 - h / 2), max(0.0, vh - h))
-		crop = await self.zoom(x0, y0, w, h, max_width=720)
+		# A large match (a whole player) is shrunk to fit: its place is already in the text, and at full size the crop
+		# cost three looks (found on Commons, ~665 tokens for an 800x450 player)
+		crop = await self.zoom(x0, y0, w, h, max_width=720, max_height=300)
 		crop.text = '\n'.join(lines) + '\n' + crop.text
 		return crop
 

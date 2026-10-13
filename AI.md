@@ -233,6 +233,8 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
     `in: [x, y, w, h]` looks only in that region, for games whose player, ground and obstacles share one colour
     (the T-Rex runner): "is something grey just ahead of me" is `see.locate(grey, {in: ahead})`.
   - `see.changed({in})`: the share of the picture, or of that region, that changed since the last frame.
+  - `see.track([r,g,b], {in})`: `locate` plus `vx`, `vy` in px per second, so a rule can act on where a thing will
+    be: `see.track(red).x + see.track(red).vx * 0.2` is where it will be in 200 ms.
   - `see.el(css)`: `{x, y, w, h, cx, cy}`.
   - `see.text(css)`.
   - `see.t`, `see.frame` and `see.memory`.

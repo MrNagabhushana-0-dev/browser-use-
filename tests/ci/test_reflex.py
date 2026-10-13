@@ -306,3 +306,38 @@ async def test_reflexes_keep_their_speed_while_the_session_is_recorded(session, 
 	assert stats['actions'] >= 4, stats
 	assert stats['latency_ms_p50'] is not None and stats['latency_ms_p50'] < 40, f'decision to key arriving: {stats}'
 	assert stats['latency_ms_p95'] < 80, f'decision to key arriving: {stats}'
+
+
+async def test_a_rule_reads_how_fast_something_moves(session, game):
+	"""Found live on the T-Rex runner: the rules had to guess the game's speed from the frame count. see.track gives a
+	colour's velocity (viewport px per second) from its last few sightings."""
+	page = (
+		'<!doctype html><body style="margin:0;background:#000"><canvas id="c" width="800" height="300"></canvas><script>'
+		'const g = document.getElementById("c").getContext("2d"); const t0 = performance.now();'
+		'function frame(now) { const t = (now - t0) / 1000; const x = t < 1.5 ? 100 + 300 * t : 550 - 180 * (t - 1.5);'
+		' g.fillStyle = "#000"; g.fillRect(0, 0, 800, 300); g.fillStyle = "#f00"; g.fillRect(x, 150, 30, 30);'
+		' requestAnimationFrame(frame); } requestAnimationFrame(frame);</script></body>'
+	)
+	game.expect_request('/moving').respond_with_data(page, content_type='text/html')
+	await session.navigate_to(game.url_for('/moving'))
+	reflexes = Reflexes(session)
+	red = '[255, 0, 0]'
+	await reflexes.install(
+		[
+			{
+				'when': f'(see.memory.r = see.track({red})) && see.memory.r.vx > 270 && see.memory.r.vx < 330',
+				'notify': 'right at ~300',
+			},
+			{
+				'when': f'(see.memory.l = see.track({red})) && see.memory.l.vx < -150 && see.memory.l.vx > -210',
+				'notify': 'left at ~180',
+			},
+			{'when': f'see.track({red}) && Math.abs(see.track({red}).vy) > 30', 'notify': 'it moved up or down'},
+		]
+	)
+	heard = []
+	for _ in range(2):
+		event = await reflexes.wait(timeout=5)
+		heard.append(event.label if event else None)
+	await reflexes.clear()
+	assert heard == ['right at ~300', 'left at ~180'], (heard, reflexes.stats())

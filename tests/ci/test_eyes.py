@@ -1483,3 +1483,22 @@ def test_a_dissolve_and_a_fade_through_black_are_shot_changes_and_a_pan_is_not()
 	rng = np.random.default_rng(7)
 	still = sight.read(_pictures([a + rng.normal(0, 1.5, (16, 16)) for _ in range(50)]))
 	assert still.cuts == [], f'a still picture with noise is one shot: {still.cuts}'
+
+
+async def test_find_s_crop_of_a_large_match_is_shrunk_to_fit(eyes, session, site):
+	"""Found twice on Wikimedia Commons: find "play video" matched the whole 800x450 player, and its crop came back at
+	960x510, ~665 tokens, three looks' worth, to confirm a match whose place the text already gave. A crop is now
+	shrunk to fit (720x300 at most); a small match is still magnified."""
+	site.expect_request('/big-player').respond_with_data(
+		'<!doctype html><body style="margin:0;font:16px sans-serif"><p>Calibration film</p>'
+		'<a role="button" title="Play video" style="position:absolute;left:100px;top:80px;width:800px;height:450px;'
+		'background:linear-gradient(#2a6,#26a)"></a><p style="position:absolute;top:600px">Size of the preview</p></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/big-player'))
+	big = await eyes.find('play video')
+	assert 'named "Play video"' in big.text, big.text
+	assert big.image_size is not None and big.image_size[0] <= 720 and big.image_size[1] <= 300, big.text
+	assert big.image_tokens <= 300, big.text
+	small = await eyes.find('Size of the preview')
+	assert small.image_size is not None and small.image_size[0] >= 600, f'a small match is still magnified: {small.text}'

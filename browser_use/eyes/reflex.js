@@ -10,6 +10,8 @@
 //                                        default, else the largest video), 'video', or a CSS selector; in: [x, y, w, h]
 //                                        looks only there (viewport CSS px), e.g. just ahead of a runner
 //   see.changed({from, in})              share (0-1) of the picture (or of that region) changed since the last frame
+//   see.track([r,g,b], {tol, from, in})  locate() plus its velocity {vx, vy} in viewport px per second, over the last
+//                                        few frames it was seen: where a ball will be, not only where it is
 //   see.level(), see.onset(jumpDb)       loudness (dB) of the playing media; true on the frame a sound starts
 //   see.el(selector)                     {x, y, w, h, cx, cy} of an element, or null
 //   see.text(selector)                   its visible text
@@ -26,6 +28,7 @@
 		} catch (e) {}
 	};
 	const memo = new Map();
+	const tracks = new Map(); // per tracked colour and options: the last few sightings [t, x, y], for track()
 	const previous = new Map(); // the last frame's grid per source, for changed()
 	const loudness = []; // recent frames' dB, for onset()
 	let ear = null; // {media, ctx, analyser, buf}
@@ -161,6 +164,27 @@
 			}
 			memo.set(key, found);
 			return found;
+		},
+		// Where a colour is and how fast it moves (px per second), from its last few sightings. Not seen this frame:
+		// null, and its history starts over.
+		track(rgb, opts = {}) {
+			const key = 'tr' + JSON.stringify([rgb, opts]);
+			if (memo.has(key)) return memo.get(key);
+			const at = see.locate(rgb, opts);
+			let out = null;
+			if (!at) {
+				tracks.delete(key);
+			} else {
+				const seen = tracks.get(key) || [];
+				seen.push([see.t, at.x, at.y]);
+				while (seen.length > 6) seen.shift();
+				tracks.set(key, seen);
+				const [t0, x0, y0] = seen[0];
+				const dt = (see.t - t0) / 1000;
+				out = { ...at, vx: dt > 0 ? (at.x - x0) / dt : 0, vy: dt > 0 ? (at.y - y0) / dt : 0 };
+			}
+			memo.set(key, out);
+			return out;
 		},
 		// The share (0-1) of the picture that changed since the last frame: motion, a cut, a flash.
 		changed(opts = {}) {
