@@ -3167,6 +3167,9 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
   was still waiting". The wait's description says to look after it returns.
 - **Live, in strict order** (look, record, rules, wait, look): GAME OVER, and the recording ends on it.
 - The mid-air "freeze" was a stale look: the game had crashed normally.
+- **Full `tests/ci` on `4f31b66`, quiet machine: 1,694 passed, 31 skipped, 0 failed** (36m26s). The feed test
+  passed in it. Alone under four busy loops it passed 8 of 8, so its earlier failures (about 1 in 20) remain
+  unexplained; synthetic CPU load does not reproduce them.
 
 **Mistakes of mine worth not repeating:**
 - `pkill -f` patterns matched my own shell.
