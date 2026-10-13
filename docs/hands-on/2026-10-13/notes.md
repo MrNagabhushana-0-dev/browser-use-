@@ -64,3 +64,27 @@ were called live for the first time: the MCP tool list in this session now inclu
 
 The fundraising-style banner ("Photograph a historic site...", Wiki Loves Monuments) is still reported as text that
 appeared, 2.7 s after load. It is a real late banner, so that is right.
+
+## Later still: the Commons film with the new shot detection and names
+
+**Recording:** `commons-film-title-card-its-own-shot.mp4`, 48 s. It was made by `retinat_record`, then shrunk to 960
+px wide.
+
+**Tools:** `retinat_open`, `retinat_record`, `retinat_click` and `retinat_watch`, for 30 s of the film.
+
+**What the eyes reported:**
+- **The item:** one item, `video "Big Buck Bunny 4K.webm" 1920x1080, 10:34.6 long`. It is named by the player
+  dialog's title and sized once its metadata was in (`ed8387c`, checked live). Yesterday it was "size unknown" with
+  no name.
+- **Shots:**
+  - the title card is its own shot (0.6-3.7 s, keyframe at 1.0 s), no longer merged with the clouds;
+  - then the clouds, the hill, the stream and the bird: 5 keyframes, all correct;
+  - ~767 tokens for 30 s.
+- **The page's own text** as it loaded was one line (6 blocks). Readouts were folded.
+
+**Not as hoped, minor:**
+- The title-to-clouds change is labelled `cut->`, not `fade->`. At the compositor's 6 fps a one-second dissolve is a
+  few large steps, so the cut detector takes it first. It is still the right split.
+- A 0.1 s first "shot" comes from the compositor's first sample.
+- "on screen" for the item is the player's control text ("0:00 / -:- Loaded 3.32%"), since the name now carries the
+  title. Controls could be left out of "on screen".
