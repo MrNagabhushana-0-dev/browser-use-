@@ -341,3 +341,110 @@ async def test_a_rule_reads_how_fast_something_moves(session, game):
 		heard.append(event.label if event else None)
 	await reflexes.clear()
 	assert heard == ['right at ~300', 'left at ~180'], (heard, reflexes.stats())
+
+
+async def test_reflexes_see_a_cross_origin_video_on_screen(clip):
+	"""A film streamed from another origin without CORS (Wikimedia Commons' player) cannot be read by the page: a
+	rule's reading of it came back empty, so rules never fired. It is read on screen instead, as the compositor
+	draws it, and its colour and its cut are still caught within a few frames of where they are in the video."""
+	media, page = HTTPServer(), HTTPServer()
+	media.start()
+	page.start()
+	media.expect_request('/clip.webm').respond_with_data(clip, content_type='video/webm')  # no CORS headers
+	page.expect_request('/v').respond_with_data(
+		f'<!doctype html><body style="margin:0;background:#000"><video src="{media.url_for("/clip.webm")}" autoplay muted '
+		'playsinline style="width:640px"></video></body>',
+		content_type='text/html',
+	)
+	session = BrowserSession(
+		browser_profile=BrowserProfile(
+			headless=True, user_data_dir=None, keep_alive=False, args=['--autoplay-policy=no-user-gesture-required']
+		)
+	)
+	await session.start()
+	try:
+		await session.navigate_to(page.url_for('/v'))
+		tainted = await _value(
+			session,
+			"(() => { const v = document.querySelector('video'), c = document.createElement('canvas').getContext('2d');"
+			' try { c.drawImage(v, 0, 0); c.getImageData(0, 0, 1, 1); return false } catch (e) { return true } })()',
+		)
+		assert tainted, 'the test needs a video the page may not read'
+		reflexes = Reflexes(session)
+		await reflexes.install(
+			[
+				{
+					'when': "see.locate([0,0,255], {from: 'video'}) && see.locate([0,0,255], {from: 'video'}).n > 200",
+					'notify': 'blue',
+				},
+				{'when': "see.changed({from: 'video'}) > 0.5", 'notify': 'cut'},
+			]
+		)
+		seen = {}
+		while len(seen) < 2:
+			event = await reflexes.wait(timeout=8)
+			if event is None:
+				break
+			seen.setdefault(event.label, event.media_t)
+		stats = reflexes.stats()
+		assert set(seen) == {'blue', 'cut'}, (seen, stats)
+		for label, at in seen.items():
+			# currentTime can trail the frame on screen a little (1.99-2.04 s over six runs, read on screen)
+			assert at is not None and abs(at - 2.0) < 0.2, f'{label} at {at}s of the video, expected 2.0s: {stats}'
+		assert stats['screen_pictures'] > 10 and stats['screen_ms_p50'] < 150, stats
+	finally:
+		await session.kill()
+		for server in (media, page):
+			server.clear()
+			server.stop()
+
+
+# A game in a frame from another origin, as on itch.io: it turns a square red at a moment of its own choosing, and
+# counts a click that lands on it. It tells the page hosting it when each happened, on its own clock.
+FRAMED_GAME = """<!doctype html><body style="margin:0;background:#fff"><canvas id="c" width="400" height="300"></canvas><script>
+const c = document.getElementById('c'), g = c.getContext('2d');
+let red = null;
+g.fillStyle = '#fff'; g.fillRect(0, 0, 400, 300);
+setTimeout(() => requestAnimationFrame(() => { g.fillStyle = '#ff0000'; g.fillRect(260, 180, 60, 60);
+  requestAnimationFrame(() => { red = performance.now(); }); }), 1500);
+c.addEventListener('mousedown', e => { if (!e.isTrusted || red === null) return;
+  const hit = e.offsetX >= 260 && e.offsetX < 320 && e.offsetY >= 180 && e.offsetY < 240;
+  parent.postMessage({hit, ms: performance.now() - red}, '*'); });
+</script></body>"""
+
+
+async def test_rules_read_a_cross_origin_frame_on_screen_and_click_it(session):
+	"""The page cannot see into a frame from another origin at all, so its canvas is out of reach of every other
+	reading. {from: 'screen'} reads what is on screen, frames and all: the rule clicks the square soon after it is
+	drawn, and the click lands on it."""
+	game, host = HTTPServer(), HTTPServer()
+	game.start()
+	host.start()
+	game.expect_request('/game').respond_with_data(FRAMED_GAME, content_type='text/html')
+	host.expect_request('/host').respond_with_data(
+		f'<!doctype html><body style="margin:0"><iframe src="{game.url_for("/game")}" width="400" height="300" '
+		'style="border:0;margin:40px"></iframe><script>window.got = [];'
+		'addEventListener("message", e => got.push(e.data));</script></body>',
+		content_type='text/html',
+	)
+	try:
+		await session.navigate_to(host.url_for('/host'))
+		reflexes = Reflexes(session)
+		red = "see.locate([255,0,0], {from: 'screen', tol: 40})"
+		await reflexes.install(
+			[{'when': f'{red} && {red}.n > 20', 'click': f'[{red}.x, {red}.y]', 'notify': 'red'}],
+		)
+		event = await reflexes.wait(timeout=8)
+		assert event is not None and event.label == 'red', reflexes.stats()
+		got = []
+		for _ in range(20):
+			got = await _value(session, 'window.got') or []
+			if got:
+				break
+			await asyncio.sleep(0.1)
+		assert got and got[0]['hit'], (got, reflexes.stats())
+		assert got[0]['ms'] < 250, f'clicked {got[0]["ms"]:.0f} ms after the square was drawn: {reflexes.stats()}'
+	finally:
+		for server in (game, host):
+			server.clear()
+			server.stop()

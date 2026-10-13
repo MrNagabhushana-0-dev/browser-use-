@@ -15,6 +15,8 @@ nothing: no screenshots, no polling. stats() reports the decision-to-delivery la
 """
 
 import asyncio
+import base64
+import io
 import json
 import logging
 import statistics
@@ -33,6 +35,9 @@ WORLD_NAME = 'browser_use_reflex'
 BINDING = '__browserUseReflex'
 _BINDING_EVENT = 'Runtime.bindingCalled'
 _SCRIPT = (Path(__file__).parent / 'reflex.js').read_text()
+# The screen picture fed to the rules for what the page cannot read itself (a cross-origin video or frame): this wide,
+# as PNG so colours are exact. A capture takes ~50 ms whatever its size (measured headless), so ~20 pictures a second.
+SCREEN_WIDTH = 240
 
 # windowsVirtualKeyCode for the keys games and players use most; letters and digits are their ASCII codes
 _KEY_CODES = {
@@ -81,6 +86,15 @@ class ReflexEvent(BaseModel):
 	wall: float  # time.monotonic() when it reached Python
 
 
+def _rgb(png: bytes) -> tuple[int, int, bytes]:
+	"""(width, height, raw RGB) of a picture."""
+	from PIL import Image
+
+	with Image.open(io.BytesIO(png)) as img:
+		rgb = img.convert('RGB')
+		return rgb.width, rgb.height, rgb.tobytes()
+
+
 def _key_params(key: str, kind: str) -> dict[str, Any]:
 	code = _KEY_CODES.get(key) or (ord(key.upper()) if len(key) == 1 else 0)
 	name = 'Space' if key in (' ', 'Space') else (f'Key{key.upper()}' if len(key) == 1 and key.isalpha() else key)
@@ -106,6 +120,10 @@ class Reflexes:
 		self._handler: Any = None
 		self._incumbent: Any = None
 		self._tasks: set[asyncio.Task] = set()
+		self._context_id: int | None = None
+		self._screen_task: asyncio.Task | None = None
+		self._screen_ms: list[float] = []  # how long each screen picture took, capture to fed
+		self._screen_fed = 0
 
 	@property
 	def installed(self) -> bool:
@@ -122,6 +140,8 @@ class Reflexes:
 		self._latencies.clear()
 		self._actions = 0
 		self.errors.clear()
+		self._screen_ms.clear()
+		self._screen_fed = 0
 		cdp = await self.session.get_or_create_cdp_session(focus=False)
 		self._cdp, self._session_id = cdp, cdp.session_id
 		send = cdp.cdp_client.send
@@ -145,6 +165,7 @@ class Reflexes:
 		if result.get('exceptionDetails'):
 			await self.clear()
 			raise ValueError(f'the rules did not compile: {result["exceptionDetails"].get("exception", {}).get("description")}')
+		self._context_id = world['executionContextId']
 		self.rules = checked
 		return len(checked)
 
@@ -157,7 +178,7 @@ class Reflexes:
 
 	def stats(self) -> dict[str, Any]:
 		lat = sorted(self._latencies)
-		return {
+		out: dict[str, Any] = {
 			'rules': len(self.rules),
 			'actions': self._actions,
 			'latency_ms_p50': round(statistics.median(lat), 1) if lat else None,
@@ -165,9 +186,18 @@ class Reflexes:
 			'held': sorted(self._held),
 			'errors': self.errors[-5:],
 		}
+		if self._screen_fed:
+			# the rules read the screen: how many pictures, and how old one is when it reaches them (capture to fed)
+			out['screen_pictures'] = self._screen_fed
+			out['screen_ms_p50'] = round(statistics.median(self._screen_ms), 1)
+		return out
 
 	async def clear(self) -> None:
 		"""Stop the rules and let go of any key they hold."""
+		if self._screen_task is not None:
+			self._screen_task.cancel()
+			await asyncio.gather(self._screen_task, return_exceptions=True)
+			self._screen_task = None
 		if self._cdp is not None and self._session_id:
 			try:
 				tree = await self._cdp.cdp_client.send.Page.getFrameTree(session_id=self._session_id)
@@ -218,11 +248,55 @@ class Reflexes:
 			task.add_done_callback(self._tasks.discard)
 		elif action == 'error':
 			self.errors.append(f'rule {msg.get("r")}: {msg.get("error")}')
+		elif action == 'screen' and self._screen_task is None:
+			self._screen_task = asyncio.create_task(self._feed_screen())
 		elif action in ('down', 'up', 'tap', 'click'):
 			task = asyncio.create_task(self._act(msg))
 			self._tasks.add(task)
 			task.add_done_callback(self._tasks.discard)
 		return None
+
+	async def _feed_screen(self) -> None:
+		"""Keep the rules fed with the screen as the compositor draws it, for what the page cannot read itself."""
+		assert self._cdp is not None and self._context_id is not None
+		send = self._cdp.cdp_client.send
+		seq = 0
+		while self._handler is not None:
+			started = time.monotonic()
+			try:
+				vp = (await send.Page.getLayoutMetrics(session_id=self._session_id))['cssLayoutViewport']
+				clip = {
+					'x': vp['pageX'],
+					'y': vp['pageY'],
+					'width': vp['clientWidth'],
+					'height': vp['clientHeight'],
+					'scale': SCREEN_WIDTH / max(1, vp['clientWidth']),
+				}
+				shot = await send.Page.captureScreenshot(
+					params={'format': 'png', 'clip': clip},  # type: ignore[typeddict-item]
+					session_id=self._session_id,
+				)
+				w, h, rgb = await asyncio.to_thread(_rgb, base64.b64decode(shot['data']))
+				seq += 1
+				await send.Runtime.evaluate(
+					params={
+						'expression': f'window.__reflex && window.__reflex.feed({w}, {h}, "{base64.b64encode(rgb).decode()}", {seq})',
+						'contextId': self._context_id,
+					},
+					session_id=self._session_id,
+				)
+			except asyncio.CancelledError:
+				raise
+			except Exception as e:
+				if self._handler is None:
+					return
+				self.errors.append(f'screen: {type(e).__name__}: {e}')
+				del self.errors[:-50]
+				await asyncio.sleep(0.25)  # a navigation or a closing tab: try again shortly
+				continue
+			self._screen_fed += 1
+			self._screen_ms.append((time.monotonic() - started) * 1000)
+			del self._screen_ms[:-500]
 
 	async def _notify_after(self, before: list[asyncio.Task], msg: dict[str, Any]) -> None:
 		if before:

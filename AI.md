@@ -232,6 +232,12 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
   - `see.locate([r,g,b], {tol, in})`: where a colour is on the largest canvas, as `{x, y, n}` in viewport px.
     `in: [x, y, w, h]` looks only in that region, for games whose player, ground and obstacles share one colour
     (the T-Rex runner): "is something grey just ahead of me" is `see.locate(grey, {in: ahead})`.
+  - `from`: the largest canvas by default, else `'video'`, a CSS selector, or `'screen'`: everything on screen as
+    the compositor draws it, frames from other sites included (a game embedded from another origin, as on itch.io).
+    The screen is fed to the rules ~20 times a second (a capture takes ~50 ms). In a test, a square drawn in a
+    frame from another origin was clicked 16-51 ms after it was drawn; a same-page canvas, read directly, is still
+    faster (~2 ms). A video the page may not read (another origin without CORS, as on Wikimedia Commons) is read on
+    screen automatically, within its box: its cut was caught within 0.05 s of where it is in the video.
   - `see.changed({in})`: the share of the picture, or of that region, that changed since the last frame.
   - `see.track([r,g,b], {in})`: `locate` plus `vx`, `vy` in px per second, so a rule can act on where a thing will
     be: `see.track(red).x + see.track(red).vx * 0.2` is where it will be in 200 ms.

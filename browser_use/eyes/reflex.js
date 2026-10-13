@@ -7,8 +7,11 @@
 //
 // `see` (all positions in viewport CSS px):
 //   see.locate([r,g,b], {tol, from, in}) centroid {x, y, n} of the pixels near that colour; from: 'canvas' (the
-//                                        default, else the largest video), 'video', or a CSS selector; in: [x, y, w, h]
-//                                        looks only there (viewport CSS px), e.g. just ahead of a runner
+//                                        default, else the largest video), 'video', 'screen' (everything on screen as
+//                                        the compositor draws it: cross-origin frames too), or a CSS selector;
+//                                        in: [x, y, w, h] looks only there (viewport CSS px), e.g. just ahead of a runner.
+//                                        A source the page may not read (a cross-origin video without CORS, a tainted
+//                                        canvas) is read from the screen instead, within its box on screen
 //   see.changed({from, in})              share (0-1) of the picture (or of that region) changed since the last frame
 //   see.track([r,g,b], {tol, from, in})  locate() plus its velocity {vx, vy} in viewport px per second, over the last
 //                                        few frames it was seen: where a ball will be, not only where it is
@@ -28,8 +31,14 @@
 		} catch (e) {}
 	};
 	const memo = new Map();
+	// The screen as the compositor draws it, fed from Python (__reflex.feed) ~20 times a second once a reading asks
+	// for it: {data (RGBA), W, H, seq, t (page time it arrived)}. The page cannot read a cross-origin video or frame
+	// itself; the compositor's picture of it is what a person sees.
+	let screen = null;
+	let screenAsked = false;
 	const tracks = new Map(); // per tracked colour and options: the last few sightings [t, x, y], for track()
 	const previous = new Map(); // the last frame's grid per source, for changed()
+	const shares = new Map(); // per screen reading: [the picture's seq, its share changed], for changed()
 	const loudness = []; // recent frames' dB, for onset()
 	let ear = null; // {media, ctx, analyser, buf}
 
@@ -91,21 +100,38 @@
 		}
 		return best;
 	};
-	// What a reading looks at: {from: 'canvas'} (the default: the largest canvas, else the largest video), 'video', or a
-	// CSS selector for a canvas, video or image.
+	// What a reading looks at: {from: 'canvas'} (the default: the largest canvas, else the largest video), 'video',
+	// 'screen', or a CSS selector for a canvas, video or image.
 	const sourceOf = (opts) => {
 		const from = opts.from || opts.canvas || 'canvas';
+		if (from === 'screen') return 'screen';
 		if (from === 'video') return largestVideo();
 		if (from === 'canvas') return largestCanvas() || largestVideo();
 		return document.querySelector(from);
 	};
 	const sizeOf = (el) => (el instanceof HTMLVideoElement ? [el.videoWidth, el.videoHeight] : el instanceof HTMLImageElement ? [el.naturalWidth, el.naturalHeight] : [el.width, el.height]);
 
-	// The source, downscaled once this frame: [data, W, H, rect]
+	// The screen's latest picture, the whole viewport, or within `clip` (a viewport box) for one element on it
+	const screenPixels = (clip) => {
+		if (!screenAsked) {
+			screenAsked = true;
+			send({ a: 'screen' });
+		}
+		if (!screen) return null;
+		return { data: screen.data, W: screen.W, H: screen.H, rect: { left: 0, top: 0, width: innerWidth, height: innerHeight }, clip, seq: screen.seq, t: screen.t };
+	};
+
+	// The source, downscaled once this frame: {data, W, H, rect, clip, seq, t}. seq and t are the screen picture's
+	// when it came from the screen (null for a source read here this frame).
 	const pixelsOf = (canvas, which) => {
 		const key = 'px' + which;
 		if (memo.has(key)) return memo.get(key);
 		let out = null;
+		if (canvas === 'screen') {
+			out = screenPixels(null);
+			memo.set(key, out);
+			return out;
+		}
 		const [sw, sh] = canvas ? sizeOf(canvas) : [0, 0];
 		if (canvas && sw && sh) {
 			const W = Math.min(SAMPLE_WIDTH, sw);
@@ -116,19 +142,28 @@
 			}
 			try {
 				offCtx.drawImage(canvas, 0, 0, W, H);
-				out = [offCtx.getImageData(0, 0, W, H).data, W, H, canvas.getBoundingClientRect()];
+				out = { data: offCtx.getImageData(0, 0, W, H).data, W, H, rect: canvas.getBoundingClientRect(), clip: null, seq: null, t: see.t };
 			} catch (e) {
-				out = null; // a canvas tainted by cross-origin images cannot be read here
+				// tainted (a cross-origin video without CORS, a canvas drawn from one): read it on screen instead
+				const r = canvas.getBoundingClientRect();
+				out = screenPixels([r.left, r.top, r.width, r.height]);
 			}
 		}
 		memo.set(key, out);
 		return out;
 	};
 
-	// The part of a sampled source a reading covers, in sample px: all of it, or the viewport region opts.in.
-	const boxOf = (opts, W, H, rect) => {
-		if (!opts.in) return [0, 0, W, H];
-		const [x, y, w, h] = opts.in;
+	// The part of a sampled source a reading covers, in sample px: all of it, or the viewport region opts.in, kept
+	// within clip (the element's box, when it is read on screen).
+	const boxOf = (opts, W, H, rect, clip) => {
+		let region = opts.in || clip;
+		if (!region) return [0, 0, W, H];
+		if (opts.in && clip) {
+			const x = Math.max(opts.in[0], clip[0]);
+			const y = Math.max(opts.in[1], clip[1]);
+			region = [x, y, Math.max(0, Math.min(opts.in[0] + opts.in[2], clip[0] + clip[2]) - x), Math.max(0, Math.min(opts.in[1] + opts.in[3], clip[1] + clip[3]) - y)];
+		}
+		const [x, y, w, h] = region;
 		const sx = (v) => Math.max(0, Math.min(W, Math.floor(((v - rect.left) / rect.width) * W)));
 		const sy = (v) => Math.max(0, Math.min(H, Math.floor(((v - rect.top) / rect.height) * H)));
 		return [sx(x), sy(y), Math.max(sx(x) + 1, sx(x + w)), Math.max(sy(y) + 1, sy(y + h))];
@@ -144,9 +179,9 @@
 			const px = pixelsOf(sourceOf(opts), opts.from || opts.canvas || 'canvas');
 			let found = null;
 			if (px) {
-				const [data, W, H, rect] = px;
+				const { data, W, H, rect, clip } = px;
 				const tol = opts.tol ?? 60;
-				const [x0, y0, x1, y1] = boxOf(opts, W, H, rect);
+				const [x0, y0, x1, y1] = boxOf(opts, W, H, rect, clip);
 				let sx = 0;
 				let sy = 0;
 				let n = 0;
@@ -171,16 +206,18 @@
 			const key = 'tr' + JSON.stringify([rgb, opts]);
 			if (memo.has(key)) return memo.get(key);
 			const at = see.locate(rgb, opts);
+			const px = pixelsOf(sourceOf(opts), opts.from || opts.canvas || 'canvas');
+			const t = px && px.seq !== null ? px.t : see.t; // a screen picture is as old as it is, not this frame
 			let out = null;
 			if (!at) {
 				tracks.delete(key);
 			} else {
 				const seen = tracks.get(key) || [];
-				seen.push([see.t, at.x, at.y]);
+				if (!seen.length || seen[seen.length - 1][0] !== t) seen.push([t, at.x, at.y]);
 				while (seen.length > 6) seen.shift();
 				tracks.set(key, seen);
 				const [t0, x0, y0] = seen[0];
-				const dt = (see.t - t0) / 1000;
+				const dt = (t - t0) / 1000;
 				out = { ...at, vx: dt > 0 ? (at.x - x0) / dt : 0, vy: dt > 0 ? (at.y - y0) / dt : 0 };
 			}
 			memo.set(key, out);
@@ -193,9 +230,11 @@
 			if (memo.has(key)) return memo.get(key);
 			const px = pixelsOf(sourceOf(opts), which);
 			let share = 0;
-			if (px) {
-				const [data, W, H, rect] = px;
-				const [x0, y0, x1, y1] = boxOf(opts, W, H, rect);
+			if (px && px.seq !== null && shares.has(key) && shares.get(key)[0] === px.seq) {
+				share = shares.get(key)[1]; // the screen has not been drawn again since: the same answer as last frame
+			} else if (px) {
+				const { data, W, H, rect, clip } = px;
+				const [x0, y0, x1, y1] = boxOf(opts, W, H, rect, clip);
 				const grid = new Uint8Array(32 * 18);
 				for (let gy = 0; gy < 18; gy++) {
 					for (let gx = 0; gx < 32; gx++) {
@@ -212,6 +251,7 @@
 					share = n / grid.length;
 				}
 				previous.set(key, grid);
+				if (px.seq !== null) shares.set(key, [px.seq, share]);
 			}
 			memo.set(key, share);
 			return share;
@@ -305,6 +345,20 @@
 	addEventListener('keydown', arrived, true);
 
 	window.__reflex = {
+		// Python's picture of the screen: W x H, RGB, base64. Returns the page time it arrived.
+		feed(W, H, b64, seq) {
+			const bin = atob(b64);
+			const n = W * H;
+			const data = new Uint8ClampedArray(n * 4);
+			for (let p = 0, q = 0; p < n; p++, q += 3) {
+				data[p * 4] = bin.charCodeAt(q);
+				data[p * 4 + 1] = bin.charCodeAt(q + 1);
+				data[p * 4 + 2] = bin.charCodeAt(q + 2);
+				data[p * 4 + 3] = 255;
+			}
+			screen = { data, W, H, seq, t: performance.now() };
+			return screen.t;
+		},
 		stop() {
 			running = false;
 			removeEventListener('keydown', arrived, true);
