@@ -3440,6 +3440,7 @@ its capture on every real cut, are removed: a cut is caught 19-27 ms after it ha
 Live on Commons, a cut rule fired at the film's three real cuts (16.43/20.31/27.65 s against 16.30/20.17/27.47 s)
 and nowhere else; this morning it had also fired on the opening.
 **Full `tests/ci` on `c1c0e39`: 1,713 passed, 30 skipped, 0 failed** (37m10s).
+**Full `tests/ci` on `9b90786`: 1,713 passed, 30 skipped, 0 failed** (37m23s).
 
 **Next, in order:**
 1. **Compositor sight from the screencast.** The crop path was measured: 84-100 ms a picture against 32 ms clipped,
