@@ -3311,6 +3311,8 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
 **Full `tests/ci` on `b840ca2`: red, 1 failed, 1,697 passed, 31 skipped** (37m43s). The one failure was
 `test_a_look_after_a_recorded_game_shows_how_it_ended`: its own stop rule, fixed in the test (above).
 
+**Full `tests/ci` on `b5069f5`: 1,699 passed, 30 skipped, 0 failed** (36m05s, quiet machine).
+
 **Next, in order:**
 1. Re-check live on Commons: rules and a look together, with the lock in place. Look into the "0.9s-0.2s" shot.
 2. Ground-truth live accuracy: a rule tuned to cuts on a film whose shot list is known, checked against it. The
