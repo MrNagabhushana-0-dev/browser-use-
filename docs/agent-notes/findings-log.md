@@ -3391,6 +3391,7 @@ The Wikimedia API and upload.wikimedia.org still answered 429. Each tried once.
   shots into one object that "reached the bottom 14 times". It now speaks only for one shot.
   `6852df3`'s message wrongly says the live watch showed no motion line: that watch ran before this fix and did
   show one. Checked again after it: no motion line, all three cuts, the full 35 s.
+- **Full `tests/ci` on `d622168`: 1,706 passed, 30 skipped, 0 failed** (36m43s).
 - **Seen, not fixed:**
   - the header said "watched 78.8s" for a 30 s watch (`watched_s` spans wall time across watches), and "on screen"
     was stale;
