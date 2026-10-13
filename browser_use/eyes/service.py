@@ -20,8 +20,9 @@ moments that differ, with the sound laid out underneath.
   changing character (speech starting after silence, music dropping out).
 - `'bored'` returns once the item stops showing anything new: it looped, or the marginal
   coverage of the last two seconds (see `sight.novelty`) fell below a threshold and the
-  sound has not changed. This is the same test a person applies when they swipe away. An
-  item longer than any watch (a film, not a reel) is given eight seconds instead.
+  sound has not changed. This is the same test a person applies when they swipe away. A
+  video longer than any watch, or of no known length (a film, a live stream; not a reel), is
+  given eight seconds instead.
 - `'item'` returns when the attended item changes (someone else scrolled).
 
 `hold=True` pauses the video when the watch returns and resumes it at the start of the next
@@ -73,7 +74,7 @@ Detail = Literal['glance', 'look', 'study']
 # Below this marginal coverage for BORED_WINDOW_S, an item is showing nothing new.
 BORED_NOVELTY = 0.04
 BORED_WINDOW_S = 2.0
-# ...but an item longer than any watch can be (a film, not a reel) gets this long: two calm seconds say little about a
+# ...but an item longer than any watch can be (a film, a live stream; not a reel) gets this long: two calm seconds say little about a
 # film. Simulated on two whole films with checked edit lists (35 s watches starting every 5 s, sound unreadable as on a
 # cross-origin page), 2 s ended 72% and 30% of the watches while more shots were coming within them, losing ~6 shots
 # each; 8 s ended none early, and stopped only in end credits.
@@ -235,8 +236,11 @@ class Eyes:
 			return 'looped (seen in full)'
 		if self.retina.state.get('paused') and self.retina.state.get('vid') == vid:
 			return 'video paused'
-		duration = self.retina.attended.get('duration') or 0.0
-		window = BORED_LONG_WINDOW_S if duration > LONG_FORM_S else BORED_WINDOW_S
+		# A film, or a video of no known length (a live stream says Infinity, which arrives as null): edited content that
+		# goes on. A canvas has no length either, and keeps the short window.
+		duration = self.retina.attended.get('duration')
+		long_form = self.retina.attended.get('kind') == 'video' and (not duration or duration > LONG_FORM_S)
+		window = BORED_LONG_WINDOW_S if long_form else BORED_WINDOW_S
 		now = mine[-1].wall
 		recent = [f for f in mine if f.wall >= now - window]
 		older = [f for f in mine if f.wall < now - window]

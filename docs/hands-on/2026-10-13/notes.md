@@ -468,3 +468,40 @@ behaves like this morning's area rows (F1 0.970 and 0.941 at 10/s), not the poin
   the percept is built. Live, the first watch said "0:04 / 10:34 Loaded 2.64%".
 - **The test:** a captioned video watched, held while the caption changes, and watched again. It failed first
   ("watched 3.8s in a 1.5 s watch").
+
+## Evening: a live stream, and clipped captures in the screencast
+
+**Tools:** `retinat_open`, `retinat_look`, `retinat_click`, `retinat_watch`, `retinat_record`.
+
+**YouTube's ISS live stream, for a stream of no known length.** The NASA channel page opened, and the look's stated
+factor put a click on the live stream from the image. Then:
+- **My mistake:** I clicked the player's centre without `expect`. The player had changed, and the click hit "Learn
+  more" (supported_browsers).
+- Reopening the video, Google answered with its "unusual traffic" CAPTCHA page (google.com/sorry), aimed at this
+  network. `retinat_open` said so plainly ("BLOCKED: google-unusual-traffic"). CAPTCHAs are out of bounds, so I
+  stopped there.
+
+**A video of no known length got a reel's 2 s** before "nothing new". A live stream reports its duration as Infinity,
+which arrives as null.
+- **Fixed** (test first): a video of no known length gets the film's 8 s. A canvas, which has no length either,
+  keeps 2 s.
+- **The test:** a stream played through Media Source Extensions with `duration = Infinity`, calm for 7 s, then a
+  cut. It failed first (stopped at ~3 s).
+- This is a judgement, not a measurement on live content: live broadcasts are edited like films, and on two films a
+  2 s window ended most watches early. A static webcam now costs 6 more seconds before "bored".
+
+**Bug: clipped captures showed in the screencast.** This is the cause of the odd recording frames seen this
+afternoon.
+- **The test:** the page is red on the left and blue on the right. The right half is captured clipped and scaled
+  while a screencast runs. 35 of 78 screencast frames were the clip (288x324, all blue), not the page.
+- **The variants, measured:** clip at scale 0.3: 24/60. Clip at scale 1: 40/97. With `captureBeyondViewport: false`:
+  22/52. With `fromSurface`: 24/62. Without a clip: 0.
+- **Who it hurt:** the recorder, the reflexes' screen feed (probably the "broken frames" it confirms with captures)
+  and page scans all read the screencast. Compositor sight, the reflexes' confirming captures and look captures all
+  clip.
+- **Fixed** in `capture_screenshot`, which every capture goes through. A clip inside the visible viewport at a scale
+  of 1 or less is now a capture of the viewport (JPEG at quality 90 or more), cropped and scaled in Python. A clip
+  beyond the viewport, or a zoom that enlarges, still needs Chrome to draw it. The test passes.
+- **Live, counted in the recordings.** A frame of only the film's box starts with the film's black bar, where the
+  page has its light header. Before the fix, 47 of 265 and 45 of 296 frames of two Commons recordings were the clip.
+  After it, 0 of 108 (`commons-film-recorded-without-clipped-frames.mp4`). The watch's keyframes were still the film.

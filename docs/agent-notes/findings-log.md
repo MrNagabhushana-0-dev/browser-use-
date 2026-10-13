@@ -3421,20 +3421,29 @@ point rows; a test now keeps it so.
 - **"on screen" is read when the percept is built,** not when the video was found.
 - **Full `tests/ci` on `4f431c4`: 1,711 passed, 30 skipped, 0 failed** (36m55s; the reflex speed test passed).
 
+**Clipped captures showed in the screencast** (test first; live). A `Page.captureScreenshot` with a `clip`, at any
+scale and with any `captureBeyondViewport`, sends its region out as screencast frames: 22-40 of 52-97 frames in the
+test, 15-18% of two Commons recordings. The recorder, the reflexes' screen feed and scans read the screencast.
+`capture_screenshot` now takes a clip inside the viewport at scale 1 or less as a viewport capture cropped in Python.
+Live: 0 of 108 recording frames.
+
+**A video of no known length** (a live stream reports Infinity) gets the film's 8 s before "bored" (test first).
+That is judged from the two films, not measured on live content: YouTube's ISS stream answered this network with
+Google's CAPTCHA page, and CAPTCHAs are out of bounds.
+
 **Next, in order:**
-1. **A live stream or an item of unknown length** still gets the 2 s window. Check one live.
-2. **The recording's clipped frames.** Check whether compositor sight's clipped captures reach the screencast, and
-   whether they are the reflex feed's "broken frames".
+1. **The reflexes' "broken frames".** Check whether they are gone now that captures no longer show in the
+   screencast. If so, the confirming captures can go, which takes ~50 ms off a confirmed picture.
+2. **The cost of the crop path:** a full-viewport JPEG at quality 90, decoded and cropped in Python, for each
+   compositor picture (6 a second). Measure it on a busy page against the clipped capture.
 3. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
 4. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
    or CORS WebM/VP9 source.
 5. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
 6. **Compositor sight at 10 fps instead of 6.** Offline it gains F1 0.966 -> 0.970 on the Bunny and 0.926 -> 0.941
-   on Steel. Each picture now costs two time reads as well; weigh that live.
-7. **Intermittents to watch in full runs:** the feed test, the region-runner test, the play-arena title screen,
-   and now `test_reflex.py::test_a_rule_reads_how_fast_something_moves`. It failed once in a run of four files
-   (["right at ~300", "right at ~300"]: the leftward speed never fell inside -210..-150 px/s) and passed 3 of 3 alone.
-   It reads a canvas's own pixels through reflex rules: none of the code changed in that round is on its path.
+   on Steel.
+7. **Intermittents to watch in full runs:** the feed test, the region-runner test, the play-arena title screen, and
+   the reflex speed test.
 8. **Carried over:**
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).

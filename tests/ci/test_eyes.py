@@ -691,6 +691,81 @@ async def test_watch_until_bored_waits_longer_on_a_film_than_on_a_reel(eyes, ses
 	assert p.items and any(abs(c - 7.0) < 0.5 for c in p.items[-1].sight.cuts), p.text
 
 
+async def test_watch_until_bored_waits_longer_on_a_live_stream_too(eyes, session, site, tmp_path):
+	"""A live stream has no length (the page says Infinity), and got a reel's 2 s. Live broadcasts are edited like films;
+	tried on YouTube's ISS stream, which this network is not served (a CAPTCHA page), so this is a stream the page
+	plays through Media Source Extensions with its duration set to Infinity, as live players do."""
+	film = tmp_path / 'live.webm'
+	_run(
+		*['-f', 'lavfi', '-i', 'color=c=red:s=160x90:r=10:d=7', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=10:d=23'],
+		*['-filter_complex', '[0][1]concat=n=2:v=1:a=0,format=yuv420p[v]', '-map', '[v]'],
+		*['-c:v', 'libvpx-vp9', '-b:v', '50k', '-deadline', 'realtime', '-cpu-used', '8', str(film)],
+	)
+	_serve(site, '/live.webm', film.read_bytes())
+	live = """<!doctype html><body style="margin:0;background:#000"><video autoplay muted playsinline
+style="height:100vh;display:block;margin:auto"></video><script>
+const v = document.querySelector('video'); const ms = new MediaSource(); v.src = URL.createObjectURL(ms);
+ms.addEventListener('sourceopen', async () => {
+  const sb = ms.addSourceBuffer('video/webm; codecs="vp9"');
+  sb.appendBuffer(await (await fetch('/live.webm')).arrayBuffer());
+  await new Promise(r => sb.addEventListener('updateend', r, {once: true}));
+  ms.duration = Infinity;
+  v.play().catch(() => {});
+});</script></body>"""
+	site.expect_request('/live').respond_with_data(live, content_type='text/html')
+	await _open(eyes, session, site.url_for('/live'))
+	await asyncio.sleep(0.5)
+	assert eyes.retina.attended.get('kind') == 'video' and not eyes.retina.attended.get('duration'), eyes.retina.attended
+	p = await eyes.watch(seconds=12.0, until='bored', min_seconds=1.0)
+	assert p.ended_at - p.started_at > 8.0, f'stopped on the calm opening of a live stream: {p.stop_reason}'
+	assert p.items and any(abs(c - 7.0) < 0.6 for c in p.items[-1].sight.cuts), p.text
+
+
+async def test_clipped_captures_do_not_show_in_the_screencast(session, site):
+	"""Seen in a Retinat recording of the Commons film: two frames showed a small picture on white, then the film
+	filling the frame, instead of the page. Compositor sight captures a video's box (a clip, scaled down) while the
+	recorder takes the screencast. Here the page is red on the left and blue on the right, and the right half is
+	captured clipped and scaled while the screencast runs."""
+	from PIL import Image
+
+	from browser_use.browser.capture import capture_screenshot
+	from browser_use.vision.live import LiveView
+
+	site.expect_request('/halves').respond_with_data(
+		'<!doctype html><body style="margin:0"><div style="position:fixed;left:0;top:0;width:50vw;height:100vh;'
+		'background:#f00"></div><div style="position:fixed;right:0;top:0;width:50vw;height:100vh;background:#00f"></div>'
+		'<div id="m" style="position:fixed;left:45vw;top:10px;width:10vw;height:20px;background:#0f0"></div>'
+		'<script>let k = 0; setInterval(() => { document.getElementById("m").style.top = (10 + (k++ % 40)) + "px" }, 30)'
+		'</script></body>',
+		content_type='text/html',
+	)
+	await session.navigate_to(site.url_for('/halves'))
+	cdp = await session.get_or_create_cdp_session(focus=False)
+	vp = (await cdp.cdp_client.send.Page.getLayoutMetrics(session_id=cdp.session_id))['cssLayoutViewport']
+	w, h = vp['clientWidth'], vp['clientHeight']
+	live = LiveView(session)
+	await live.start(max_width=640)
+	try:
+		await asyncio.sleep(0.5)
+		for _ in range(25):
+			clip = {'x': w / 2, 'y': 0, 'width': w / 2, 'height': h, 'scale': 0.3}
+			await capture_screenshot(cdp.cdp_client, {'format': 'jpeg', 'quality': 70, 'clip': clip}, cdp.session_id)
+			await asyncio.sleep(0.04)
+		await asyncio.sleep(0.3)
+		frames = list(live.frames)
+	finally:
+		await live.stop()
+	odd = []
+	for i, f in enumerate(frames):
+		img = Image.open(io.BytesIO(f.data)).convert('RGB')
+		left = img.getpixel((img.width // 5, img.height * 3 // 4))
+		right = img.getpixel((img.width * 4 // 5, img.height * 3 // 4))
+		if not (left[0] > 150 and left[2] < 100 and right[2] > 150 and right[0] < 100):  # type: ignore[index]
+			odd.append((i, img.size, left, right))
+	assert len(frames) > 10, len(frames)
+	assert not odd, f'{len(odd)} of {len(frames)} screencast frames were not the page: {odd[:5]}'
+
+
 async def test_a_second_watch_says_what_it_watched_not_what_came_before(eyes, session, site):
 	"""Found on Wikimedia Commons, a second watch of the film said: "watched 27.4s" for 10 s (the span ran from the
 	first watch's last picture, through the hold between them); "the first 5.1s was not held: ... unknown" (the first
