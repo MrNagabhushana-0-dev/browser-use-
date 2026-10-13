@@ -398,6 +398,7 @@ async def test_reflexes_see_a_cross_origin_video_on_screen(clip):
 			assert at is not None and abs(at - 2.0) < 0.2, f'{label} at {at}s of the video, expected 2.0s: {stats}'
 		# the screen comes as the compositor draws it (a screencast), not forced captures (~50 ms each)
 		assert stats['screen_pictures'] > 10 and stats['screen_ms_p50'] < 25, stats
+		assert stats['screen_source'] == 'screencast' and 0 <= stats['screen_confirmed'] < stats['screen_pictures'], stats
 	finally:
 		await session.kill()
 		for server in (media, page):

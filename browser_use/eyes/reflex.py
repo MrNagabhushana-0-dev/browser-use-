@@ -160,6 +160,8 @@ class Reflexes:
 		self._screen_ms: list[float] = []  # how long each screen picture took, capture to fed
 		self._screen_fed = 0
 		self._screen_seq = 0
+		self._screen_source: str | None = None  # 'screencast' or 'captures', once the feed has started
+		self._screen_confirmed = 0  # screencast frames replaced by a capture (a region replaced at once)
 
 	@property
 	def installed(self) -> bool:
@@ -178,6 +180,8 @@ class Reflexes:
 		self.errors.clear()
 		self._screen_ms.clear()
 		self._screen_fed = 0
+		self._screen_source = None
+		self._screen_confirmed = 0
 		cdp = await self.session.get_or_create_cdp_session(focus=False)
 		self._cdp, self._session_id = cdp, cdp.session_id
 		send = cdp.cdp_client.send
@@ -223,9 +227,13 @@ class Reflexes:
 			'errors': self.errors[-5:],
 		}
 		if self._screen_fed:
-			# the rules read the screen: how many pictures, and how old one is when it reaches them (capture to fed)
+			# the rules read the screen: how many pictures, how old one is when it reaches them, and where they come
+			# from (a screencast, or captures: slower, ~50 ms or more each), with how many screencast frames a capture
+			# replaced (a region replaced at once: a cut, or a broken frame); many means many captures, so slower
 			out['screen_pictures'] = self._screen_fed
 			out['screen_ms_p50'] = round(statistics.median(self._screen_ms), 1)
+			out['screen_source'] = self._screen_source
+			out['screen_confirmed'] = self._screen_confirmed
 		return out
 
 	async def clear(self) -> None:
@@ -308,6 +316,7 @@ class Reflexes:
 					return
 				except _NoScreencast as e:
 					logger.debug(f'reflex: no screencast for the screen ({e}); capturing instead')
+			self._screen_source = 'captures'
 			await self._feed_by_capture()
 		except asyncio.CancelledError:
 			raise
@@ -353,6 +362,7 @@ class Reflexes:
 			connection = await websockets.connect(url, max_size=None, proxy=None, open_timeout=5)
 		except Exception as e:
 			raise _NoScreencast(f'{type(e).__name__}: {e}') from e
+		self._screen_source = 'screencast'
 		async with connection as ws:
 			newest: list[tuple[bytes, float] | None] = [None]
 			arrived = asyncio.Event()
@@ -396,6 +406,7 @@ class Reflexes:
 						topped_up = False
 						grid = await asyncio.to_thread(_grid, frame[0])
 						if _region_replaced(grid, last):
+							self._screen_confirmed += 1
 							frame = (await self._capture(), time.time())
 							grid = await asyncio.to_thread(_grid, frame[0])
 						last = grid

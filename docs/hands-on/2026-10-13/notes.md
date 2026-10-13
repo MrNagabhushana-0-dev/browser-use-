@@ -221,3 +221,33 @@ the film was still unreadable to the page.
   since the watch began. I had installed the rules first, so the watch began after that event.
 - **Fixed:** a percept takes this from everything the retina said. A test (play, wait 2 s, then watch) failed first
   and passes now. Eyes and Retinat files: 91/91.
+
+## Late morning: a game in a frame from another site (itch.io)
+
+**Recording:** `itch-io-game-frame-read-on-screen.mp4`, 75 s at 640 px, made by `retinat_record`. It covers the
+itch.io listing of open-source HTML5 games, the page of "Pigeon Ascent" (Escada Games), Run game, and the game's title
+screen.
+
+**Why:** this is the case `{from: 'screen'}` was built for. itch.io runs games in a frame from `itch.zone`, so the page
+cannot read the game's pixels at all. It had not been tried live.
+
+**Tools:** `retinat_open`, `retinat_look`, `retinat_find`, `retinat_click`, `retinat_reflex` and `retinat_wait`.
+There was no bot wall, and nothing was signed into.
+
+**What happened:**
+- **It works.** A rule watched the game's frame on screen, with its box from `see.el('iframe')`:
+  `see.changed({from: 'screen', in: [box]}) > 0.15`. It fired when the game drew its title screen ("Choose your
+  pigeon name", FIGHT), and the look showed the same.
+- **It was slow.** Pictures reached the rules 132-138 ms old (p50) at first, and 58 ms on the second visit. In tests
+  they are ~10 ms old.
+  - The stats could not say why, so they now do (below). The second visit was on the screencast, with no confirming
+    captures.
+  - The game itself was the load. Chrome's renderer ran at 240% CPU of 4 cores rendering it without a GPU, while
+    Python sat at 10%. That is a limit of this machine, not of the feed.
+- **My own mistake:** I ran a timing test while the game still ran in the Retinat browser, and the test failed on
+  picture age (26 ms over a 25 ms bound). It passed once the page was closed. Close what you opened before measuring.
+
+**Changed:** the reflexes' `status` now says where the rules' screen comes from (`screen_source`: screencast or
+captures) and how many screencast frames a capture replaced (`screen_confirmed`). An agent can then tell a slow page
+from a slow path. Test first: the cross-origin video test requires the screencast. test_reflex, test_retinat and
+annotations: 42/42.

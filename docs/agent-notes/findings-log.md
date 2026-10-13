@@ -3322,6 +3322,13 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
 
 **Full `tests/ci` on `e138b57`: 1,699 passed, 31 skipped, 0 failed** (37m19s, quiet machine).
 
+**Live on itch.io (a game in a frame from `itch.zone`):**
+- A rule reading the game's frame on screen fired when the game drew its title screen.
+- Pictures were 58-138 ms old against ~10 ms in tests. The second visit was on the screencast with no confirming
+  captures. Chrome's renderer was at 240% CPU drawing the WebGL game without a GPU, Python at 10%.
+- The reflexes' status now reports `screen_source` and `screen_confirmed`, so a slow page can be told from a slow path
+  (test first).
+
 **Next, in order:**
 1. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
    its CC-BY transcode, but the Wikimedia API answered 429 (rate limited, shared address); not retried. Try later at

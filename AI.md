@@ -258,7 +258,10 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
   at 60 Hz, to see the change.
 - **The page can't forge input:** the rules run in an isolated world, and the page's own script cannot reach their
   input channel.
-- `action=status` gives counts and latency. `action=clear` stops the rules and releases held keys.
+- `action=status` gives counts and latency, and, when rules read the screen, how many pictures they got, how old a
+  picture was when they read it (`screen_ms_p50`), where the pictures came from (`screen_source`: screencast or
+  captures) and how many frames a capture replaced (`screen_confirmed`). On a page drawn without a GPU (a WebGL game)
+  the pictures are slower because the browser is. `action=clear` stops the rules and releases held keys.
 - **Look after `retinat_wait` returns, not alongside it.** A client may send both at once, and the look then runs
   straight away, before what you are waiting for. Such a look says so ("asked while a retinat_wait was still
   waiting").
