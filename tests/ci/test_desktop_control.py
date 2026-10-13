@@ -461,3 +461,20 @@ async def test_the_persons_escape_stops_the_ai_until_they_let_it_carry_on(apps, 
 	control.resume()  # what an approved access request does
 	await control.click(*_page_box(notes, 'b'))
 	assert (await notes.eval('hits.left')) == before + 1
+
+
+def test_a_window_that_closes_while_it_is_read_is_skipped_not_fatal(screen):
+	"""Found by the full suite under load: a window closed between listing the windows and reading one, the X server
+	answered BadWindow, and Xlib's default error handler exited the process (the whole test run with it). An X error
+	on a read is now that read failing. Run in a child process, since the old behaviour kills its process."""
+	import sys
+
+	code = (
+		'from browser_use.desktop.x11 import X11\n'
+		f'x = X11({screen!r})\n'
+		'print("gone", x._geometry(0x3FFFFF1))\n'
+		'print("listed", len(x.toplevels()) >= 0)\n'
+	)
+	done = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=60)
+	assert done.returncode == 0, done.stderr[-800:]
+	assert 'gone None' in done.stdout and 'listed True' in done.stdout, done.stdout + done.stderr[-400:]

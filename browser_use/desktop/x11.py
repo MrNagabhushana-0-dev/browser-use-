@@ -186,6 +186,40 @@ class XError(RuntimeError):
 	"""An X call failed or the display could not be opened."""
 
 
+class _XErrorEvent(Structure):
+	_fields_ = [
+		('type', c_int),
+		('display', c_void_p),
+		('resourceid', c_ulong),
+		('serial', c_ulong),
+		('error_code', c_ubyte),
+		('request_code', c_ubyte),
+		('minor_code', c_ubyte),
+	]
+
+
+@ctypes.CFUNCTYPE(c_int, c_void_p, POINTER(_XErrorEvent))
+def _on_x_error(display, event):  # noqa: ANN001 (a C callback)
+	# Xlib's default handler prints the error and exits the process. Windows come and go between listing them and
+	# reading one (found when the full test run died on a BadWindow from XGetWindowAttributes): such a read fails
+	# and its call returns 0, which the callers check.
+	logger.debug(
+		f'X error {event.contents.error_code} on request {event.contents.request_code} (resource {event.contents.resourceid:#x})'
+	)
+	return 0
+
+
+_handler_installed = False
+
+
+def _install_error_handler() -> None:
+	"""Make X errors on this process's displays non-fatal. Xlib keeps one handler per process; set it once."""
+	global _handler_installed
+	if not _handler_installed:
+		_X.XSetErrorHandler(_on_x_error)
+		_handler_installed = True
+
+
 class AppInfo(BaseModel):
 	"""The application owning a top-level window."""
 
@@ -221,6 +255,7 @@ class X11:
 
 	def __init__(self, display: str):
 		self.display = display
+		_install_error_handler()
 		self._dpy = _X.XOpenDisplay(display.encode())
 		if not self._dpy:
 			raise XError(f'cannot open X display {display}')
@@ -553,6 +588,7 @@ class PersonWatch:
 		self.last_input = 0.0  # time.monotonic() of the person's last input, 0 if none seen
 		self.last_kind = ''
 		self.escape_at = 0.0  # when the person last pressed Escape: their stop key
+		_install_error_handler()
 		self._dpy = _X.XOpenDisplay(display.encode())
 		if not self._dpy:
 			raise XError(f'cannot open X display {display}')
