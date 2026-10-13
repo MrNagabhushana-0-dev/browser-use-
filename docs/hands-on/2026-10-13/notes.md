@@ -162,3 +162,41 @@ frame from another site (itch.io serves games from `html-classic.itch.zone`) was
   - It is not the eyes' own compositor loop competing: in a test, the feed took ~78 ms with and without it.
   - Capture time grows with the page's rendering load: ~50 ms on a simple clip, ~80 ms on a busy 720p test pattern,
     ~150 ms on Commons' 1080p film, all with software compositing.
+
+## Morning: the screen as the compositor draws it, and overlapping captures (`a30f837`, `b840ca2`)
+
+**Recording:** `commons-film-rules-on-the-screencast.mp4`, 36 s at 640 px, made by `retinat_record`.
+
+**Tools:** `retinat_open`, `retinat_find`, `retinat_click`, `retinat_reflex`, `retinat_wait`, `retinat_look` and
+`retinat_record`, through the Retinat MCP server on Wikimedia Commons.
+
+**What changed before this session.** The rules now get the screen from a screencast on a DevTools connection of their
+own, not from forced captures. Each picture is ~10 ms old when they read it, against ~50 ms for a capture. Running the
+tests many times found that the screencast sometimes sends a broken frame about half a second into a video's playback
+(the video missing, or the whole frame black). A frame that replaces a region almost entirely is now confirmed with a
+capture: 0 false cuts in 30 plays, where 3 to 4 in 10 had them.
+
+**Live on the Commons film:**
+- **Faster:** the same rule as earlier got its pictures 25 ms old at the median, against 153 ms with captures. That is
+  about six times fresher, on the same busy page.
+- **What fired:** the rule fired at 0.19 s, 1.31 s and 1.63 s into the film. The earlier watch called the title card
+  one still shot (0.6-3.7 s). These firings are probably the player's own overlay (the play button and controls
+  fading as the film starts), which is inside the video's box on screen. Not verified.
+
+**Bug found: a look showed the whole page as a keyframe of the film.** After the rules ran, a `retinat_look` (a short
+watch, as the film was playing) listed extra "cuts" and a keyframe at 8.1 s that was the Commons page, shrunk and
+tiled, inside the film's box. A shot was also listed as "0.9s-0.2s".
+- **Reproduced** on a white page with a cross-origin red/blue clip, counting the eyes' compositor pictures that showed
+  the page instead of the film:
+
+  | Rules | Pictures showing the page |
+  |---|---|
+  | off | 0 of 29 |
+  | capturing the viewport (the capture-loop feed) | 24 of 30, 20 of 29 |
+  | on the screencast (captures only to confirm) | 4 and 7 of 28 |
+  | captures one at a time | 0 of 29, 0 of 30 |
+- **The cause:** two `Page.captureScreenshot` calls in flight on one tab, with different clips and scales, swap or mix
+  their pictures. Every capture in the library now holds one lock per browser connection (`b840ca2`). The test
+  failed 2 of 2 before and passes 3 of 3.
+- **Open:** the "0.9s-0.2s" shot (an end before its start) was not looked into. It probably came from a corrupted
+  first picture, but that is a guess.

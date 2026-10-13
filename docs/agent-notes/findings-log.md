@@ -3279,11 +3279,36 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
     the file alone, 2 combined). All its failures came in the first hour after the restart. A cold container is a
     guess, not shown; if it recurs, the message now says whether the page's own frame loop stopped mid-animation.
 
+**Overlapping captures handed back each other's picture** (`b840ca2`, found live on Commons):
+- **What was seen live:** after rules had read the film on screen, a look's keyframe of the film was the whole page,
+  shrunk and tiled, with extra "cuts".
+- **Reproduced** on a white page with a cross-origin red/blue clip, counting the eyes' compositor pictures that showed
+  the page:
+
+  | Rules | Pictures showing the page |
+  |---|---|
+  | off | 0 of 29 |
+  | capture-loop feed | 24 of 30, 20 of 29 |
+  | screencast feed | 4-7 of ~28 |
+  | one shared lock around both capture sites | 0 of 29, 0 of 30 |
+
+  Two plain captures from one session at once did not show it (0 of 20 pairs). So it needs the eyes' capture loop
+  and another capturer together: a test of the real scene was needed.
+- **Fix:** every `Page.captureScreenshot` in the library goes through `browser_use.browser.capture.capture_screenshot`,
+  one lock per CDP client. That covers 11 call sites: the eyes, reflexes, recorder, screenshot watchdog, session,
+  actor and video watcher.
+- **Test:** the eyes watch a cross-origin film while a rule reads it on screen. It failed 2 of 2 before and passes
+  3 of 3.
+- **Live, on the screencast feed:** the Commons film's pictures reached the rules 25 ms old at the median, against
+  153 ms with captures.
+
 **Next, in order:**
-1. The stale look in a fresh container (4 of 5 combined runs in the first hour, 0 of 5 since): when it recurs, read
+1. Re-check live on Commons: rules and a look together, with the lock in place. Look into the "0.9s-0.2s" shot.
+2. Ground-truth live accuracy: a rule tuned to cuts on a film whose shot list is known, checked against it. The
+   player's overlay is inside the video's box on screen. Decide whether `{from: 'video'}` on screen should leave out
+   the player's controls.
+3. The stale look in a fresh container (4 of 5 combined runs in the first hour, 0 of 5 since): when it recurs, read
    the page's last frame time from the failure message.
-2. Live: the Commons film with rules on the screencast feed (was 153 ms a picture with captures).
-3. Ground-truth live accuracy: a rule tuned to cuts on a film whose shot list is known, checked against it.
 4. Raise the compositor sight from 6 to 10 fps and check live whether the Commons dissolve then reads as `fade->`.
 5. The feed test and the region-runner test: not reproduced under synthetic load. Watch the next full runs.
 6. Carried over:
