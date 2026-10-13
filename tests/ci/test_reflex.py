@@ -10,6 +10,7 @@ Real browser, a real canvas game served by pytest-httpserver; nothing mocked.
 """
 
 import asyncio
+import io
 
 import pytest
 from pytest_httpserver import HTTPServer
@@ -476,3 +477,50 @@ async def test_the_screen_feed_ends_with_its_browser(game):
 	await session.kill()
 	await asyncio.wait({feed}, timeout=8)
 	assert feed.done(), f'the screen feed still runs after its browser closed: {reflexes.stats()}'
+
+
+async def test_rules_reading_the_screen_leave_the_eyes_sight_of_a_film_alone(clip):
+	"""Found live on Wikimedia Commons: while rules read a cross-origin film on screen, the eyes' own pictures of it
+	(captures of the film's box) came back as the whole page, shrunk and tiled: 20-24 of ~30 with the rules capturing,
+	4-7 with the screencast, 0 without rules. Two captures in flight on one tab hand each other's picture back."""
+	from browser_use.eyes import Eyes
+
+	media, page = HTTPServer(), HTTPServer()
+	media.start()
+	page.start()
+	media.expect_request('/clip.webm').respond_with_data(clip, content_type='video/webm')
+	page.expect_request('/v').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#fff"><p style="font:40px sans-serif">A page around the film</p>'
+		f'<video src="{media.url_for("/clip.webm")}" autoplay muted loop playsinline style="width:640px;margin:40px"></video></body>',
+		content_type='text/html',
+	)
+	session = BrowserSession(
+		browser_profile=BrowserProfile(
+			headless=True, user_data_dir=None, keep_alive=False, args=['--autoplay-policy=no-user-gesture-required']
+		)
+	)
+	await session.start()
+	try:
+		await session.navigate_to(page.url_for('/v'))
+		eyes = Eyes(session, now_path=False)
+		await eyes.open()
+		reflexes = Reflexes(session)
+		await reflexes.install([{'when': "see.changed({from: 'video'}) > 0.99", 'notify': 'never'}])
+		await eyes.watch(seconds=5, until='time', min_seconds=5)
+		from PIL import Image
+
+		pictures = list(eyes.retina._local_keyframes.values())
+		assert len(pictures) > 15, 'the eyes watch the film from the compositor'
+		page_not_film = 0
+		for jpeg in pictures:
+			with Image.open(io.BytesIO(jpeg)) as im:
+				if min(im.convert('RGB').resize((1, 1)).getpixel((0, 0))) > 150:  # mostly white: the page
+					page_not_film += 1
+		assert page_not_film == 0, f'{page_not_film} of {len(pictures)} of the eyes pictures were the page: {reflexes.stats()}'
+		await reflexes.clear()
+		await eyes.close()
+	finally:
+		await session.kill()
+		for server in (media, page):
+			server.clear()
+			server.stop()

@@ -10,6 +10,7 @@ from cdp_use.cdp.page.events import ScreencastFrameEvent
 from pydantic import PrivateAttr
 from uuid_extensions import uuid7str
 
+from browser_use.browser.capture import capture_screenshot
 from browser_use.browser.events import AgentFocusChangedEvent, BrowserConnectedEvent, BrowserStopEvent
 from browser_use.browser.profile import ViewportSize
 from browser_use.browser.video_recorder import VideoRecorderService
@@ -247,8 +248,8 @@ class RecordingWatchdog(BaseWatchdog):
 		if not self._current_session_id:
 			return
 		try:
-			shot = await self.browser_session.cdp_client.send.Page.captureScreenshot(
-				params={'format': 'jpeg', 'quality': 85}, session_id=self._current_session_id
+			shot = await capture_screenshot(
+				self.browser_session.cdp_client, {'format': 'jpeg', 'quality': 85}, self._current_session_id
 			)
 		except Exception as e:
 			self.logger.debug(f'Could not top up the recording with a capture: {e}')

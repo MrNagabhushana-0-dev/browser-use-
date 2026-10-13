@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from browser_use.browser.capture import capture_screenshot
+
 if TYPE_CHECKING:
 	from browser_use.browser.session import BrowserSession
 
@@ -414,10 +416,7 @@ class Reflexes:
 			'height': vp['clientHeight'],
 			'scale': SCREEN_WIDTH / max(1, vp['clientWidth']),
 		}
-		shot = await send.Page.captureScreenshot(
-			params={'format': 'png', 'clip': clip},  # type: ignore[typeddict-item]
-			session_id=self._session_id,
-		)
+		shot = await capture_screenshot(self._cdp.cdp_client, {'format': 'png', 'clip': clip}, self._session_id)
 		return base64.b64decode(shot['data'])
 
 	async def _feed(self, png: bytes, drawn: float) -> None:

@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from browser_use.browser.capture import capture_screenshot
 from browser_use.eyes import sight
 from browser_use.eyes.retina import FrameSample
 from browser_use.vision.live import LiveView
@@ -118,9 +119,8 @@ class PageWatcher:
 				'height': height,
 				'scale': min(1.0, self.max_width / max(1, width)),
 			}
-			shot = await cdp.cdp_client.send.Page.captureScreenshot(
-				params={'format': 'jpeg', 'quality': self.quality, 'clip': clip},  # type: ignore[typeddict-item]
-				session_id=cdp.session_id,
+			shot = await capture_screenshot(
+				cdp.cdp_client, {'format': 'jpeg', 'quality': self.quality, 'clip': clip}, cdp.session_id
 			)
 			return base64.b64decode(shot['data'])
 		except Exception:

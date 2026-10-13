@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
 
+from browser_use.browser.capture import capture_screenshot
 from browser_use.vision.live import comparison_available, frame_signature, signature_distance
 
 if TYPE_CHECKING:
@@ -503,13 +504,14 @@ class VideoWatcher:
 		scale = min(1.0, scale_to / rect['width'])
 		await self._eval(_HIDE_OVERLAYS_JS)
 		try:
-			shot = await self._cdp.cdp_client.send.Page.captureScreenshot(
-				params={
+			shot = await capture_screenshot(
+				self._cdp.cdp_client,
+				{
 					'format': 'jpeg',
 					'quality': 70,
 					'clip': {'x': rect['x'], 'y': rect['y'], 'width': rect['width'], 'height': rect['height'], 'scale': scale},
 				},
-				session_id=self._cdp.session_id,
+				self._cdp.session_id,
 			)
 		finally:
 			await self._eval(_SHOW_OVERLAYS_JS)

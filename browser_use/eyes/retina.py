@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from browser_use.browser.capture import capture_screenshot
+
 if TYPE_CHECKING:
 	from browser_use.browser.session import BrowserSession
 
@@ -306,10 +308,7 @@ class Retina:
 			'height': height,
 			'scale': min(1.0, thumb_width / width),
 		}
-		shot = await send.Page.captureScreenshot(
-			params={'format': 'jpeg', 'quality': 70, 'clip': clip},  # type: ignore[typeddict-item]
-			session_id=self._session_id,
-		)
+		shot = await capture_screenshot(self._cdp.cdp_client, {'format': 'jpeg', 'quality': 70, 'clip': clip}, self._session_id)
 		jpeg = base64.b64decode(shot['data'])
 		with Image.open(io.BytesIO(jpeg)) as img:
 			rgb_img = img.convert('RGB')

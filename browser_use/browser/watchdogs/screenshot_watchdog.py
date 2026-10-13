@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from bubus import BaseEvent
 from cdp_use.cdp.page import CaptureScreenshotParameters
 
+from browser_use.browser.capture import capture_screenshot
 from browser_use.browser.events import ScreenshotEvent
 from browser_use.browser.views import BrowserError
 from browser_use.browser.watchdog_base import BaseWatchdog
@@ -75,7 +76,7 @@ class ScreenshotWatchdog(BaseWatchdog):
 
 			# Take screenshot using CDP
 			self.logger.debug(f'[ScreenshotWatchdog] Taking screenshot with params: {params}')
-			result = await cdp_session.cdp_client.send.Page.captureScreenshot(params=params, session_id=cdp_session.session_id)
+			result = await capture_screenshot(cdp_session.cdp_client, params, cdp_session.session_id)
 
 			# Return base64-encoded screenshot data
 			if result and 'data' in result:

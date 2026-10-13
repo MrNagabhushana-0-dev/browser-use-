@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from browser_use.browser.capture import capture_screenshot
 from browser_use.eyes import asr, hearing, motion, sight
 from browser_use.eyes.archive import FrameArchive
 from browser_use.eyes.console import ConsoleLog
@@ -460,10 +461,7 @@ class Eyes:
 		scale = min(4.0, max_width / width, max_height / height if max_height else float('inf'))
 		scale = scale if max_height else max(1.0, scale)
 		clip = {'x': vp['pageX'] + x, 'y': vp['pageY'] + y, 'width': width, 'height': height, 'scale': scale}
-		shot = await cdp.cdp_client.send.Page.captureScreenshot(
-			params={'format': 'jpeg', 'quality': 85, 'clip': clip},  # type: ignore[typeddict-item]
-			session_id=cdp.session_id,
-		)
+		shot = await capture_screenshot(cdp.cdp_client, {'format': 'jpeg', 'quality': 85, 'clip': clip}, cdp.session_id)
 		jpeg = base64.b64decode(shot['data'])
 		from PIL import Image
 

@@ -33,6 +33,7 @@ from browser_use.browser.cloud.views import CloudBrowserParams, CreateBrowserReq
 # When a user passes proxy_country_code=None, they mean "disable the proxy".
 # When they don't pass it at all, the server applies its default (US proxy).
 _UNSET: Any = object()
+from browser_use.browser.capture import capture_screenshot
 from browser_use.browser.events import (
 	AgentFocusChangedEvent,
 	BrowserConnectedEvent,
@@ -4315,7 +4316,7 @@ class BrowserSession(BaseModel):
 
 		params = CaptureScreenshotParameters(**params)
 
-		result = await cdp_session.cdp_client.send.Page.captureScreenshot(params=params, session_id=cdp_session.session_id)
+		result = await capture_screenshot(cdp_session.cdp_client, params, cdp_session.session_id)
 
 		if not result or 'data' not in result:
 			raise Exception('Screenshot failed - no data returned')

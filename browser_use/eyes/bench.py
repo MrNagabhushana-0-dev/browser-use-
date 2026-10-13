@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from browser_use.browser.capture import capture_screenshot
+
 SHOT_WIDTH = 1280
 FLASH_COLOURS = {'magenta': (255, 0, 255), 'cyan': (0, 255, 255), 'yellow': (255, 255, 0), 'lime': (0, 255, 0)}
 PAGE = (
@@ -400,10 +402,7 @@ async def screenshot_loop(session, seconds: float, period: float = 1.5) -> tuple
 	scale = min(1.0, SHOT_WIDTH / vw)  # the screenshot agents downscale (OpenAI: 1440x900, Anthropic: 1280x800)
 	clip = {'x': 0, 'y': 0, 'width': vw, 'height': vh, 'scale': scale}
 	while loop.time() < end:
-		r = await cdp.cdp_client.send.Page.captureScreenshot(
-			params={'format': 'jpeg', 'quality': 70, 'clip': clip},
-			session_id=cdp.session_id,  # type: ignore[typeddict-item]
-		)
+		r = await capture_screenshot(cdp.cdp_client, {'format': 'jpeg', 'quality': 70, 'clip': clip}, cdp.session_id)
 		jpeg = base64.b64decode(r['data'])
 		shots.append(jpeg)
 		from PIL import Image
