@@ -3335,7 +3335,8 @@ dismissed"). It passed in the three full runs before it today, and 3 of 3 alone 
 - The arena uses none of what changed today: no captures, reflexes or retina taint.
 - It has failed in full runs before, in Round 13, from background work leaked by earlier tests. Today's new background
   work, the screen feed, only runs in files after this one.
-- Cause not found yet; the eyes, eyesbench and arena files are being run together to see whether it recurs.
+- Not reproduced since: 3 of 3 alone, and 2 of 2 runs of the eyes, eyesbench and arena files together (81/81 each).
+  Cause unknown; it stays an open intermittent next to the feed and region-runner tests.
 
 **Next, in order:**
 1. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
@@ -3344,7 +3345,8 @@ dismissed"). It passed in the three full runs before it today, and 3 of 3 alone 
 2. The player's overlay is inside the video's box on screen: decide whether `{from: 'video'}` read on screen should
    leave out the player's controls.
 3. Raise the compositor sight from 6 to 10 fps and check live whether the Commons dissolve then reads as `fade->`.
-4. The feed test and the region-runner test: not reproduced under synthetic load. Watch the next full runs.
+4. The feed test, the region-runner test and the play-arena title-screen test: intermittent, not reproduced. Watch
+   the next full runs.
 5. Carried over:
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).
