@@ -551,6 +551,9 @@ video's box at 320 px wide, 30 of each at 6 a second:
 - **Now:** it opens a screencast on a DevTools connection of its own (as the reflexes' screen feed does) and cuts the
   box from the newest frame at each tick. A frame's media time is the video's `currentTime` less the frame's age,
   which Chrome stamps. If no screencast can be had, it captures as before.
+  *Corrected later the same night:* that rule went backwards in a stall, since the clock stood still for part of the
+  age. The full run caught it (labels 1.26 s then 1.20 s). Pictures are now labelled with the film's time when Chrome
+  drew them, interpolated from readings of its clock taken every tick.
 - **The test:** a 3 s watch of a cross-origin clip. It failed first (18 captures for 23 pictures) and now takes
   none. The stall test and the cross-origin tests pass, and the eyes, reflex, Retinat and eyesbench files pass
   127/127.

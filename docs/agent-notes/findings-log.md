@@ -3447,6 +3447,20 @@ newest frame of a screencast on its own DevTools connection, labelled with the v
 age; captures remain the fallback. The test's 3 s watch went from 18 captures to none. Live on Commons: the title fade
 and all three cuts found, and the recording was the page in 227 of 227 frames.
 
+**Full `tests/ci` on `c09d801`: 1,712 passed, 30 skipped, 2 failed** (36m57s). Both in `test_eyes.py`:
+- **The stall test, which this change had added, failed: labels went 1.26 s then 1.20 s.** "The video's
+  `currentTime` less the frame's age" supposes the film's clock ran for all of that age; in a stall it stood still,
+  so a frame that arrived late was labelled before a time the film had already reached. With every core busy it
+  failed 3 of 3. The loop now reads the film's clock every tick and labels each picture by interpolating those
+  readings at the moment Chrome stamped the frame (`media_time_at`, with a test of its own). Under the same load: 3 of 3
+  passed. (The first version sliced a `deque` and broke compositor sight altogether; the cross-origin tests caught
+  it before it was committed.)
+- **The feed test:** one flick carried the feed past the next reel and three flicks back did not land. That is the
+  known intermittent. With every core busy: 1 failure in 30 runs (2 overshoots, one recovered on the harder second
+  flick). Not fixed; its numbers are below.
+
+**Full `tests/ci` on `932e83f` (the label fix): 1,715 passed, 30 skipped, 0 failed** (36m41s).
+
 **Next, in order:**
 1. **The live lag of a cut rule** on Commons (0.13-0.18 s of video) against 19-27 ms in the test: pictures were
    45 ms old there. Find where the rest goes.
@@ -3456,8 +3470,9 @@ and all three cuts found, and the recording was the page in 227 of 227 frames.
 4. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
    or CORS WebM/VP9 source.
 5. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
-6. **Intermittents to watch in full runs:** the feed test, the region-runner test, the play-arena title screen, and
-   the reflex speed test.
+6. **Intermittents to watch in full runs:** the feed test (failed in the `c09d801` run; with every core busy, 2 of 30
+   flicks overshot, and 1 of those 2 was not brought back in three flicks), the region-runner test, the play-arena
+   title screen, and the reflex speed test.
 7. **Carried over:**
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).
