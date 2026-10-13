@@ -70,3 +70,15 @@ async def test_a_missing_xvfb_is_a_clear_error(monkeypatch):
 	with pytest.raises(RecorderUnavailable):
 		async with virtual_display():
 			pass
+
+
+async def test_a_recording_left_at_once_still_holds_what_was_on_screen(tmp_path):
+	"""Found in a full run: a 2 s recording came back with no frame at all ('Nothing was written into output file'):
+	under load, ffmpeg had not begun capturing when the block was left. A recording now begins only once ffmpeg has
+	captured its first frame. (The old fixed 0.4 s grace usually passes this too; only a loaded machine shows it.)"""
+	out = tmp_path / 'blink.mp4'
+	async with virtual_display(320, 200) as display:
+		async with record_display(display, out, 320, 200, fps=10):
+			pass
+	seconds, size = _probe(out)
+	assert size == (320, 200) and seconds > 0, (seconds, size)
