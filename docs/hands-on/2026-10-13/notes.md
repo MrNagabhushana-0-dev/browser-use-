@@ -251,3 +251,29 @@ There was no bot wall, and nothing was signed into.
 captures) and how many screencast frames a capture replaced (`screen_confirmed`). An agent can then tell a slow page
 from a slow path. Test first: the cross-origin video test requires the screencast. test_reflex, test_retinat and
 annotations: 42/42.
+
+## Midday: a news front page (the Guardian)
+
+**Recording:** `guardian-front-page-ad-frame-and-scan.mp4`, two parts joined at 640 px: the session that found the
+bug, then the re-check and a scan after the fix.
+
+**Tools:** `retinat_open`, `retinat_look`, `retinat_now` and `retinat_scan`. The Wikimedia API, wanted for a reference
+shot list of the Commons film, still answered 429, so I tried it once and moved on.
+
+**Bug found:** the first look on theguardian.com/international said "no video playing on
+https://assets.guim.co.uk/commercial/tpc-test/v2/index.html", an advertising frame, not the page.
+- **The cause:** browser-use runs Chrome with site isolation off, so frames from other sites live in the tab's
+  process. The script that installs the retina in new documents reached them too. An ad frame that loaded after the
+  eyes opened ran its own retina, and whichever frame spoke last set the page's URL and what the eyes attended to.
+  A frame without a video could drop the page's video from attention.
+- **Fixed:** the retina runs in the top frame only.
+- **Test:** a playing video, and a frame from another origin added a second after load. It failed first (the page's
+  URL alternated with the frame's) and passes now. Eyes file: 69/69.
+- **Checked live:** after the fix, `retinat_now` gives the Guardian's own URL.
+
+**The scan** covered 12 of 17.6 screens: 6 frames, ~647 tokens. Two smaller things, not fixed yet:
+- Two frames were both labelled "6.4 screens down" while showing different stories. The scan labels every frame
+  since its last check with the scroll position read after the wheel, so frames from mid-scroll get the end
+  position. Chrome's screencast frames carry their own scroll offset, which would label them exactly.
+- From the second screen on, the Guardian's "Who pays for the journalism" banner covers the bottom ~40% of every
+  frame, and the scan does not say so.

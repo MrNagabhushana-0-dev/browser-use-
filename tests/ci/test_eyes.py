@@ -407,6 +407,35 @@ async def test_a_cross_origin_video_watched_later_is_still_said_to_be_cross_orig
 	assert 'sound cannot be read' in p.text and 'none captured' not in p.text, 'unreadable is not absent: ' + p.text
 
 
+async def test_the_eyes_keep_to_the_page_not_the_frames_inside_it(eyes, session, site, elsewhere):
+	"""Found hands-on on the Guardian's front page: a look said "no video playing on
+	https://assets.guim.co.uk/commercial/tpc-test/v2/index.html", an advertising frame inside the page. The retina ran
+	in every frame the tab holds (site isolation is off), and whichever frame spoke last set the page's URL and what it
+	attended."""
+	elsewhere.expect_request('/ad').respond_with_data(
+		'<!doctype html><body>ad<script>setInterval(() => document.body.append("."), 100)</script></body>',
+		content_type='text/html',
+	)
+	# the frame comes a second after the page, as ads do, so it is a new document once the eyes are open
+	extra = (
+		'<script>setTimeout(() => { const f = document.createElement("iframe");'
+		f' f.src = "{elsewhere.url_for("/ad")}"; f.width = 300; f.height = 100;'
+		' f.style = "position:fixed;top:0;left:0"; document.body.append(f); }, 1000)</script>'
+	)
+	site.expect_request('/framed').respond_with_data(
+		PLAYER.format(src=site.url_for('/calib.webm'), attrs='autoplay loop', extra=extra), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/framed'))
+	await asyncio.sleep(1.5)
+	urls, attended = set(), set()
+	for _ in range(15):
+		await asyncio.sleep(0.2)
+		urls.add(eyes.retina.state.get('url', ''))
+		attended.add(eyes.retina.attended.get('vid', 0))
+	assert urls == {site.url_for('/framed')}, urls
+	assert 0 not in attended, f'the video was dropped from attention: {attended}'
+
+
 async def test_a_muted_video_is_still_heard_and_said_to_be_muted(eyes, session, site):
 	# captureStream taps the audio before volume and mute: the agent can listen without
 	# making a sound, and must not report a muted reel as silent.

@@ -16,6 +16,10 @@
 // Python owns all interpretation; this file only measures.
 (() => {
 	const VERSION = 9;
+	// The top frame only. With site isolation off, frames from other sites share the tab, and the script that installs
+	// the retina in new documents reaches them too: an ad frame's retina then set the page's URL and attention
+	// (found on the Guardian's front page: "no video playing on https://assets.guim.co.uk/commercial/...").
+	if (window !== window.top) return;
 	if (window.__retina && window.__retina.version === VERSION) return;
 	if (window.__retina) window.__retina.stop();
 

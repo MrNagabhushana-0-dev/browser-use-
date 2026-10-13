@@ -3338,8 +3338,16 @@ dismissed"). It passed in the three full runs before it today, and 3 of 3 alone 
 - Not reproduced since: 3 of 3 alone, and 2 of 2 runs of the eyes, eyesbench and arena files together (81/81 each).
   Cause unknown; it stays an open intermittent next to the feed and region-runner tests.
 
+**The Guardian's front page:** an ad frame's own retina set the page's URL ("no video playing on
+assets.guim.co.uk/commercial/..."). With site isolation off, the new-document script reaches other sites' frames.
+The retina now runs in the top frame only (test first; eyes 69/69; checked live).
+- **Seen in the scan, not fixed:** frames from mid-scroll are labelled with the end position. The screencast's own
+  scroll offset would fix that. A sticky banner covering ~40% of every frame goes unmentioned.
+
 **Next, in order:**
-1. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
+1. The scan: label frames with the screencast's own scroll offset, and say when a fixed banner covers much of every
+   frame.
+2. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
    its CC-BY transcode, but the Wikimedia API answered 429 (rate limited, shared address); not retried. Try later at
    a low rate.
 2. The player's overlay is inside the video's box on screen: decide whether `{from: 'video'}` read on screen should
