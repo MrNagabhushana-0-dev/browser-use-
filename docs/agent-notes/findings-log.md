@@ -3099,6 +3099,8 @@ passed 36/36 inside it. There were 3 stalls, the longest 1.5 s.
 
 ## Round 56 (owner's request, then the unattended loop): reflexes, sight through the compositor, and hands-on use
 
+**Full `tests/ci` on `65f798c`:** running; the result is added when it ends.
+
 PR #11. The owner asked for a real-time perception stream rather than screenshot tools. Each item here was found by
 driving a real browser through the Retinat MCP tools, or measured that way. Hands-on notes and recordings are in
 `docs/hands-on/2026-10-12/` and `docs/hands-on/2026-10-13/`.
@@ -3153,6 +3155,20 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
   browser bug for several runs. Give a page's change a margin longer than the look takes.
 - A reflex's p50 over two actions, one of them sent during page load, is noise, not a measurement.
 
+**Later in the round:**
+- **Dissolves and fades are shot changes; a pan is not** (`fc41722`), done twin-comparison style:
+  - a run of small changes whose ends differ like a cut, every frame between them a blend of the two;
+  - rejected when the first frame, shifted up to 3 cells, matches the last (camera motion). At 16x16 a small pan's
+    frames are nearly blends too, and the synthetic pan test failed until that check was added;
+  - a fade through black is split where it is darkest, and a fast fade stepping a cut's worth per frame stays one
+    change.
+- **`find`'s crop of a large match is shrunk to fit 720x300** (`7844340`): ~665 tokens for an 800x450 player before.
+- **`see.track`** (`7844340`): `locate` plus velocity in px/s, so rules need not guess a game's speed.
+- **A desktop-control X error is no longer fatal** (`65f798c`). The full run on `9a3d6a1` died part-way, after 925
+  passed and 0 failed: a window closed between listing and reading it, Xlib answered BadWindow, and its default
+  error handler exited the process. The MCP server would have died the same way. A process-wide handler now makes
+  such a read fail, as its callers expect. Reproduced in a child process first.
+
 **Research, this round** (sources read through search summaries, not full papers):
 - [VideoGameBench](https://arxiv.org/pdf/2505.18134) (2025): a VLM's response latency is the main reason it fails
   real-time games. Its authors added a paused "Lite" mode to separate reasoning from reaction.
@@ -3169,11 +3185,10 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
   frames the retina already sends.
 
 **Next, in order:**
-1. `find`'s crop of a large match: cap it (~665 tokens for an 800x450 player, seen twice).
-2. A reflex that reads motion: an object's velocity from two `locate`s a few frames apart, so rules need not guess a
-   game's speed from the frame count.
+1. Check the fade detector live on the Commons film: its title card should now be its own shot.
+2. Play the T-Rex runner again with `see.track` and a region scaled by the measured speed, recorded.
 3. Reflexes on cross-origin video: the compositor path is Python-side at 6 fps; per-frame reads need a page-side
    source.
-4. A fade as a shot change (the Commons title card fades to the clouds as one shot).
-5. Carried over: confine the AI's page script to the page's own world (Round 54); the A/B test of sheet vs recall vs
-   journal with blind agents (Round 10).
+4. Carried over:
+   - confine the AI's page script to the page's own world (Round 54);
+   - the A/B test of sheet vs recall vs journal with blind agents (Round 10).
