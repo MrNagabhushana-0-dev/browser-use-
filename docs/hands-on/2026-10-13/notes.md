@@ -48,5 +48,19 @@ were called live for the first time: the MCP tool list in this session now inclu
 
   Without a recording the game crashed normally. This is unexplained; it may be this copy of the game. It is not
   reproduced in a test.
-- **The rules know nothing about the game's speed.** They estimate it from the frame count. A reflex that could read
-  how fast an object moves (two `locate`s a few frames apart) would be the next step for games.
+- **The rules knew nothing about the game's speed**; they estimated it from the frame count. Since `7844340`,
+  `see.track` gives a colour's velocity in px/s. It is not yet used live on this game.
+
+## Later: Wikipedia's main page and the Commons player, with the new `find` crop
+
+**Recording:** `wikipedia-panel-and-commons-find.mp4`, 78 s, made by `retinat_record`.
+
+**Tools:** `retinat_open`, `retinat_look`, `retinat_find` and `retinat_record`.
+
+| # | Found | Status |
+|---|---|---|
+| 6 | On Wikipedia's main page, "text that appeared" listed the Appearance panel once per nesting level: "Text Small Standard Large" and again "Small Standard Large", and the same for Width and Color. The script builds the panel 2.3 s after load, and the block and the block inside it were each reported. | **Fix written and its test written** (the outermost changed block says it once). Run after the full suite. |
+| 7 | `find "play video"` on the Commons player: ~665 tokens before. | **Checked live** after `7844340`: the crop is shrunk to fit, 0.6x, **~231 tokens**. A small match is still magnified: "Welcome to Wikipedia", 1.7x, ~156 tokens. |
+
+The fundraising-style banner ("Photograph a historic site...", Wiki Loves Monuments) is still reported as text that
+appeared, 2.7 s after load. It is a real late banner, so that is right.
