@@ -3419,6 +3419,7 @@ point rows; a test now keeps it so.
 - **"watched" counts what was watched.** It counted the hold between two watches ("27.4s" for 10 s).
 - **What an earlier percept saw is said to be there,** not "unknown".
 - **"on screen" is read when the percept is built,** not when the video was found.
+- **Full `tests/ci` on `4f431c4`: 1,711 passed, 30 skipped, 0 failed** (36m55s; the reflex speed test passed).
 
 **Next, in order:**
 1. **A live stream or an item of unknown length** still gets the 2 s window. Check one live.
