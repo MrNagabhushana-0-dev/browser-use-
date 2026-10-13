@@ -3157,9 +3157,11 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
   - the page view starved when a recording took or released the shared screencast (`ecac0a8`);
   - the recorder lost the repaint that ends an animation; a quiet recording is now topped up with one capture
     (`5a16efe`);
-  - with rules reading the canvas every frame, the stream's newest frame still showed the animation mid-way a
-    second after it ended. A look now captures the page at that moment (`cfa7e96`). The test failed 5 of 6 runs
-    on `5a16efe`.
+  - ~~with rules reading the canvas every frame, the stream's newest frame still showed the animation mid-way~~.
+    **Withdrawn the next morning.** That test's stop rule fired mid-animation: a hue drifting 3.3 degrees a frame
+    never crosses `changed()`'s threshold, so "still for 45 frames" came 0.75 s into a 2 s animation. With a bar
+    sweeping the canvas the test passes 6 of 6 on `5a16efe`. `cfa7e96` (a look captures the page now) stays as a
+    design choice, not a fix.
 - **The other "stale" looks were mine:** sent in the same batch as `retinat_wait`, they ran at the game's start.
   That covers the start-screen sightings, the "fourth time" and the "still stale after the fix" runs. An hour of
   capture variants chasing them was dropped unmerged.
@@ -3275,9 +3277,13 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
   - It fails the same way on `4f31b66` and `38380ab`, so it is not this work.
   - The look said "captured from the compositor at this moment", so the capture itself returned a frame from the
     middle of the animation, a second after it ended.
-  - With the page now reporting its own last frame time in the failure message, it has passed 5 runs since (3 of
-    the file alone, 2 combined). All its failures came in the first hour after the restart. A cold container is a
-    guess, not shown; if it recurs, the message now says whether the page's own frame loop stopped mid-animation.
+  - With the page now reporting its own last frame time in the failure message, it passed 5 runs. Then it failed in
+    the full run on `b840ca2`, and the message settled it: the page drew its last frame at 2013 ms, and the look came
+    before. The test's stop rule ("unchanged for 45 frames") fired mid-animation, because a hue drifting 3.3 degrees
+    a frame never crosses `changed()`'s threshold. The look was right. The test passed only when a slow machine
+    delayed the look past the end. Not the container, and not the library.
+  - Fixed in the test: a bar sweeps the canvas while it animates. 5 of 5 on HEAD, and **6 of 6 on `5a16efe`**. So
+    the "third cause" of the stale look (a stream read by rules going stale) was this test, and is withdrawn.
 
 **Overlapping captures handed back each other's picture** (`b840ca2`, found live on Commons):
 - **What was seen live:** after rules had read the film on screen, a look's keyframe of the film was the whole page,
@@ -3302,15 +3308,16 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
 - **Live, on the screencast feed:** the Commons film's pictures reached the rules 25 ms old at the median, against
   153 ms with captures.
 
+**Full `tests/ci` on `b840ca2`: red, 1 failed, 1,697 passed, 31 skipped** (37m43s). The one failure was
+`test_a_look_after_a_recorded_game_shows_how_it_ended`: its own stop rule, fixed in the test (above).
+
 **Next, in order:**
 1. Re-check live on Commons: rules and a look together, with the lock in place. Look into the "0.9s-0.2s" shot.
 2. Ground-truth live accuracy: a rule tuned to cuts on a film whose shot list is known, checked against it. The
    player's overlay is inside the video's box on screen. Decide whether `{from: 'video'}` on screen should leave out
    the player's controls.
-3. The stale look in a fresh container (4 of 5 combined runs in the first hour, 0 of 5 since): when it recurs, read
-   the page's last frame time from the failure message.
-4. Raise the compositor sight from 6 to 10 fps and check live whether the Commons dissolve then reads as `fade->`.
-5. The feed test and the region-runner test: not reproduced under synthetic load. Watch the next full runs.
-6. Carried over:
+3. Raise the compositor sight from 6 to 10 fps and check live whether the Commons dissolve then reads as `fade->`.
+4. The feed test and the region-runner test: not reproduced under synthetic load. Watch the next full runs.
+5. Carried over:
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).

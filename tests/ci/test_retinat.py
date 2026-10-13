@@ -480,11 +480,13 @@ async def test_reflexes_through_retinat_act_within_a_frame_or_two(retinat, site)
 
 async def test_a_look_after_a_recorded_game_shows_how_it_ended(retinat, site, tmp_path, monkeypatch):
 	"""Found live on the T-Rex runner, through these tools: look, record, the game played and stopped, look: the
-	look showed a frame from before the end. Three causes: the page view starved when the recorder took its stream
-	(ecac0a8); the recorder lost the repaint that ends an animation (5a16efe); and with rules reading the canvas
-	every frame the screencast kept sending the canvas as it was (this test, with rules, failed 5 of 6 runs on
-	5a16efe). A look now captures the page at that moment. Send the last look after retinat_wait has returned:
-	sent alongside it, a look shows the page as it was when the wait began."""
+	look showed a frame from before the end. The page sweeps a white bar while it animates: a hue drifting 3.3 degrees a
+	frame moves no grid cell past changed()'s threshold, so the rule below once called the animation still 0.75 s in
+	and the look, rightly, showed it mid-way (the page's own clock said so: drawn last at 2013 ms, looked at before).
+	Two causes were real: the page view starved when the recorder took its stream (ecac0a8); the recorder lost the
+	repaint that ends an animation (5a16efe). A third, a stream read by rules going stale, was that faulty stop rule:
+	with the bar, this test passes 6 of 6 on 5a16efe too. Send the last look after retinat_wait has returned: sent
+	alongside it, a look shows the page as it was when the wait began."""
 	import base64
 	import io
 
@@ -498,7 +500,8 @@ async def test_a_look_after_a_recorded_game_shows_how_it_ended(retinat, site, tm
 		'addEventListener("keydown", () => { if (t0 === null) { t0 = performance.now(); document.getElementById("h").remove();'
 		' c.style.width = "100vw"; c.style.height = "50vh"; requestAnimationFrame(frame); } });'
 		'function frame(now) { const t = now - t0; window.lastT = Math.round(t); g.fillStyle = t < 2000 ? `hsl(${t / 5}, 80%, 50%)` : "#0a0";'
-		' g.fillRect(0, 0, 600, 150); if (t < 2000) requestAnimationFrame(frame); }</script></body>',
+		' g.fillRect(0, 0, 600, 150); if (t < 2000) { g.fillStyle = "#fff"; g.fillRect((t * 1.5) % 600, 0, 60, 150); }'
+		' if (t < 2000) requestAnimationFrame(frame); }</script></body>',
 		content_type='text/html',
 	)
 	await _call(retinat, 'retinat_open', {'url': site.url_for('/runs')})

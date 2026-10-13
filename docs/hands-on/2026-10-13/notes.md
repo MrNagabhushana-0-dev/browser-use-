@@ -100,7 +100,7 @@ Each cause below was reproduced in a test that failed first:
 |---|---|
 | **The page view starved.** The eyes' page view and the recorder share one screencast and one frame slot. A recording started after a look took both; one stopped while the view shared it ended the stream. | `ecac0a8`: the view notices it is out of step and starts again in step. Both orders are tested. |
 | **The recorder lost the final repaint.** Chrome's screencast drops the repaint that ends an animation: it is skipped while frames are in flight, and a page that then stands still sends no other. Full-size frames are in flight most of the time; the eyes' 640 px stream was not affected (3/3). | `5a16efe`: a quiet recording is topped up with one capture. The video's last frame after an animation is tested; it failed about half the time before. |
-| **A stale stream that was not quiet.** With reflex rules reading the canvas every frame, the stream's newest frame still showed the animation mid-way, a second after it ended. | `cfa7e96`: a look now captures the page at that moment and says so; the stream is only the fallback. The test (look, record, rules, wait, look through the Retinat tools) failed 5 of 6 runs on `5a16efe`. |
+| ~~**A stale stream that was not quiet.**~~ **Withdrawn the next morning.** The test that showed it (failing 5 of 6 on `5a16efe`) had a stop rule that fired mid-animation: a hue drifting 3.3 degrees a frame never crosses `changed()`'s threshold, so "still for 45 frames" came 0.75 s into a 2 s animation, and a look taken then was right to show it mid-way. With a bar sweeping the canvas, the test passes 6 of 6 on `5a16efe`. | `cfa7e96` (a look captures the page at that moment and says so) is kept as a design choice, not a fix. |
 
 The game "freezing in mid-air, with Space doing nothing" was these stale looks: the game had crashed normally, and
 Space had in fact restarted it.
@@ -119,7 +119,8 @@ Those looks showed the start screen because that was the screen. I took them as 
 
 What stands:
 - causes 1 and 2 rest on the two looks sent in order, and on their failing tests;
-- cause 3 rests on its test alone. It is a real bug, but no live look of mine showed it.
+- cause 3 rested on its test alone, and the next morning that test turned out to be wrong (its stop rule fired
+  mid-animation; fixed, it passes on `5a16efe` 6 of 6). Cause 3 is withdrawn: no live look and no sound test shows it.
 
 **Checked live in strict order** on the committed code, at 02:44:
 1. a look;
