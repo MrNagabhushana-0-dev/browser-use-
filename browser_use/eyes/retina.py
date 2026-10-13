@@ -22,7 +22,7 @@ import json
 import logging
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -49,6 +49,26 @@ COMPOSITOR_FPS = 6.0
 COMPOSITOR_SEQ = 1_000_000_000
 MAX_LOCAL_KEYFRAMES = 400
 MAX_EVENTS = 2000
+
+
+def media_time_at(readings: 'Sequence[tuple[float, float]]', wall: float) -> float | None:
+	"""A film's time at wall-clock `wall` (seconds since the epoch), from readings of its clock as (wall, media time)
+	pairs in the order taken: interpolated between the two around it, so a clock that stood still (a stall) reads flat
+	and one that ran reads its slope. Before the first reading the film is taken to have played at 1x; after the last
+	it is not run on. Between readings that jump (a seek), whichever side is nearer."""
+	readings = list(readings)  # a deque cannot be sliced
+	if not readings:
+		return None
+	first_w, first_t = readings[0]
+	if wall <= first_w:
+		return max(0.0, first_t - (first_w - wall))
+	for (w0, t0), (w1, t1) in zip(readings, readings[1:]):
+		if w0 <= wall <= w1:
+			span = w1 - w0
+			if span <= 0 or t1 < t0 or t1 - t0 > span + 1.0:
+				return t0 if wall - w0 < w1 - wall else t1
+			return t0 + (t1 - t0) * (wall - w0) / span
+	return readings[-1][1]
 
 
 @dataclass(slots=True)
@@ -327,6 +347,7 @@ class Retina:
 			start = {'format': 'jpeg', 'quality': 80, 'maxWidth': 1280, 'maxHeight': 1280, 'everyNthFrame': 1}
 			await ws.send(_json.dumps({'id': 1, 'method': 'Page.startScreencast', 'params': start}))
 			reader = asyncio.create_task(read())
+			clock: deque[tuple[float, float]] = deque(maxlen=64)  # (wall, media time), read each tick
 			try:
 				while self.running and self.attended.get('vid') == vid:
 					started = time.monotonic()
@@ -334,9 +355,13 @@ class Retina:
 						reader.result()
 						raise RuntimeError('the screencast connection closed')
 					frame, newest[0] = newest[0], None
+					before = time.time()
+					media_t = await self._media_time(vid)
+					if media_t is not None:
+						clock.append(((before + time.time()) / 2, media_t))
 					if frame is not None:
 						try:
-							self._emit_compositor(await self._compositor_from(vid, *frame))
+							self._emit_compositor(await self._compositor_from(vid, *frame, clock))
 						except asyncio.CancelledError:
 							raise
 						except Exception as e:
@@ -346,8 +371,11 @@ class Retina:
 				reader.cancel()
 				await asyncio.gather(reader, return_exceptions=True)
 
-	async def _compositor_from(self, vid: int, data: bytes, meta: dict) -> FrameSample | None:
-		"""A sample of the attended video's box, cut from one screencast frame."""
+	async def _compositor_from(
+		self, vid: int, data: bytes, meta: dict, clock: 'Sequence[tuple[float, float]]' = ()
+	) -> FrameSample | None:
+		"""A sample of the attended video's box, cut from one screencast frame, labelled with the film's time when Chrome
+		drew the frame (its clock as read around then: `clock`)."""
 		import io
 
 		from PIL import Image
@@ -358,7 +386,6 @@ class Retina:
 		rect = self.attended.get('rect') or []
 		if len(rect) != 4 or rect[2] < 8 or rect[3] < 8:
 			return None
-		now_t = await self._media_time(vid)
 		with Image.open(io.BytesIO(data)) as img:
 			css_w = float(meta.get('deviceWidth') or img.width)
 			css_h = float(meta.get('deviceHeight') or img.height)
@@ -378,11 +405,12 @@ class Retina:
 		mean = part.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
 		buf = io.BytesIO()
 		part.save(buf, 'JPEG', quality=70)
-		# Media time: the video's own, read now, less the frame's age (Chrome stamps when it drew it)
+		# Media time: the video's clock at the moment Chrome drew the frame (it stamps it), from readings around then. The
+		# time read now less the frame's age went back in a stall: the clock had stood still for part of that age.
 		drawn = float(meta.get('timestamp') or 0.0)
-		age = max(0.0, time.time() - drawn) if drawn else 0.0
-		if now_t is not None:
-			t = max(0.0, now_t - age)
+		at = media_time_at(clock, drawn) if drawn else (clock[-1][1] if clock else None)
+		if at is not None:
+			t = at
 		else:
 			t = float(state.get('t') or 0.0) + max(0.0, time.monotonic() - self._state_wall) if state else 0.0
 		self._compositor_seq += 1

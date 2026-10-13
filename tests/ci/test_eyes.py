@@ -464,6 +464,26 @@ async def test_compositor_pictures_carry_the_time_the_film_was_at(eyes, session,
 	assert all(b >= a - 0.05 for a, b in zip(ts, ts[1:])), f'labels went backwards: {ts}'
 
 
+def test_a_picture_is_labelled_with_the_time_the_film_was_at_when_drawn():
+	"""Found in a full tests/ci run: under load, compositor labels went 1.26 s then 1.20 s. A picture was labelled with the
+	film's time read now, less the picture's age, which supposes the film's clock ran all that while; in a stall it
+	stood still. The film's time at the moment a picture was drawn comes from readings of its clock on either side."""
+	from collections import deque
+
+	from browser_use.eyes.retina import media_time_at
+
+	playing_then_stalled = [(100.0, 1.0), (100.2, 1.2), (100.4, 1.25), (100.6, 1.25), (100.8, 1.25)]
+	assert media_time_at(playing_then_stalled, 100.1) == pytest.approx(1.1)
+	assert media_time_at(playing_then_stalled, 100.7) == pytest.approx(1.25)  # not 1.25 less its age
+	assert media_time_at(playing_then_stalled, 99.9) == pytest.approx(0.9)  # before the first reading: run back
+	assert media_time_at(playing_then_stalled, 101.0) == pytest.approx(1.25)  # after the last: not run on
+	seeked_back = [(100.0, 30.0), (100.2, 2.0)]
+	assert media_time_at(seeked_back, 100.05) == pytest.approx(30.0)
+	assert media_time_at(seeked_back, 100.15) == pytest.approx(2.0)
+	assert media_time_at([], 100.0) is None
+	assert media_time_at(deque(playing_then_stalled), 100.7) == pytest.approx(1.25)  # as the compositor keeps them
+
+
 async def test_the_eyes_keep_to_the_page_not_the_frames_inside_it(eyes, session, site, elsewhere):
 	"""Found hands-on on the Guardian's front page: a look said "no video playing on
 	https://assets.guim.co.uk/commercial/tpc-test/v2/index.html", an advertising frame inside the page. The retina ran
