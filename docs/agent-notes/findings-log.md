@@ -3382,6 +3382,7 @@ The Wikimedia API and upload.wikimedia.org still answered 429. Each tried once.
   - a histogram test;
   - shift compensation.
 - **Live after the change:** 3 of 3 real cuts, none at the bird. The title fade was not found.
+- **Full `tests/ci` on `391c814`: 1,704 passed, 30 skipped, 0 failed** (37m02s).
 - **Seen, not fixed:**
   - `until=bored` stopped a 35 s watch of a 10-minute film at 6.7 s, on a slow pan;
   - the header said "watched 78.8s" for a 30 s watch, and "on screen" was stale;
