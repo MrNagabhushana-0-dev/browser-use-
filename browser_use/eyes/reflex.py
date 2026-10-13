@@ -403,7 +403,7 @@ class Reflexes:
 			self._screen_seq += 1
 			await self._cdp.cdp_client.send.Runtime.evaluate(
 				params={
-					'expression': f'window.__reflex && window.__reflex.feed({w}, {h}, "{base64.b64encode(rgb).decode()}", {self._screen_seq})',
+					'expression': f'window.__reflex && window.__reflex.feed({w}, {h}, "{base64.b64encode(rgb).decode()}", {self._screen_seq}, {drawn!r})',
 					'contextId': self._context_id,
 				},
 				session_id=self._session_id,

@@ -406,6 +406,72 @@ async def test_reflexes_see_a_cross_origin_video_on_screen(clip):
 			server.stop()
 
 
+@pytest.fixture(scope='module')
+def cuts(tmp_path_factory) -> bytes:
+	"""4 s at 30 fps: red, blue, lime, white, cut at 1, 2 and 3 s. Generated, not committed."""
+	import subprocess
+
+	import imageio_ffmpeg
+
+	out = tmp_path_factory.mktemp('cuts') / 'cuts.webm'
+	args = [imageio_ffmpeg.get_ffmpeg_exe(), '-loglevel', 'error', '-y']
+	for c in ('red', 'blue', 'lime', 'white'):
+		args += ['-f', 'lavfi', '-i', f'color=c={c}:s=320x180:r=30:d=1']
+	args += ['-filter_complex', '[0][1][2][3]concat=n=4:v=1:a=0[v]', '-map', '[v]', '-c:v', 'libvpx', '-b:v', '300k', str(out)]
+	subprocess.run(args, check=True, timeout=120)
+	return out.read_bytes()
+
+
+async def test_a_cut_read_on_screen_is_placed_at_the_frame_it_shows(cuts):
+	"""Found live on Wikimedia Commons: a cut rule said the film's cuts were 0.10-0.12 s later than they are (and
+	0.13-0.18 s that morning). The event gave the video's time when the rule fired: the screen picture's age later,
+	and the video's clock runs ~20-30 ms ahead of the frame on screen besides (measured with requestVideoFrameCallback
+	on a 1080p film: 17-29 ms at the median). A picture now carries when it was drawn, and the event the time of the
+	frame on screen then."""
+	media, page = HTTPServer(), HTTPServer()
+	media.start()
+	page.start()
+	media.expect_request('/cuts.webm').respond_with_data(cuts, content_type='video/webm')  # no CORS
+	page.expect_request('/v').respond_with_data(
+		f'<!doctype html><body style="margin:0;background:#000"><video src="{media.url_for("/cuts.webm")}" muted '
+		'playsinline style="width:640px"></video></body>',
+		content_type='text/html',
+	)
+	session = BrowserSession(
+		browser_profile=BrowserProfile(
+			headless=True, user_data_dir=None, keep_alive=False, args=['--autoplay-policy=no-user-gesture-required']
+		)
+	)
+	await session.start()
+	try:
+		await session.navigate_to(page.url_for('/v'))
+		for _ in range(50):
+			if await _value(session, "document.querySelector('video').readyState >= 3"):
+				break
+			await asyncio.sleep(0.1)
+		reflexes = Reflexes(session)
+		await reflexes.install([{'when': "see.changed({from: 'video'}) > 0.5", 'notify': 'cut'}])
+		await asyncio.sleep(0.5)  # the screen feed is running before the film starts
+		await _value(session, "document.querySelector('video').play().then(() => true)")
+		at = []
+		while len(at) < 3:
+			event = await reflexes.wait(timeout=6)
+			if event is None:
+				break
+			if event.media_t is not None and event.media_t > 0.5:
+				at.append(event.media_t)
+		assert len(at) == 3, (at, reflexes.stats())
+		off = [round((t - cut) * 1000) for t, cut in zip(at, (1.0, 2.0, 3.0))]
+		# At the cut's frame, or (under load the feed keeps only the newest picture) the next, which is what it saw;
+		# never between frames or before the cut (it was -5 to 42 ms)
+		assert all(abs(ms) < 3 or abs(ms - 33) < 3 for ms in off), f'cuts placed this many ms from where they are: {off}'
+	finally:
+		await session.kill()
+		for server in (media, page):
+			server.clear()
+			server.stop()
+
+
 # A game in a frame from another origin, as on itch.io: it turns a square red at a moment of its own choosing, and
 # counts a click that lands on it. It tells the page hosting it when each happened, on its own clock.
 FRAMED_GAME = """<!doctype html><body style="margin:0;background:#fff"><canvas id="c" width="400" height="300"></canvas><script>

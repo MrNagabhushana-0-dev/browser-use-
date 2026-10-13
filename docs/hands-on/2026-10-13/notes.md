@@ -565,3 +565,33 @@ video's box at 320 px wide, 30 of each at 6 a second:
 - keyframes in order.
 
 The recording, with the recorder's screencast running alongside the eyes', was the page in 227 of 227 frames.
+
+## Late night: the label fix live, and where a cut rule's 0.1 s went
+
+**The stall fix, live** (`commons-film-labels-keep-to-the-frames-live.mp4`, the first 50 s at 640 px). A 32 s watch of
+the film on Commons gave the title fade at 3.9 -> 4.8 s (3.65-4.85 in the edit list) and cuts at 16.4, 20.3 and 27.6 s
+(16.30, 20.17, 27.47). Its seven keyframe labels only went forward, and each showed its time's shot.
+
+**A cut rule's lag.** `see.changed({from: 'video'}) > 0.5` fired at 16.42, 20.28 and 27.57 s: 0.10-0.12 s after the
+cuts (0.13-0.18 s this morning). Pictures reached the rules 52.6 ms old. Split on a local stand-in, a cross-origin
+1080p VP9 film with a cut every second, by logging each frame with `requestVideoFrameCallback`:
+- **The video's clock runs ahead of the screen** by 17-29 ms at the median: `currentTime` is not the frame on screen.
+- **Display to firing:** 27-53 ms at the median. Most cuts fired ~18 ms after their frame reached the screen; some at
+  60-170 ms, when the push of the picture into the page took 30-70 ms instead of ~7. That is the page's main thread
+  busy at the cut.
+- **Not the cause, measured and dropped:**
+  - the screencast's frame rate: pictures came every ~41 ms, the film's own 24 fps;
+  - PNG vs JPEG, 240 vs 160 px: no difference beyond the noise;
+  - passing the picture to a fixed function (`callFunctionOn`) instead of in a script's source: 7.8 vs 7.2 ms at the
+    median over ~750 pictures each. Not faster; reverted.
+- **Fixed: an event now says which frame the rule saw.** A picture carries when the compositor drew it. The event
+  gives the media time of the frame that was on screen then, from `requestVideoFrameCallback`; without it, the clock
+  as before. Keyed by the frame's expected display time, it placed most cuts one frame early (the picture is stamped
+  just before that vsync), so frames are keyed by their presentation time instead.
+  - Test first: a cross-origin clip cut at 1, 2 and 3 s gave -5 to 42 ms before. Now every cut is on its own frame,
+    or the next one under load, when the feed keeps only the newest picture.
+  - On the 1080p film: 30 cuts of 30 on their own frame (they were 50-120 ms late).
+
+**Live** (`commons-film-cut-rule-placed-at-the-frame.mp4`, the first 40 s): the rule said 16.30, 20.22 and 27.49 s,
+against 16.30, 20.17 and 27.47. The film is 60 fps, so +50 ms is three frames, likely pictures dropped on this busy
+page. That is not proven. Its one other firing, at 0.07 s, is the poster giving way to the film.

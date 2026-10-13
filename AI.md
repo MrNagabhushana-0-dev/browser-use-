@@ -237,8 +237,12 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
     the compositor draws it, frames from other sites included (a game embedded from another origin, as on itch.io).
     The screen comes to the rules as the compositor draws it (a screencast on its own DevTools connection): a
     picture is ~10 ms old when they get it. In tests, a square drawn in a frame from another origin was clicked 34-39 ms after it was
-    drawn, and a cross-origin clip's cut was caught 19-27 ms after it happened (by the video's own clock, six runs; 45-72 ms while each cut was confirmed with a capture); a same-page canvas, read directly, is
-    still faster (~2 ms). A browser this session did not launch (remote, or the person's own through the bridge) is
+    drawn. A cut in a cross-origin 1080p film was caught 27-53 ms after its first frame reached the screen (median
+    of 10 cuts a run, measured with `requestVideoFrameCallback`; single cuts up to ~130 ms when the page is busy at
+    the cut). An event's "video at" is the frame the rule saw, not the video's clock when it fired: that clock runs
+    ~20-30 ms ahead of the screen. On that film, 30 cuts of 30 were placed on their own frame; live on Wikimedia
+    Commons, 0-50 ms from the edit list (it had said 0.10-0.12 s late). A same-page canvas, read directly, is still
+    faster (~2 ms). A browser this session did not launch (remote, or the person's own through the bridge) is
     captured instead, ~50 ms a picture or more on a busy page. A video the page may not read (another origin without
     CORS, as on Wikimedia Commons) is read on screen automatically, within its box.
   - `see.changed({in})`: the share of the picture, or of that region, that changed since the last frame.

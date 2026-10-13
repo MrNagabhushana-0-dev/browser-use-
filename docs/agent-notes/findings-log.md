@@ -3461,9 +3461,25 @@ and all three cuts found, and the recording was the page in 227 of 227 frames.
 
 **Full `tests/ci` on `932e83f` (the label fix): 1,715 passed, 30 skipped, 0 failed** (36m41s).
 
+**The live check of the label fix and a cut rule's lag (hands-on, then test first).**
+- **Labels:** live on Commons, the title fade and the three cuts were within 0.1 s of the edit list, and every label
+  went forward.
+- **Lag:** a cut rule said the cuts were 0.10-0.12 s late. Measured with `requestVideoFrameCallback` on a local
+  1080p stand-in:
+  - the video's clock runs 17-29 ms ahead of the screen;
+  - firing came 27-53 ms after the cut's frame reached the screen, at the median, with a tail when the page's main
+    thread is busy at the cut;
+  - not the cause: the screencast's frame rate, the picture format and size, or `callFunctionOn` (measured, no gain,
+    reverted).
+- **Fixed:** an event gives the frame the rule saw. Each picture carries its draw time, and frames are keyed by their
+  presentation time.
+  - On the 1080p film: 30 cuts of 30 on their own frame (they were 50-120 ms late).
+  - Live on Commons: 0-50 ms from the edit list.
+  - The firing itself is no faster; what the event reports is now true.
+
 **Next, in order:**
-1. **The live lag of a cut rule** on Commons (0.13-0.18 s of video) against 19-27 ms in the test: pictures were
-   45 ms old there. Find where the rest goes.
+1. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
+   Look at feeding pictures off the main thread (a worker, or a smaller picture of only the box a rule reads).
 2. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
 3. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
    the Bunny, 0.926 -> 0.941 on Steel) is nearly free; measure the screencast's CPU first.

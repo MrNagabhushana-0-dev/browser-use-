@@ -32,7 +32,7 @@
 	};
 	const memo = new Map();
 	// The screen as the compositor draws it, fed from Python (__reflex.feed) ~20 times a second once a reading asks
-	// for it: {data (RGBA), W, H, seq, t (page time it arrived)}. The page cannot read a cross-origin video or frame
+	// for it: {data (RGBA), W, H, seq, t (page time the compositor drew it)}. The page cannot read a cross-origin video or frame
 	// itself; the compositor's picture of it is what a person sees.
 	let screen = null;
 	let screenAsked = false;
@@ -90,6 +90,34 @@
 		return best;
 	};
 
+	// Each video's frames as they went to the screen, from requestVideoFrameCallback: [presentation time (page ms),
+	// media time (s)]. The video's clock runs ~20-30 ms ahead of the frame on screen, and a screen picture is older
+	// still, so an event is placed at the frame that was on screen when what the rule saw was drawn. (Keyed by the
+	// expected display time instead, a picture of the cut's first frame was drawn just before it, and the cut was
+	// placed a frame early in most runs.)
+	const frameLogs = new WeakMap();
+	const frameLog = (v) => {
+		if (!v || !v.requestVideoFrameCallback) return null;
+		let log = frameLogs.get(v);
+		if (!log) {
+			log = [];
+			frameLogs.set(v, log);
+			const shown = (now, m) => {
+				log.push([m.presentationTime, m.mediaTime]);
+				if (log.length > 120) log.shift();
+				if (running) v.requestVideoFrameCallback(shown);
+			};
+			v.requestVideoFrameCallback(shown);
+		}
+		return log;
+	};
+	const mediaAt = (v, pageMs) => {
+		const log = frameLog(v);
+		for (let i = log ? log.length - 1 : -1; i >= 0; i--) if (log[i][0] <= pageMs) return log[i][1];
+		return null;
+	};
+	let screenSeen = null; // the page time of the screen picture this frame's readings looked at, if any
+
 	const largestVideo = () => {
 		let best = null;
 		let score = 0;
@@ -121,6 +149,7 @@
 			send({ a: 'screen' });
 		}
 		if (!screen) return null;
+		screenSeen = screen.t;
 		return { data: screen.data, W: screen.W, H: screen.H, rect: { left: 0, top: 0, width: innerWidth, height: innerHeight }, clip, seq: screen.seq, t: screen.t };
 	};
 
@@ -311,7 +340,9 @@
 
 	const fire = (rule, action, extra = {}) => {
 		const media = largestVideo();
-		const msg = { r: rule.i, a: action, wt: performance.now(), mt: media ? media.currentTime : null, ...extra };
+		const seenAt = screenSeen !== null ? screenSeen : performance.now();
+		const shown = media ? mediaAt(media, seenAt) : null;
+		const msg = { r: rule.i, a: action, wt: performance.now(), mt: media ? (shown !== null ? shown : media.currentTime) : null, ...extra };
 		if (msg.key && (action === 'down' || action === 'tap')) pending.set(msg.key, msg.wt);
 		send(msg);
 	};
@@ -321,6 +352,8 @@
 		see.t = now;
 		see.frame++;
 		memo.clear();
+		screenSeen = null;
+		frameLog(largestVideo()); // frames are logged from before a rule needs them
 		for (const rule of rules) {
 			let on = false;
 			try {
@@ -358,8 +391,8 @@
 	addEventListener('keydown', arrived, true);
 
 	window.__reflex = {
-		// Python's picture of the screen: W x H, RGB, base64. Returns the page time it arrived.
-		feed(W, H, b64, seq) {
+		// Python's picture of the screen: W x H, RGB, base64, drawn at `drawn` (seconds since the epoch). Returns that on the page's clock.
+		feed(W, H, b64, seq, drawn) {
 			const bin = atob(b64);
 			const n = W * H;
 			const data = new Uint8ClampedArray(n * 4);
@@ -369,7 +402,8 @@
 				data[p * 4 + 2] = bin.charCodeAt(q + 2);
 				data[p * 4 + 3] = 255;
 			}
-			screen = { data, W, H, seq, t: performance.now() };
+			// t: when the compositor drew it (drawn: seconds since the epoch), on this page's clock
+			screen = { data, W, H, seq, t: drawn ? drawn * 1000 - performance.timeOrigin : performance.now() };
 			return screen.t;
 		},
 		stop() {
