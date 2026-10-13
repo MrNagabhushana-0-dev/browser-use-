@@ -3406,6 +3406,8 @@ The Wikimedia API and upload.wikimedia.org still answered 429. Each tried once.
   ("to click, multiply its pixels by 2.98"). The tool descriptions, AI.md, the skill and the agent are corrected.
   Live: a click at the image position times 2.98 landed on the link.
 
+**Full `tests/ci` on `1d1feea`: 1,709 passed, 30 skipped, 0 failed** (38m07s).
+
 **Checked, and the earlier model was wrong:** the retina's `drawImage` with low smoothing averages in Chrome (1-px
 stripes give mean 126, spread 0). The readable path matches the area rows (F1 0.970 and 0.941 at 10/s), not the
 point rows; a test now keeps it so.
