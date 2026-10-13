@@ -3427,6 +3427,9 @@ test, 15-18% of two Commons recordings. The recorder, the reflexes' screen feed 
 `capture_screenshot` now takes a clip inside the viewport at scale 1 or less as a viewport capture cropped in Python.
 Live: 0 of 108 recording frames.
 
+**Full `tests/ci` on `859df30`: 1,713 passed, 30 skipped, 0 failed** (37m14s; a first run was cut short by a
+container restart).
+
 **A video of no known length** (a live stream reports Infinity) gets the film's 8 s before "bored" (test first).
 That is judged from the two films, not measured on live content: YouTube's ISS stream answered this network with
 Google's CAPTCHA page, and CAPTCHAs are out of bounds.
