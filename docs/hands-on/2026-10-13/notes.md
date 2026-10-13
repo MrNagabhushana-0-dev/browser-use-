@@ -595,3 +595,25 @@ cuts (0.13-0.18 s this morning). Pictures reached the rules 52.6 ms old. Split o
 **Live** (`commons-film-cut-rule-placed-at-the-frame.mp4`, the first 40 s): the rule said 16.30, 20.22 and 27.49 s,
 against 16.30, 20.17 and 27.47. The film is 60 fps, so +50 ms is three frames, likely pictures dropped on this busy
 page. That is not proven. Its one other firing, at 0.07 s, is the poster giving way to the film.
+
+## Near midnight: a scan of BBC News that left strips of the page out
+
+**Before** (`bbc-news-scan-before.mp4`):
+- `retinat_look` read the front page right, at ~386 tokens, and gave its click scale (2.95x).
+- `retinat_scan` of the 4.6-screen page chose frames 0.0, 0.1, 1.5, 1.9, 2.2 and 3.6 screens down: "cover 60% of what
+  was seen".
+  - Two pairs were nearly the same picture (0.0/0.1, 1.9/2.2).
+  - 1.1-1.5 and 3.2-3.6 screens down were on no frame.
+- **Cause:** frames were chosen as for a film, by how alike their 16x16 brightness grids are, weighted by how many
+  frames looked so. White pages of headlines all look alike at that size.
+
+**Fixed, test first.** A scan knows where each frame was scrolled. It now chooses frames for the page height they add,
+the later of two equal ones (lazy images have loaded). Frames left over go to what changed on its own, among frames of
+the same stretch of page. Coverage is reported as the share of the page height shown.
+- The test, five look-alike screens of grey text lines with five keyframes: before, 4 frames showing 64%; now at
+  least 95%, and no two within half a screen.
+- A second test guards the frames-left-over rule: a canvas that turns red, green, blue keeps more than one colour.
+
+**After** (`bbc-news-scan-after.mp4`): 0.0, 0.2, 1.2, 2.1, 2.4 and 3.5 screens down, "showing 98% of the page
+height". The 0.2 frame is no repeat. The wheel scrolls 0.8 screens a step, so it fills 1.0-1.2, which no other frame
+shows.

@@ -54,7 +54,7 @@ class PageScan:
 	frames: list[PageFrame]
 	samples: list[FrameSample]
 	keyframes: list[PageFrame]
-	coverage: float
+	coverage: float  # share of the page's height the keyframes show
 	screens: int
 	seconds: float
 	page_height: int
@@ -85,6 +85,67 @@ FIXED_JS = """(() => {
   }
   return out;
 })()"""
+
+
+def choose_page_frames(
+	frames: list[PageFrame], samples: list[FrameSample], k: int, viewport_h: float, page_h: float
+) -> tuple[list[int], float]:
+	"""The frames of a scan that show the most of the page, then what changed on its own; and the share of the page's
+	height they show.
+
+	A scan knows where each frame was scrolled, so frames are first chosen for the page height they add, the way a
+	reader would page through it (found on BBC News: chosen by how alike they look, as for a film, two frames 0.1
+	screens apart were both kept while strips of the page were on none; white pages of headlines all look alike at
+	16x16). Of two frames that add as much, the later is kept: lazy images have had longer to load. Frames left over
+	go to what differs most from those chosen, which is what moves on its own (a canvas, an animation)."""
+	if not frames or k <= 0 or viewport_h <= 0:
+		return [], 0.0
+	page_h = max(page_h, max(f.scroll_y for f in frames) + viewport_h)
+	chosen: list[int] = []
+	spans: list[tuple[float, float]] = []
+
+	def added(i: int) -> float:
+		lo, hi = frames[i].scroll_y, min(frames[i].scroll_y + viewport_h, page_h)
+		covered = 0.0
+		for a, b in sorted(spans):
+			covered += max(0.0, min(b, hi) - max(a, lo))
+		return (hi - lo) - covered  # spans never overlap each other (each is trimmed to what it adds)
+
+	while len(chosen) < k:
+		gains = [(added(i), i) for i in range(len(frames)) if i not in chosen]
+		if not gains:
+			break
+		gain, best = max(gains)  # ties: the later frame
+		if gain < 0.02 * viewport_h:
+			break
+		chosen.append(best)
+		lo, hi = frames[best].scroll_y, min(frames[best].scroll_y + viewport_h, page_h)
+		for a, b in sorted(spans):  # keep only the new part, so spans stay disjoint
+			if a <= lo < b:
+				lo = b
+			if a < hi <= b:
+				hi = a
+		if hi > lo:
+			spans.append((lo, hi))
+	shown = sum(b - a for a, b in spans) / page_h
+	if len(chosen) < k and len(samples) == len(frames):
+		matrix = sight.grids(samples)
+		while len(chosen) < k:
+			# how unlike anything chosen each frame is, among frames of the same stretch of page
+			near = [
+				i
+				for i in range(len(frames))
+				if i not in chosen and any(abs(frames[i].scroll_y - frames[j].scroll_y) < 0.1 * viewport_h for j in chosen)
+			]
+			if not near:
+				break
+			sim = sight.similarity(matrix[near], matrix[chosen])  # (near, chosen): small, unlike all frames by all
+			novel = [(1.0 - float(sim[n].max()), i) for n, i in enumerate(near)]
+			score, best = max(novel)
+			if score < 0.05:
+				break
+			chosen.append(best)
+	return sorted(chosen), min(1.0, shown)
 
 
 def fixed_bands(steps: list[list[list]]) -> list[tuple[float, float, str]]:
@@ -233,7 +294,8 @@ class PageWatcher:
 		for i, frame in enumerate(captured):
 			luma, rgb, grid4 = signature(frame.jpeg)
 			samples.append(FrameSample(i + 1, 1, frame.at, frame.at, luma, rgb, True, grid4))
-		selection = sight.select_keyframes(samples, keyframes)
+		height = max(height, int(h))
+		indices, shown = choose_page_frames(captured, samples, keyframes, float(h), float(height))
 		# Where the picture changed while the page was not being scrolled: things moving on their own.
 		moving: list[float] = []
 		deltas = sight.deltas(sight.grids(samples), sight.colour_grids(samples))
@@ -245,8 +307,8 @@ class PageWatcher:
 			fixed=fixed_bands(fixed_steps),
 			frames=captured,
 			samples=samples,
-			keyframes=[captured[i] for i in selection.indices],
-			coverage=selection.coverage,
+			keyframes=[captured[i] for i in indices],
+			coverage=shown,
 			screens=screens,
 			seconds=time.monotonic() - started,
 			page_height=height,

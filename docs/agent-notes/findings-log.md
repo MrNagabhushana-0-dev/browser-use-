@@ -3479,6 +3479,13 @@ and all three cuts found, and the recording was the page in 227 of 227 frames.
 
 **Full `tests/ci` on `ca2fcb2`: 1,716 passed, 30 skipped, 0 failed** (36m29s).
 
+**A scan's sheet left strips of the page out** (hands-on on BBC News, then test first).
+- **Before:** a 4.6-screen page got frames 0.0, 0.1, 1.5, 1.9, 2.2 and 3.6 screens down, which "cover 60%". Frames
+  were chosen as for a film, and white pages look alike at 16x16.
+- **Now:** frames are chosen for the page height they add, with frames left over going to what changed on its own.
+  - Test: 64% -> at least 95%, plus a guard test for the leftover rule.
+  - Live: "showing 98% of the page height".
+
 **Next, in order:**
 1. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
    Look at feeding pictures off the main thread (a worker, or a smaller picture of only the box a rule reads).

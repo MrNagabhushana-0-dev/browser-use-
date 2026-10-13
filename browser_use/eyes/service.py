@@ -728,7 +728,7 @@ class Eyes:
 			f'scrolled {result.screens} times in {result.seconds:.1f}s, {len(result.frames)} frames seen',
 			f'    sheet: {len(result.keyframes)} frames at '
 			+ ', '.join(f'{k.scroll_y / vh:.1f}' for k in result.keyframes)
-			+ f' screens down (cover {result.coverage:.0%} of what was seen)',
+			+ f' screens down (showing {result.coverage:.0%} of the page height)',
 		]
 		if result.moving:
 			lines.append(

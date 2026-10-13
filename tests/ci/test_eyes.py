@@ -1373,6 +1373,56 @@ async def test_a_scan_labels_each_frame_with_where_it_was_scrolled(eyes, session
 	assert not wrong, f'{len(wrong)} of {len(scan.frames)} frames show another band than their label says: {wrong[:5]}'
 
 
+LOOKALIKE_PAGE = (
+	'<!doctype html><style>body{margin:0;font:28px serif} section{height:100vh;padding:40px;box-sizing:border-box}'
+	' p{height:14px;background:#ccc;margin:18px 0;width:70%}</style><body>'
+	+ ''.join(f'<section><h2>Story {n}</h2>' + '<p></p>' * 12 + '</section>' for n in range(1, 6))
+	+ '</body>'
+)
+
+
+async def test_a_scan_sheet_shows_the_whole_page_not_two_frames_of_its_top(eyes, session, site):
+	"""Found hands-on on BBC News: a scan of a 4.6-screen front page chose frames 0.0, 0.1, 1.5, 1.9, 2.2 and 3.6
+	screens down. Two were nearly the same picture, and 1.1-1.5 and 3.2-3.6 screens down were on no frame. Frames
+	were chosen as for a film, by how alike they look, and white pages of headlines all look alike at 16x16. A scan
+	knows where each frame was scrolled, so it chooses them to show the most of the page."""
+	site.expect_request('/lookalike').respond_with_data(LOOKALIKE_PAGE, content_type='text/html')
+	await _open(eyes, session, site.url_for('/lookalike'))
+	scan = await eyes._page_watcher().scan(max_screens=8, dwell_s=0.4, keyframes=5)
+	vh, height = scan.viewport[1], scan.page_height
+	assert height >= 4.9 * vh, (height, vh)
+	tops = sorted(k.scroll_y for k in scan.keyframes)
+	shown = 0.0
+	reach = 0.0
+	for y in tops:
+		shown += max(0.0, min(y + vh, height) - max(y, reach))
+		reach = max(reach, y + vh)
+	assert shown >= 0.95 * height, f'keyframes at {[round(y / vh, 2) for y in tops]} screens show {shown / height:.0%}'
+	assert all(b - a >= 0.5 * vh for a, b in zip(tops, tops[1:])), (
+		f'two keyframes nearly alike: {[round(y / vh, 2) for y in tops]}'
+	)
+
+
+async def test_a_scan_spends_frames_left_over_on_what_changes_on_its_own(eyes, session, site):
+	"""Frames are chosen first for how much of the page they show; one screen is shown by one frame. What is left over
+	goes to what changed there on its own: a canvas that turns red, green, then blue is shown in more than one colour."""
+	site.expect_request('/one-screen').respond_with_data(
+		'<!doctype html><body style="margin:0"><canvas id="c" style="width:100vw;height:100vh"></canvas><script>'
+		"const c = document.getElementById('c').getContext('2d'); let n = 0;"
+		"const paint = () => { c.fillStyle = ['#f00', '#0f0', '#00f'][n++ % 3]; c.fillRect(0, 0, 300, 150); };"
+		'paint(); setInterval(paint, 400);</script></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/one-screen'))
+	scan = await eyes._page_watcher().scan(max_screens=3, dwell_s=1.2, keyframes=3)
+	colours = set()
+	for k in scan.keyframes:
+		with Image.open(io.BytesIO(k.jpeg)) as img:
+			r, g, b = img.convert('RGB').resize((1, 1)).getpixel((0, 0))  # type: ignore[misc]
+		colours.add('red' if r > max(g, b) + 60 else 'green' if g > max(r, b) + 60 else 'blue' if b > max(r, g) + 60 else '?')
+	assert len(scan.keyframes) >= 2 and len(colours - {'?'}) >= 2, (len(scan.keyframes), colours)
+
+
 async def test_a_scan_says_what_stays_on_screen_while_the_page_scrolls(eyes, session, site):
 	"""Found hands-on on the Guardian's front page: from the second screen on, a "Who pays for the journalism" banner
 	covered the bottom ~40% of every frame of a scan, and the scan did not say so: what was under it went unseen without
