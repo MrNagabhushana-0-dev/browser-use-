@@ -3320,11 +3320,14 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
   line was missing, and its sound read "none captured (no audio track)" instead of unreadable. A percept now takes
   taint from all the retina said, not only since the watch began.
 
+**Full `tests/ci` on `e138b57`: 1,699 passed, 31 skipped, 0 failed** (37m19s, quiet machine).
+
 **Next, in order:**
-1. A full `tests/ci` on the head, then the PR update.
-2. Ground-truth live accuracy: a rule tuned to cuts on a film whose shot list is known, checked against it. The
-   player's overlay is inside the video's box on screen. Decide whether `{from: 'video'}` on screen should leave out
-   the player's controls.
+1. Ground-truth live accuracy. A reference shot list for the Commons film was to come from ffmpeg's scene filter on
+   its CC-BY transcode, but the Wikimedia API answered 429 (rate limited, shared address); not retried. Try later at
+   a low rate.
+2. The player's overlay is inside the video's box on screen: decide whether `{from: 'video'}` read on screen should
+   leave out the player's controls.
 3. Raise the compositor sight from 6 to 10 fps and check live whether the Commons dissolve then reads as `fade->`.
 4. The feed test and the region-runner test: not reproduced under synthetic load. Watch the next full runs.
 5. Carried over:
