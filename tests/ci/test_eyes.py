@@ -1524,3 +1524,47 @@ async def test_a_panel_built_after_load_is_one_line_not_one_per_nested_block(eye
 	lines = [line for line in p.text.splitlines() if 'Standard' in line]
 	assert len(lines) == 1, p.text
 	assert 'Text Small Standard Large Width Standard Wide' in lines[0], p.text
+
+
+@pytest.mark.parametrize('order', ['recording started after a look', 'recording stopped after a look'])
+async def test_looks_follow_the_page_whichever_way_a_recording_starts_or_stops(eyes, session, site, tmp_path, order):
+	"""Found live on the T-Rex runner, three times: with a recording on, a look showed the game's start screen while
+	the game had been playing for seconds (the recording itself was right). The eyes' page view and the recorder
+	share one screencast: a recorder started after a look took its frames away, and one stopped after a look ended
+	the stream the view was sharing. Either way every later look was the same old frame."""
+	from PIL import Image
+
+	site.expect_request('/tinted').respond_with_data(
+		'<!doctype html><body style="margin:0;height:100vh;background:#f0f"></body>', content_type='text/html'
+	)
+
+	def middle(p) -> tuple[int, ...]:
+		assert p.image is not None, p.text
+		with Image.open(io.BytesIO(p.image)) as img:
+			return img.convert('RGB').getpixel((img.width // 2, img.height // 2))  # type: ignore[return-value]
+
+	async def paint(colour: str) -> None:
+		cdp = await session.get_or_create_cdp_session(focus=False)
+		await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': f'document.body.style.background = "{colour}"'}, session_id=cdp.session_id
+		)
+		await asyncio.sleep(0.5)
+
+	await _open(eyes, session, site.url_for('/tinted'))
+	recorder = session._recording_watchdog
+	assert recorder is not None
+	if order == 'recording started after a look':
+		assert middle(await eyes.look())[0] > 200
+		await recorder.start_recording(tmp_path / 'after.mp4', framerate=5)
+		try:
+			await paint('#0a0')
+			now = middle(await eyes.look())
+		finally:
+			await recorder.stop_recording()
+	else:
+		await recorder.start_recording(tmp_path / 'before.mp4', framerate=5)
+		assert middle(await eyes.look())[0] > 200
+		await recorder.stop_recording()
+		await paint('#0a0')
+		now = middle(await eyes.look())
+	assert now[1] > 120 and now[0] < 100, f'the page is green now; the look showed {now}'

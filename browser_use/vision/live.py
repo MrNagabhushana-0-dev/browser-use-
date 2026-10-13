@@ -223,6 +223,19 @@ class LiveView:
 			self.logger.debug(f'🎥 Could not fit a shared frame: {type(e).__name__}: {e}')
 			return data
 
+	def _recording(self) -> bool:
+		recorder = getattr(self.browser_session, '_recording_watchdog', None)
+		return bool(recorder is not None and recorder.is_recording)
+
+	def in_step(self) -> bool:
+		"""Whether this view still gets the frames it should: its handler holds the frame slot, and it shares the
+		recorder's stream exactly while a recording runs. A recording started after the view takes the slot and the
+		screencast; one stopped while the view shares it ends the stream. Either way the view starves and every
+		frame it hands out is the last one it got (found live: looks showed a game's start screen mid-game)."""
+		if not self._running:
+			return True
+		return self._frame_handler() is self._handler and self._shared == self._recording()
+
 	@property
 	def _registry(self):
 		"""cdp-use's EventRegistry: one callback slot per CDP method, last writer wins."""
@@ -249,8 +262,8 @@ class LiveView:
 					pass
 		self._incumbent = None
 
-		if self._shared:
-			# The stream was not ours to start, so it is not ours to stop.
+		if self._shared or self._recording():
+			# The stream was not ours to start, or a recording has since taken it over: not ours to stop.
 			self._shared = False
 			return
 		try:

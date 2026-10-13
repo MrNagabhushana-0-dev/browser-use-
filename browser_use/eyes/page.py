@@ -75,6 +75,8 @@ class PageWatcher:
 		self.live: LiveView | None = None
 
 	async def start(self) -> None:
+		if self.live is not None and not self.live.in_step():
+			await self.stop()  # a recording started or stopped since this view began: begin again in step with it
 		if self.live is None:
 			self.live = LiveView(self.session)
 			await self.live.start(max_width=self.max_width, quality=self.quality)
