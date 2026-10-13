@@ -32,7 +32,8 @@ For a native desktop app rather than a web page, a server started with `BROWSER_
    - To read small print or fine detail, `retinat_zoom(x, y, width, height)` recaptures that region at up to 4x
      (a look frame is ~640 px wide). To locate text, `retinat_find(text)` returns where each match is, whether it
      is in view or how far to scroll, and a magnified crop.
-3. **Act like a person:** `retinat_tap` / `retinat_click` at coordinates read off the image (or from `retinat_find`),
+3. **Act like a person:** `retinat_tap` / `retinat_click` at CSS px: the image's pixels times the factor the look's
+   text gives (or straight from `retinat_find`),
    `retinat_type` into the focused field, `retinat_key` for Enter, Tab or Escape, and
    `retinat_swipe`. For feeds, use `retinat_next` or `retinat_browse(items=N)`. Give `retinat_click` an `expect`
    (the target's words, like "Save") when a wrong click would cost something; it refuses to land elsewhere.

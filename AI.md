@@ -209,8 +209,9 @@ continuous stream on disk rather than in your context.
 
 Token figures are estimates. Images are costed at about one token per 28×28 px patch.
 
-Coordinates for `retinat_tap` and `retinat_click` are viewport CSS pixels. Read them off the
-`retinat_look` image, or take them from browser-use's `browser_get_state`. `retinat_click` says what it landed on
+Coordinates for `retinat_tap` and `retinat_click` are viewport CSS pixels. A look image is smaller than the page:
+its text says by how much ("frame 640x363 of the 1920x1089 CSS px viewport: to click, multiply its pixels by 3.00"),
+so multiply what you read off it. `retinat_find` gives CSS pixels directly, as does browser-use's `browser_get_state`. `retinat_click` says what it landed on
 (`Clicked (160, 120) on button "Save".`). Give it `expect` with text the target carries, and it refuses a click that
 would land on something else. Pages shift between a look and a click, and Delete sits next to Save.
 

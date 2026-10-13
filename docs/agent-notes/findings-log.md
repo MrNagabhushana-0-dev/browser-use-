@@ -3397,16 +3397,28 @@ The Wikimedia API and upload.wikimedia.org still answered 429. Each tried once.
     was stale;
   - two recording frames showed compositor sight's clipped picture instead of the page.
 
+**video.blender.org (PeerTube, MSE):** its films fail to play in this Chromium build, which has no H.264
+(MEDIA_ERR_SRC_NOT_SUPPORTED; "DEMUXER_ERROR_NO_SUPPORTED_STREAMS"). Two fixes followed, each test first and live.
+- **A video that failed to load is named.** The retina reports `video.error`, and look and watch give its name and
+  the browser's message. They said "(no video was on screen)".
+- **Click coordinates.** A look image is ~640 px wide; the viewport was 1905 px. The tools said clicks take "CSS px,
+  as on the look images", and I missed a link by trusting that. A look now gives the viewport and the factor
+  ("to click, multiply its pixels by 2.98"). The tool descriptions, AI.md, the skill and the agent are corrected.
+  Live: a click at the image position times 2.98 landed on the link.
+
+**Checked, and the earlier model was wrong:** the retina's `drawImage` with low smoothing averages in Chrome (1-px
+stripes give mean 126, spread 0). The readable path matches the area rows (F1 0.970 and 0.941 at 10/s), not the
+point rows; a test now keeps it so.
+
 **Next, in order:**
-1. **The retina's own grid on a readable video.** Its `drawImage` uses low smoothing, which I modelled as point
-   sampling; that model is not checked against Chrome. Play a fine test pattern and compare the retina's grid to
-   area and nearest reductions. If it is point-sampled, try area averaging and measure what it costs per frame.
-2. **The watch header:** "watched" (`watched_s`, the span of wall times) counts across watches, and "on screen"
+1. **The watch header:** "watched" (`watched_s`, the span of wall times) counts across watches, and "on screen"
    keeps the first reading.
-3. **A live stream or an item of unknown length** still gets the 2 s window. Check one live.
-4. **The recording's clipped frames.** Check whether compositor sight's clipped captures reach the screencast, and
+2. **A live stream or an item of unknown length** still gets the 2 s window. Check one live.
+3. **The recording's clipped frames.** Check whether compositor sight's clipped captures reach the screencast, and
    whether they are the reflex feed's "broken frames".
-5. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+4. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+5. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
+   or CORS WebM/VP9 source, or use a Chrome build with H.264 if one is available here.
 6. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
 7. **Compositor sight at 10 fps instead of 6.** Offline it gains F1 0.966 -> 0.970 on the Bunny and 0.926 -> 0.941
    on Steel. Weigh that against the capture cost live.

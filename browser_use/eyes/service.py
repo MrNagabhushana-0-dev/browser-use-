@@ -432,7 +432,9 @@ class Eyes:
 		)
 		if trouble:
 			head += f'\n    no keyframe images: {trouble}'
-		return assemble(items, head, detail)
+		failed = _failed_video(self.retina.attended)
+		head += failed
+		return assemble(items, head, detail, empty='(no video played)' if failed else '(no video was on screen)')
 
 	async def _page_now(self) -> tuple[bytes | None, str]:
 		"""The page as the compositor draws it now, and how it was got: captured at this moment, else the stream's
@@ -453,12 +455,12 @@ class Eyes:
 		with Image.open(io.BytesIO(jpeg)) as img:
 			size = img.size
 		percept.image, percept.image_size, percept.image_tokens = jpeg, size, estimate_image_tokens(*size)
-		percept.text += f'\n    (no video: the page as drawn now, {size[0]}x{size[1]} ~{percept.image_tokens} tokens)'
+		percept.text += f'\n    (no video: the page as drawn now, frame {size[0]}x{size[1]}{self._click_scale(size)}; ~{percept.image_tokens} tokens)'
 
 	async def zoom(
 		self, x: float, y: float, width: float, height: float, max_width: int = 1200, max_height: int | None = None
 	) -> Percept:
-		"""A region of the viewport (CSS px, as on the look images and for clicks) captured fresh at up to 4x, so small
+		"""A region of the viewport (CSS px, as clicks take; a look's pixels times its stated factor) captured fresh at up to 4x, so small
 		print is redrawn at that size, not upscaled from the ~640 px frame a look sends. With max_height, a region
 		larger than max_width x max_height is shrunk to fit instead."""
 		assert width > 0 and height > 0, 'the region needs a size'
@@ -544,6 +546,7 @@ class Eyes:
 		jpeg, how = await self._page_now()
 		url = self.retina.state.get('url', '')
 		text = f'👁 no video playing on {url[:120]}; this is the page as drawn now ({how})'
+		text += _failed_video(self.retina.attended)
 		now = time.monotonic()
 		text += _text_lines(self.retina.events, self._text_since(now), self.retina.page_since)
 		self._last_percept_end = now
@@ -554,7 +557,7 @@ class Eyes:
 		with Image.open(io.BytesIO(jpeg)) as img:
 			size = img.size
 		tokens = estimate_image_tokens(*size)
-		text += f'\n~{tokens + len(text) // 4} tokens (frame {size[0]}x{size[1]} ~{tokens}; estimates)'
+		text += f'\n~{tokens + len(text) // 4} tokens (frame {size[0]}x{size[1]}{self._click_scale(size)}; image ~{tokens}; estimates)'
 		return Percept([], text, jpeg, size, tokens, len(text) // 4)
 
 	async def archive_now(self, limit: int = 40) -> int:
@@ -682,6 +685,13 @@ class Eyes:
 			+ 'Use retinat_recall around a time for more frames of that moment.'
 		)
 		return Percept([], text, jpeg, (w, h), tokens, len(text) // 4, frames=[(t, j) for t, j, _, _ in got])
+
+	def _click_scale(self, size: tuple[int, int]) -> str:
+		"""How a page image's pixels map to the CSS px clicks and taps take (a look image is smaller than the page)."""
+		vp = self._page_watcher().viewport
+		if not vp or not size[0]:
+			return ''
+		return f' of the {vp[0]:.0f}x{vp[1]:.0f} CSS px viewport: to click, multiply its pixels by {vp[0] / size[0]:.2f}'
 
 	def _page_watcher(self):
 		from browser_use.eyes.page import PageWatcher
@@ -1291,6 +1301,25 @@ def _describe_bands(bands: list[tuple[float, float, str]]) -> str:
 			where = f'a band {round(top * 100)}-{round(bottom * 100)}% down'
 		parts.append(where + (f' ("{text}")' if text else ''))
 	return ', '.join(parts)
+
+
+# HTMLMediaElement error codes (MediaError), and what each means for whoever reads the percept.
+_MEDIA_ERRORS = {
+	1: 'MEDIA_ERR_ABORTED (loading was stopped)',
+	2: 'MEDIA_ERR_NETWORK (the download failed)',
+	3: 'MEDIA_ERR_DECODE (the data could not be decoded)',
+	4: 'MEDIA_ERR_SRC_NOT_SUPPORTED (the source could not be used: a dead link, or a format this browser cannot play)',
+}
+
+
+def _failed_video(attended: dict) -> str:
+	"""A line naming the attended video's load failure, or '' if it has none."""
+	error = attended.get('error') if attended.get('kind') == 'video' else None
+	if not error:
+		return ''
+	code, message = (list(error) + ['', ''])[:2]
+	said = f'; the browser says "{message}"' if message else ''
+	return f'\n    the video on the page failed to load: {_MEDIA_ERRORS.get(code, f"error {code}")}{said} ({attended.get("src", "")[:100]})'
 
 
 def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_from: float | None = None) -> str:

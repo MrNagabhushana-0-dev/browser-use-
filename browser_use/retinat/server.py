@@ -338,7 +338,7 @@ def _browser_tools() -> list['types.Tool']:
 		types.Tool(
 			name='retinat_zoom',
 			description=(
-				'A region of the viewport (CSS px, as on the look images) captured fresh at up to 4x: small print and '
+				'A region of the viewport (CSS px: the pixels of a look image times the factor its text gives) captured fresh at up to 4x: small print and '
 				'fine detail redrawn at that size, not upscaled from the look frame.'
 			),
 			input_schema={
@@ -355,7 +355,7 @@ def _browser_tools() -> list['types.Tool']:
 		),
 		types.Tool(
 			name='retinat_tap',
-			description='Tap at viewport coordinates (CSS px, as on the look/scan images) with a real touch event.',
+			description='Tap at viewport coordinates (CSS px: the pixels of a look image times the factor its text gives) with a real touch event.',
 			input_schema={
 				'type': 'object',
 				'properties': {'x': {'type': 'number'}, 'y': {'type': 'number'}},
@@ -365,7 +365,8 @@ def _browser_tools() -> list['types.Tool']:
 		types.Tool(
 			name='retinat_click',
 			description=(
-				'Move the mouse along a human path to viewport coordinates and click (for desktop pages). Says what '
+				'Move the mouse along a human path to viewport coordinates (CSS px, as retinat_find gives them, or the pixels of a look '
+				'image times the factor its text gives) and click (for desktop pages). Says what '
 				'was under the pointer. Pass expect (text you believe is on the target, like "Save") and the click is '
 				'refused if the thing there does not say it: pages move between a look and a click.'
 			),

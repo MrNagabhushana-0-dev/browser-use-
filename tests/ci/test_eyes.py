@@ -664,6 +664,75 @@ async def test_hold_pauses_the_video_and_the_next_watch_resumes_it(eyes, session
 	assert (await eyes.retina.page_state())['attended']['paused'] is False
 
 
+async def test_a_video_that_failed_to_load_is_said_to_have_failed(eyes, session, site):
+	"""Found on video.blender.org: the film's player showed "Failed to play video" (MEDIA_ERR_SRC_NOT_SUPPORTED: H.264,
+	which this Chromium build cannot decode), and the eyes said "(no video was on screen)". A failed video is now named
+	with the browser's own error."""
+	site.expect_request('/broken.mp4').respond_with_data(b'not a video at all ' * 64, content_type='video/mp4')
+	site.expect_request('/broken').respond_with_data(
+		PLAYER.format(src='/broken.mp4', attrs='autoplay muted', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/broken'))
+	await asyncio.sleep(1.0)
+	seen = await eyes.look()
+	assert 'failed to load' in seen.text and 'MEDIA_ERR_SRC_NOT_SUPPORTED' in seen.text, seen.text
+	watched = await eyes.watch(seconds=1.5)
+	assert 'MEDIA_ERR_SRC_NOT_SUPPORTED' in watched.text and 'no video was on screen' not in watched.text, watched.text
+
+
+async def test_a_look_says_how_its_image_maps_to_click_coordinates(eyes, session, site):
+	"""Found on video.blender.org: a link seen at (275, 143) in a look's 640x363 image was clicked there and missed. The
+	page was 1920x1089 CSS px, three times the image, and the tools said clicks take "CSS px, as on the look images".
+	A look now says the viewport's size and the factor from its image's pixels to click coordinates."""
+	site.expect_request('/target').respond_with_data(
+		'<!doctype html><body style="margin:0"><div id="t" style="position:absolute;left:600px;top:300px;width:120px;'
+		'height:60px;background:#e00"></div></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/target'))
+	seen = await eyes.look()
+	import re
+
+	match = re.search(
+		r'frame (\d+)x(\d+) of the (\d+)x(\d+) CSS px viewport: to click, multiply its pixels by ([\d.]+)', seen.text
+	)
+	assert match, seen.text
+	image_w, image_h, view_w, view_h, factor = (float(g) for g in match.groups())
+	assert seen.image_size == (int(image_w), int(image_h))
+	assert abs(factor - view_w / image_w) < 0.01, (factor, view_w, image_w)
+	# The red box, found in the image, lands on the box when scaled by the factor
+	from PIL import Image
+
+	assert seen.image is not None
+	img = Image.open(io.BytesIO(seen.image)).convert('RGB')
+	reds = [(x, y) for y in range(img.height) for x in range(img.width) if (p := img.getpixel((x, y)))[0] > 180 and p[1] < 80]  # type: ignore[index]
+	cx, cy = sum(x for x, _ in reds) / len(reds), sum(y for _, y in reds) / len(reds)
+	assert abs(cx * factor - 660) < 12 and abs(cy * factor - 330) < 12, (cx * factor, cy * factor)
+
+
+async def test_the_retina_averages_a_video_into_its_grid_rather_than_picking_pixels(eyes, session, site, tmp_path):
+	"""Shot detection scored better on area-averaged grids than on point-sampled ones (on two films' edit lists, most
+	on live action: F1 0.941 against 0.921 at 10 a second). The retina draws videos with low smoothing, which I took
+	for picking pixels; this checked it in Chrome, and it averages (1-px stripes come out grey). Kept so that stays."""
+	stripes = tmp_path / 'stripes.webm'
+	_run(
+		*['-f', 'lavfi', '-i', "nullsrc=s=640x360:r=10:d=3,geq=lum='if(mod(X,2),235,16)':cb=128:cr=128"],
+		*['-c:v', 'libvpx-vp9', '-lossless', '1', '-deadline', 'realtime', '-cpu-used', '8', str(stripes)],
+	)
+	_serve(site, '/stripes.webm', stripes.read_bytes())
+	site.expect_request('/stripes').respond_with_data(
+		PLAYER.format(src='/stripes.webm', attrs='autoplay muted loop', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/stripes'))
+	await eyes.watch(seconds=1.5, until='time')
+	frames = [f for f in eyes.retina.frames if f.vid == eyes.retina.attended.get('vid')]
+	assert frames, 'the retina sampled the video'
+	import numpy as np
+
+	grid = np.frombuffer(frames[-1].luma, dtype=np.uint8).astype(np.float32)
+	assert grid.std() < 20 and 90 < grid.mean() < 160, f'mean {grid.mean():.0f}, spread {grid.std():.0f}: {grid[:16]}'
+
+
 async def test_no_video_is_said_plainly(eyes, session, site):
 	await _open(eyes, session, site.url_for('/none'))
 	p = await eyes.watch(seconds=1.0)
@@ -832,7 +901,7 @@ def test_things_moving_in_different_shots_are_not_one_moving_object():
 		for y in (row, row + 1):
 			for x in (7, 8):
 				luma[y * 16 + x] = ball
-		return FrameSample(seq, 1, t, float(seq), bytes(luma), (background,) * 3, True)
+		return FrameSample(seq, 1, t, float(seq), bytes(luma), (background, background, background), True)
 
 	falls = [frame(i + 1, 0.05 * i, round(2 + 11 * 0.05 * i), 20, 230) for i in range(21)]
 	rises = [frame(i + 22, 1.05 + 0.05 * i, round(13 - 11 * 0.05 * (i + 1)), 200, 30) for i in range(20)]

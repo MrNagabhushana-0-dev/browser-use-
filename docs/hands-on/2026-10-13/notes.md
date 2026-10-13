@@ -404,3 +404,36 @@ changed the picture, then carried on with whatever moved in the next shot.
   that watch ran before the tracker fix. I checked again after the fix, with the same default 35 s watch. This time
   there was no motion line. The watch ran its full 35 s and found cuts at 16.2, 20.0 and 27.3 s, with nothing at the
   bird. The title fade was missed this time (0.0-16.2 s came back as one shot).
+
+## Afternoon: Blender's own video site, a failed video, and click coordinates
+
+**Recordings**, both made by `retinat_record` on video.blender.org (Blender's PeerTube):
+- `blender-video-failed-player-named.mp4`: the film's page, where the player fails to play.
+- `blender-video-click-by-the-stated-factor.mp4`: a search result clicked from the look image's coordinates.
+
+**Tools:** `retinat_open`, `retinat_look`, `retinat_find`, `retinat_click`, `retinat_console`, `retinat_record`.
+
+**Why there.** PeerTube streams through MSE, so the page can read its frames. That is the retina's own path, not
+compositor sight, and the site has the 10:34 Big Buck Bunny, the edit I have a checked list for.
+
+**Bug: a video that failed to load was not mentioned.** The player showed "Failed to play video". The console showed
+`VIDEOJS: ERROR: (CODE:4 MEDIA_ERR_SRC_NOT_SUPPORTED)`. The cause was the browser: PeerTube serves H.264 MP4, and this
+Chromium 141 build has no H.264 decoder. The eyes said "0 item(s) watched ... (no video was on screen)".
+- **Fixed** (test first, with a video URL that serves junk): the retina describes a video's `error` and describes it
+  again when one arrives. Look and watch now say the video failed to load, with the error's name and the browser's
+  own message. A watch ends "(no video played)", not "(no video was on screen)".
+- **Live:** "the video on the page failed to load: MEDIA_ERR_SRC_NOT_SUPPORTED (...); the browser says
+  "DEMUXER_ERROR_NO_SUPPORTED_STREAMS: FFmpegDemuxer: no supported streams"".
+
+**Bug: the tools told the AI to click in the wrong coordinates.** I saw the second result's title at (275, 143) in a
+look image and clicked there, and missed.
+- The image was 640x363, the viewport 1905x1080. `retinat_tap` and `retinat_zoom` said they take "CSS px, as on the
+  look images", and AI.md, the skill and the agent said to read coordinates off the image.
+- **Fixed** (test first): a look now says "frame 640x363 of the 1905x1080 CSS px viewport: to click, multiply its
+  pixels by 2.98", as does a watch that found no video. The tool descriptions and the three docs say so too.
+- **The test:** a red box at known CSS px, found in the look image and scaled by the stated factor, lands on the box.
+- **Live:** the title at (275, 143) times 2.98 is (819, 426). That click, given `expect`, landed on the link.
+
+**Checked, and I was wrong:** this morning I modelled the retina's `drawImage` with low smoothing as picking pixels.
+In Chrome it averages: 1-px black and white stripes give a grid with mean 126 and spread 0. So the readable path
+behaves like this morning's area rows (F1 0.970 and 0.941 at 10/s), not the point rows. A test now keeps it so.

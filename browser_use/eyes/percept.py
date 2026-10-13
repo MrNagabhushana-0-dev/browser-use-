@@ -360,9 +360,11 @@ def render_sheet(items: list[ItemPercept], detail: str = 'glance', max_width: in
 	return buf.getvalue(), width, height
 
 
-def assemble(items: list[ItemPercept], header: str, detail: str = 'glance', footer: str = '') -> Percept:
+def assemble(
+	items: list[ItemPercept], header: str, detail: str = 'glance', footer: str = '', empty: str = '(no video was on screen)'
+) -> Percept:
 	"""Text + sheet + token accounting for a list of items."""
-	body = '\n'.join(describe_item(i) for i in items) if items else '    (no video was on screen)'
+	body = '\n'.join(describe_item(i) for i in items) if items else f'    {empty}'
 	sheet = render_sheet(items, detail)
 	image, size, image_tokens = None, None, 0
 	if sheet:

@@ -116,6 +116,8 @@ class PageWatcher:
 		self.max_width = max_width
 		self.quality = quality
 		self.live: LiveView | None = None
+		# The viewport (CSS px) at the last capture: a look image is smaller, and clicks take CSS px
+		self.viewport: tuple[float, float] | None = None
 
 	async def start(self) -> None:
 		if self.live is not None and not self.live.in_step():
@@ -153,6 +155,7 @@ class PageWatcher:
 			metrics = await cdp.cdp_client.send.Page.getLayoutMetrics(session_id=cdp.session_id)
 			vp = metrics['cssLayoutViewport']
 			width, height = vp['clientWidth'], vp['clientHeight']
+			self.viewport = (float(width), float(height))
 			clip = {
 				'x': vp['pageX'],
 				'y': vp['pageY'],
