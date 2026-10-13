@@ -3221,11 +3221,31 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
   (labelled `cut->`: at 6 fps the dissolve is a few large steps). 5 correct keyframes, ~767 tokens for 30 s.
 - **`find "play video"` on the player:** ~231 tokens (was ~665).
 
+**Rules that read what the page cannot** (`09d103a`, notes in `docs/hands-on/2026-10-13/notes.md`):
+- **The problem:** a reflex reading of a cross-origin video without CORS (Commons) came back empty, so rules on it
+  never fired. A frame from another site (an itch.io game) was out of reach of every reading.
+- **The change:** the compositor's picture of the viewport is fed to the rules, a 240 px PNG about 20 times a second,
+  once a reading asks for it:
+  - a tainted source is read on screen within its box, with no change to the rule;
+  - `{from: 'screen'}` reads everything, frames included;
+  - `changed()` and `track()` go by the picture's own sequence and time.
+- **Measured in tests, six runs:**
+  - on a cross-origin clip, colour and cut fired at media time 1.99-2.04 s (truth 2.0);
+  - a square drawn in a cross-origin frame was clicked 16-51 ms after it was drawn;
+  - both tests fail on the previous code, with no events at all.
+- **Live on the Commons film:** the rule fired (7.2, 9.4, 9.9 s of the film) where before it could not.
+  - Those times were not checked against the film's cuts, and are probably camera motion over my threshold.
+  - A picture took 153 ms live against ~50 ms in tests. Capture time follows the page's rendering load (software
+    compositing): ~50 ms for a simple clip, ~80 ms for a busy 720p pattern, ~150 ms for the 1080p film.
+  - It is not contention with the eyes' compositor loop (~78 ms with and without it).
+
 **Next, in order:**
-1. The intermittent feed test (`browse ...[/feed]`): find what makes the first flick not land under load.
-2. Play the T-Rex runner again with `see.track` and a region scaled by the measured speed, recorded.
-3. Reflexes on cross-origin video: the compositor path is Python-side at 6 fps; per-frame reads need a page-side
-   source.
-4. Carried over:
+1. A faster screen feed for busy pages. Try the screencast (frames as the compositor makes them, no forced capture)
+   against the forced capture, on the Commons film, measured the same way.
+2. Ground-truth live accuracy: a rule tuned to cuts on a film whose shot list is known, checked against it.
+3. Raise the compositor sight from 6 to 10 fps and check live whether the Commons dissolve then reads as `fade->`.
+4. The feed test: not reproduced under synthetic load (8/8). Watch the next full runs.
+5. Play the T-Rex runner again with `see.track` and a region scaled by the measured speed, recorded.
+6. Carried over:
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).

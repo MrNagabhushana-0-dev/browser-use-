@@ -132,3 +132,33 @@ The recording ends on GAME OVER too.
 
 **The tools now catch this mistake.** A seeing tool asked while a `retinat_wait` is pending says "asked while a
 retinat_wait was still waiting". The wait's own description says to look after it returns.
+
+## Early morning: rules that read what the page cannot (`09d103a`)
+
+**Recording:** `commons-film-rules-read-on-screen.mp4`, the first 60 s at 640 px. It was made by `retinat_record`
+and shows the Commons player opening and the film playing while the rules read it.
+
+**Why.** Reflex rules read pixels in the page. On Commons the film streams from another origin without CORS, so the
+page may not read it, and every `see.locate` or `see.changed` on it came back empty: rules never fired. A game in a
+frame from another site (itch.io serves games from `html-classic.itch.zone`) was out of reach of every reading.
+
+**What changed.**
+- **The screen as the compositor draws it is fed to the rules.** Python sends a 240 px picture of the viewport about
+  20 times a second, and only once a reading asks for it.
+- **A source the page may not read is read on screen, within its box.** That covers a tainted video or canvas, with
+  no change to the rule.
+- **`{from: 'screen'}` reads everything**, frames from other sites included.
+
+**Measured in tests** (six runs):
+- a cross-origin clip's colour and cut fired at media time 1.99-2.04 s (truth 2.0 s);
+- a square drawn in a cross-origin frame was clicked 16-51 ms after it was drawn.
+
+**Live on the Commons film** (`retinat_open`, `retinat_find`, `retinat_click`, `retinat_reflex`, `retinat_wait`):
+- A rule `see.changed({from: 'video'}) > 0.35` fired at video times 7.23 s, 9.41 s and 9.93 s, with no errors. Before
+  this change it could not fire at all.
+- **These were not checked against the film's cuts.** The earlier watch of this film called 3.7-16.1 s one calm shot,
+  so these are probably camera motion crossing my threshold, not cuts. The threshold was mine.
+- **Live, a screen picture was slower:** 153 ms p50 per picture, 21 pictures in all, against ~50 ms in the tests.
+  - It is not the eyes' own compositor loop competing: in a test, the feed took ~78 ms with and without it.
+  - Capture time grows with the page's rendering load: ~50 ms on a simple clip, ~80 ms on a busy 720p test pattern,
+    ~150 ms on Commons' 1080p film, all with software compositing.
