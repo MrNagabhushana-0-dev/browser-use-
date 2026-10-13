@@ -73,9 +73,10 @@ async def test_a_missing_xvfb_is_a_clear_error(monkeypatch):
 
 
 async def test_a_recording_left_at_once_still_holds_what_was_on_screen(tmp_path):
-	"""Found in a full run: a 2 s recording came back with no frame at all ('Nothing was written into output file'):
-	under load, ffmpeg had not begun capturing when the block was left. A recording now begins only once ffmpeg has
-	captured its first frame. (The old fixed 0.4 s grace usually passes this too; only a loaded machine shows it.)"""
+	"""Found in a full run: a 2 s recording came back with nothing in it ('Nothing was written into output file').
+	ffmpeg probes its input for ~2 s before it sets up the output (keeping the frames it read), and a 'q' sent before
+	then ends it with nothing written; under load a 2 s block ended inside that window. Leaving at once reproduces it
+	every time on the old code. The end of a recording now waits for ffmpeg's first progress report."""
 	out = tmp_path / 'blink.mp4'
 	async with virtual_display(320, 200) as display:
 		async with record_display(display, out, 320, 200, fps=10):

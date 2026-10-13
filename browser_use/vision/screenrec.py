@@ -27,8 +27,9 @@ logger = logging.getLogger(__name__)
 _FINALIZE_TIMEOUT = 15.0
 _DISPLAY_START_TIMEOUT = 10.0
 # Long enough for ffmpeg to reject an unreachable display, which it does immediately.
-# How long ffmpeg may take to capture its first frame before the recording is called failed
-_FIRST_FRAME_TIMEOUT = 15.0
+_STARTUP_GRACE = 0.4
+# How long the end of a recording waits for ffmpeg to have set up its output (its first progress report)
+_READY_TIMEOUT = 15.0
 
 
 class RecorderUnavailable(RuntimeError):
@@ -124,7 +125,7 @@ async def record_display(display: str, output: Path | str, width: int, height: i
 		'-loglevel',
 		'error',
 		'-progress',
-		'pipe:1',  # frame counts on stdout: the recording begins once the first frame is in
+		'pipe:1',  # reported once ffmpeg's output is set up: the recording may end only after that
 		'-f',
 		'x11grab',
 		# The X server's own cursor never moves for synthetic CDP input, so grabbing it would
@@ -153,30 +154,24 @@ async def record_display(display: str, output: Path | str, width: int, height: i
 		stderr=asyncio.subprocess.PIPE,
 		env={**os.environ, 'DISPLAY': display},
 	)
-	# Not a fixed grace: under load ffmpeg can take longer than any guess to begin capturing, and a block left before
-	# that came back with no frame at all (found in a full test run)
-	captured = asyncio.Event()
-	follow = asyncio.create_task(_follow_progress(process, captured))
-	waits = [asyncio.create_task(captured.wait()), asyncio.create_task(process.wait())]
-	await asyncio.wait(waits, timeout=_FIRST_FRAME_TIMEOUT, return_when=asyncio.FIRST_COMPLETED)
-	for wait in waits:
-		wait.cancel()
+	# ffmpeg reports progress only once its output is set up (it first probes the input for ~2 s, keeping what it
+	# reads). A 'q' sent before then ends it with nothing written: a short recording under load came back empty
+	# (found in a full test run). So the end of a recording waits for that first report; the start does not.
+	ready = asyncio.Event()
+	follow = asyncio.create_task(_follow_progress(process, ready))
+	await asyncio.sleep(_STARTUP_GRACE)
 	if process.returncode is not None:
 		follow.cancel()
 		raise RecordingFailed(f'ffmpeg exited at start-up with code {process.returncode}: {await _stderr_tail(process)}')
-	if not captured.is_set():
-		await _finalize(process)
-		follow.cancel()
-		raise RecordingFailed(f'ffmpeg captured no frame of {display} within {_FIRST_FRAME_TIMEOUT:.0f}s')
 	try:
 		yield output
 	except BaseException:
 		# Whatever is unwinding is the more important error; still stop ffmpeg cleanly.
-		await _finalize(process)
-		raise
-	finally:
+		await _finalize(process, ready)
 		follow.cancel()
-	await _finalize(process)
+		raise
+	await _finalize(process, ready)
+	follow.cancel()
 	if process.returncode != 0 or not output.exists() or output.stat().st_size == 0:
 		raise RecordingFailed(f'ffmpeg finished with code {process.returncode} and no usable file: {await _stderr_tail(process)}')
 
@@ -191,18 +186,23 @@ async def _stderr_tail(process: 'asyncio.subprocess.Process', limit: int = 400) 
 	return data.decode(errors='replace').strip()[-limit:]
 
 
-async def _follow_progress(process: 'asyncio.subprocess.Process', captured: asyncio.Event) -> None:
-	"""Read ffmpeg's -progress lines (and keep its stdout drained) and set `captured` at its first frame."""
+async def _follow_progress(process: 'asyncio.subprocess.Process', ready: asyncio.Event) -> None:
+	"""Read ffmpeg's -progress lines (keeping its stdout drained) and set `ready` at the first: its output is set up."""
 	assert process.stdout is not None
-	while line := await process.stdout.readline():
-		key, _, value = line.decode(errors='replace').strip().partition('=')
-		if key == 'frame' and value.isdigit() and int(value) >= 1:
-			captured.set()
+	while await process.stdout.readline():
+		ready.set()
 
 
-async def _finalize(process: 'asyncio.subprocess.Process') -> None:
+async def _finalize(process: 'asyncio.subprocess.Process', ready: asyncio.Event | None = None) -> None:
 	if process.returncode is not None:
 		return
+	if ready is not None and not ready.is_set():
+		waits = [asyncio.create_task(ready.wait()), asyncio.create_task(process.wait())]
+		await asyncio.wait(waits, timeout=_READY_TIMEOUT, return_when=asyncio.FIRST_COMPLETED)
+		for wait in waits:
+			wait.cancel()
+		if process.returncode is not None:
+			return
 	try:
 		assert process.stdin is not None
 		process.stdin.write(b'q')
