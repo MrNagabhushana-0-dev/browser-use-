@@ -20,7 +20,8 @@ moments that differ, with the sound laid out underneath.
   changing character (speech starting after silence, music dropping out).
 - `'bored'` returns once the item stops showing anything new: it looped, or the marginal
   coverage of the last two seconds (see `sight.novelty`) fell below a threshold and the
-  sound has not changed. This is the same test a person applies when they swipe away.
+  sound has not changed. This is the same test a person applies when they swipe away. An
+  item longer than any watch (a film, not a reel) is given eight seconds instead.
 - `'item'` returns when the attended item changes (someone else scrolled).
 
 `hold=True` pauses the video when the watch returns and resumes it at the start of the next
@@ -72,6 +73,13 @@ Detail = Literal['glance', 'look', 'study']
 # Below this marginal coverage for BORED_WINDOW_S, an item is showing nothing new.
 BORED_NOVELTY = 0.04
 BORED_WINDOW_S = 2.0
+# ...but an item longer than any watch can be (a film, not a reel) gets this long: two calm seconds say little about a
+# film. Simulated on two whole films with checked edit lists (35 s watches starting every 5 s, sound unreadable as on a
+# cross-origin page), 2 s ended 72% and 30% of the watches while more shots were coming within them, losing ~6 shots
+# each; 8 s ended none early, and stopped only in end credits.
+BORED_LONG_WINDOW_S = 8.0
+# Longer than this is longer than any watch (retinat_watch takes 90 s at most).
+LONG_FORM_S = 90.0
 # Discrete sounds this recent (beeps, knocks, notifications) keep a still picture worth watching.
 BORED_SOUND_S = 4.0
 # How far back a watch reaches for what the item did before the call (the caller's own latency, or a question
@@ -227,17 +235,19 @@ class Eyes:
 			return 'looped (seen in full)'
 		if self.retina.state.get('paused') and self.retina.state.get('vid') == vid:
 			return 'video paused'
+		duration = self.retina.attended.get('duration') or 0.0
+		window = BORED_LONG_WINDOW_S if duration > LONG_FORM_S else BORED_WINDOW_S
 		now = mine[-1].wall
-		recent = [f for f in mine if f.wall >= now - BORED_WINDOW_S]
-		older = [f for f in mine if f.wall < now - BORED_WINDOW_S]
-		if not older or mine[-1].wall - mine[0].wall < BORED_WINDOW_S * 1.5:
+		recent = [f for f in mine if f.wall >= now - window]
+		older = [f for f in mine if f.wall < now - window]
+		if not older or mine[-1].wall - mine[0].wall < window * 1.5:
 			return None
 		gain = sight.novelty(older, recent)
 		if gain >= BORED_NOVELTY:
 			return None
 		sound = [h for h in hops if h.vid == vid]
-		recent_sound = [h for h in sound if h.wall >= now - BORED_WINDOW_S]
-		older_sound = [h for h in sound if h.wall < now - BORED_WINDOW_S]
+		recent_sound = [h for h in sound if h.wall >= now - window]
+		older_sound = [h for h in sound if h.wall < now - window]
 		if recent_sound:
 			sr = self.retina.state.get('sr')
 			after = {seg.kind for seg in hearing.listen(recent_sound, sr).segments if seg.duration >= 0.4}
@@ -255,7 +265,7 @@ class Eyes:
 		lately = [h for h in sound if h.wall >= now - BORED_SOUND_S]
 		if lately and hearing.listen(lately, self.retina.state.get('sr')).onsets:
 			return None  # discrete sounds still coming: the next beep is as unpredictable as the last
-		return f'nothing new for {BORED_WINDOW_S:.0f}s (novelty {gain:.3f})'
+		return f'nothing new for {window:.0f}s (novelty {gain:.3f})'
 
 	async def watch(self, *args: Any, **kwargs: Any) -> Percept:
 		"""Watch what plays: see `_watch` for the parameters."""

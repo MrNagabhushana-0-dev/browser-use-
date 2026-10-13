@@ -633,6 +633,26 @@ async def test_watch_until_bored_stops_on_a_still_picture(eyes, session, site):
 	assert p.ended_at - p.started_at < 8.0
 
 
+async def test_watch_until_bored_waits_longer_on_a_film_than_on_a_reel(eyes, session, site, tmp_path):
+	"""Found on Wikimedia Commons: a 35 s watch of a 10-minute film stopped at 6.7 s, "nothing new for 2s", on a slow
+	pan over clouds; the next cut came 10 s later. Two calm seconds say little about a film. On two whole films a 2 s
+	window ended most watches while more shots were coming; an item longer than any watch now gets 8 s."""
+	film = tmp_path / 'film.webm'
+	_run(
+		*['-f', 'lavfi', '-i', 'color=c=red:s=160x90:r=10:d=7', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=10:d=113'],
+		*['-filter_complex', '[0][1]concat=n=2:v=1:a=0,format=yuv420p[v]', '-map', '[v]'],
+		*['-c:v', 'libvpx-vp9', '-b:v', '50k', '-deadline', 'realtime', '-cpu-used', '8', str(film)],
+	)
+	_serve(site, '/film.webm', film.read_bytes())
+	site.expect_request('/film').respond_with_data(
+		PLAYER.format(src='/film.webm', attrs='autoplay muted', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/film'))
+	p = await eyes.watch(seconds=12.0, until='bored', min_seconds=1.0)
+	assert p.ended_at - p.started_at > 8.0, f'stopped on the calm opening of a 2-minute film: {p.stop_reason}'
+	assert p.items and any(abs(c - 7.0) < 0.5 for c in p.items[-1].sight.cuts), p.text
+
+
 async def test_hold_pauses_the_video_and_the_next_watch_resumes_it(eyes, session, site):
 	await _open(eyes, session, site.url_for('/calib'))
 	await eyes.watch(seconds=1.5, hold=True)
@@ -798,6 +818,27 @@ def _ball_frame(seq: int, t: float, row: int) -> FrameSample:
 		for x in (7, 8):
 			luma[y * 16 + x] = 230
 	return FrameSample(seq, 1, t, float(seq), bytes(luma), (20, 20, 20), True)
+
+
+def test_things_moving_in_different_shots_are_not_one_moving_object():
+	"""Found on the Commons film: "motion: one moving object; reached the bottom 14 times ... came to rest at the
+	bottom", across six shots of clouds, a stream, a bird and a burrow. The tracker skipped the samples where a cut
+	changed the picture and carried on with whatever moved in the next shot. A ball falling in one shot and another
+	rising after a cut is not a bounce."""
+	from browser_use.eyes import motion
+
+	def frame(seq: int, t: float, row: int, background: int, ball: int) -> FrameSample:
+		luma = bytearray([background]) * 256
+		for y in (row, row + 1):
+			for x in (7, 8):
+				luma[y * 16 + x] = ball
+		return FrameSample(seq, 1, t, float(seq), bytes(luma), (background,) * 3, True)
+
+	falls = [frame(i + 1, 0.05 * i, round(2 + 11 * 0.05 * i), 20, 230) for i in range(21)]
+	rises = [frame(i + 22, 1.05 + 0.05 * i, round(13 - 11 * 0.05 * (i + 1)), 200, 30) for i in range(20)]
+	assert len(sight.read(falls + rises).cuts) == 1, 'two shots'
+	assert motion.track(falls + rises) is None, motion.track(falls + rises)
+	assert motion.track(falls) is not None, 'one shot with one thing moving is still tracked'
 
 
 def test_one_stray_sample_does_not_add_a_turn_to_the_motion_or_widen_what_was_covered():

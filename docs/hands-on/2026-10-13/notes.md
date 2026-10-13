@@ -370,3 +370,33 @@ was no cut at the bird, and 16.1 now reads `cut->` (it read `fade->` before). Th
 - **Two frames of the first recording, around 1:12, show a clipped picture instead of the page:** a small thumbnail,
   then the film full-frame. They are probably compositor sight's clipped captures showing up in the screencast. If so,
   they may also be what the reflex screen feed saw as "broken frames". Not verified.
+
+## Afternoon: a film watched as long as asked, and no "moving object" across cuts
+
+**Recording:** `commons-film-watched-to-the-end-of-the-ask.mp4`, made by `retinat_record`. It shows a default
+`retinat_watch` of 35 s on the Commons film.
+
+**`until=bored` on a film.** In the morning a 35 s watch stopped at 6.7 s ("nothing new for 2s") on a slow pan, 10 s
+before the next cut. I first measured how often this happens. On both films with checked edit lists, I simulated 35 s
+watches starting every 5 s, with sound unreadable as on a cross-origin page.
+
+| Quiet window | Big Buck Bunny: ended early (of 120) | Tears of Steel: ended early (of 109) |
+|---|---|---|
+| 2 s (as it was) | 86, losing ~6 shots each | 33, losing ~5 shots each |
+| 4 s | 37 | 8 |
+| 8 s | 0 (3 stops, all in the end credits) | 0 |
+
+The films' median shot lasts ~3 s, and the 90th percentile ~8 s.
+- **Fixed** (test first): an item longer than any watch can be (90 s) gets an 8 s quiet window. Reels keep 2 s.
+- **The test:** a 2-minute video that is calm for 7 s, then cuts. It failed first ("nothing new for 2s" at 3.0 s). The
+  still reel still stops early.
+- **Checked live:** the default watch ran the full 35 s. It found the title fade (3.7 s), the clouds fading in
+  (4.4 s), and cuts at 16.1, 20.1 and 27.4 s. There was nothing at the bird.
+
+**Bug found in that watch:** "motion: one moving object; reached the bottom 14 times ... came to rest at the
+bottom", about 150 tokens on a film of six shots. The bouncing-object tracker skipped the samples where a cut
+changed the picture, then carried on with whatever moved in the next shot.
+- **Fixed** (test first): the tracker only speaks for one shot. Loop restarts do not count as a change of scene; cuts
+  and fades do.
+- **The test:** a ball falling in one shot, then another rising after a cut. It was read as one bounce (a bottom at
+  0.98 s) and now gets no motion line. One shot with one ball is still tracked.

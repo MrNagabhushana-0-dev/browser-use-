@@ -3383,18 +3383,24 @@ The Wikimedia API and upload.wikimedia.org still answered 429. Each tried once.
   - shift compensation.
 - **Live after the change:** 3 of 3 real cuts, none at the bird. The title fade was not found.
 - **Full `tests/ci` on `391c814`: 1,704 passed, 30 skipped, 0 failed** (37m02s).
+- **`until=bored` on films, fixed** (test first). In a simulation over both films (35 s watches every 5 s, sound
+  unreadable), a 2 s quiet window ended 86 of 120 and 33 of 109 watches while more shots were coming, losing ~6
+  shots each; 8 s ended none early. An item longer than any watch (90 s) now gets 8 s. Live: the default watch ran
+  its full 35 s and found the title fade and all three cuts.
+- **"One moving object" across cuts, fixed** (test first). On the film the bouncing-object tracker spliced six
+  shots into one object that "reached the bottom 14 times". It now speaks only for one shot.
 - **Seen, not fixed:**
-  - `until=bored` stopped a 35 s watch of a 10-minute film at 6.7 s, on a slow pan;
-  - the header said "watched 78.8s" for a 30 s watch, and "on screen" was stale;
+  - the header said "watched 78.8s" for a 30 s watch (`watched_s` spans wall time across watches), and "on screen"
+    was stale;
   - two recording frames showed compositor sight's clipped picture instead of the page.
 
 **Next, in order:**
 1. **The retina's own grid on a readable video.** Its `drawImage` uses low smoothing, which I modelled as point
    sampling; that model is not checked against Chrome. Play a fine test pattern and compare the retina's grid to
    area and nearest reductions. If it is point-sampled, try area averaging and measure what it costs per frame.
-2. **`until=bored` on long films.** Two seconds of a slow pan are no evidence that a 10-minute film has nothing new,
-   least of all when its sound cannot be read. Base the stop on the item's length and cutting rhythm, test first.
-3. **The watch header:** "watched" counts wall time across watches, and "on screen" keeps the first reading.
+2. **The watch header:** "watched" (`watched_s`, the span of wall times) counts across watches, and "on screen"
+   keeps the first reading.
+3. **A live stream or an item of unknown length** still gets the 2 s window. Check one live.
 4. **The recording's clipped frames.** Check whether compositor sight's clipped captures reach the screencast, and
    whether they are the reflex feed's "broken frames".
 5. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
