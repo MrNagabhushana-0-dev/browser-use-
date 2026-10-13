@@ -44,11 +44,6 @@ SCREEN_WIDTH = 240
 SCREEN_QUIET_S = 0.3
 # Captures failing for this long mean the tab or its browser is gone: the feed stops
 SCREEN_GIVE_UP_S = 5.0
-# A screencast frame that changes some region of the picture almost entirely (9 of the 12 grid cells of any 4x3 block,
-# a block being 1/8 of the width) is checked with a capture, which is fed instead: it may be a cut, or one of the
-# stream's broken frames (a playing video missing from it for one frame, about half a second into playback: found as
-# false cuts, 1-4 in 10 plays). Local, because a video may fill a small part of the screen: 11% in the test that found it.
-SCREEN_CHECK_BLOCK = 9
 
 # windowsVirtualKeyCode for the keys games and players use most; letters and digits are their ASCII codes
 _KEY_CODES = {
@@ -101,26 +96,6 @@ class _NoScreencast(Exception):
 	"""No DevTools connection of its own could be opened for the screencast."""
 
 
-def _grid(png: bytes) -> bytes:
-	"""A picture's 32x18 luma grid, as the rules' changed() samples it."""
-	from PIL import Image
-
-	with Image.open(io.BytesIO(png)) as img:
-		return img.convert('L').resize((32, 18), Image.Resampling.BOX).tobytes()
-
-
-def _region_replaced(a: bytes, b: bytes) -> bool:
-	"""Whether some 4x3 block of two 32x18 grids changed almost entirely (cells moving by more than 24, as changed()
-	counts them): a region of the picture replaced at once, as by a cut or a video missing from a frame."""
-	assert len(a) == len(b) == 32 * 18
-	for by in range(0, 18, 3):
-		for bx in range(0, 32, 4):
-			moved = sum(1 for y in range(by, by + 3) for x in range(bx, bx + 4) if abs(a[y * 32 + x] - b[y * 32 + x]) > 24)
-			if moved >= SCREEN_CHECK_BLOCK:
-				return True
-	return False
-
-
 def _rgb(png: bytes) -> tuple[int, int, bytes]:
 	"""(width, height, raw RGB) of a picture."""
 	from PIL import Image
@@ -161,7 +136,6 @@ class Reflexes:
 		self._screen_fed = 0
 		self._screen_seq = 0
 		self._screen_source: str | None = None  # 'screencast' or 'captures', once the feed has started
-		self._screen_confirmed = 0  # screencast frames replaced by a capture (a region replaced at once)
 
 	@property
 	def installed(self) -> bool:
@@ -181,7 +155,6 @@ class Reflexes:
 		self._screen_ms.clear()
 		self._screen_fed = 0
 		self._screen_source = None
-		self._screen_confirmed = 0
 		cdp = await self.session.get_or_create_cdp_session(focus=False)
 		self._cdp, self._session_id = cdp, cdp.session_id
 		send = cdp.cdp_client.send
@@ -228,12 +201,10 @@ class Reflexes:
 		}
 		if self._screen_fed:
 			# the rules read the screen: how many pictures, how old one is when it reaches them, and where they come
-			# from (a screencast, or captures: slower, ~50 ms or more each), with how many screencast frames a capture
-			# replaced (a region replaced at once: a cut, or a broken frame); many means many captures, so slower
+			# from (a screencast, or captures: slower, ~50 ms or more each)
 			out['screen_pictures'] = self._screen_fed
 			out['screen_ms_p50'] = round(statistics.median(self._screen_ms), 1)
 			out['screen_source'] = self._screen_source
-			out['screen_confirmed'] = self._screen_confirmed
 		return out
 
 	async def clear(self) -> None:
@@ -346,10 +317,12 @@ class Reflexes:
 	async def _feed_by_screencast(self) -> None:
 		"""A screencast of this tab on a DevTools connection of its own, so it shares no event slot with the recorder
 		or the eyes. A still page sends nothing; and the repaint that ends an animation can be dropped while a frame
-		is in flight (as the recorder found), so a stream gone quiet is topped up with one capture. And it sometimes
-		sends a broken frame: a playing video missing from it, or the whole frame black, white page and all. So a frame
-		that changes most of the picture at once is checked with a capture, which is fed instead: a real cut costs one
-		capture (~40 ms), a broken frame is never seen."""
+		is in flight (as the recorder found), so a stream gone quiet is topped up with one capture.
+
+		It once also sent "broken frames" (a playing video missing, or the whole frame black), each checked with a
+		capture before it was fed. Those were this feed's own clipped captures showing in the screencast; captures no
+		longer clip (see browser_use.browser.capture), and without the check the screen tests passed 20 runs of 20,
+		where they had failed 3-4 in 10. So a real cut is fed as it comes, without a capture's ~40 ms."""
 		from urllib.parse import urlparse
 
 		import websockets
@@ -385,7 +358,6 @@ class Reflexes:
 				await ws.send(json.dumps({'id': 1, 'method': 'Page.startScreencast', 'params': start}))
 				shown = await self._capture()  # a still page sends no frame until it changes
 				await self._feed(shown, time.time())
-				last = await asyncio.to_thread(_grid, shown)
 				topped_up = True
 				while self._handler is not None:
 					if reader.done():
@@ -398,18 +370,11 @@ class Reflexes:
 							topped_up = True
 							shown = await self._capture()
 							await self._feed(shown, time.time())
-							last = await asyncio.to_thread(_grid, shown)
 						continue
 					arrived.clear()
 					frame, newest[0] = newest[0], None
 					if frame is not None:
 						topped_up = False
-						grid = await asyncio.to_thread(_grid, frame[0])
-						if _region_replaced(grid, last):
-							self._screen_confirmed += 1
-							frame = (await self._capture(), time.time())
-							grid = await asyncio.to_thread(_grid, frame[0])
-						last = grid
 						await self._feed(*frame)
 			finally:
 				reader.cancel()

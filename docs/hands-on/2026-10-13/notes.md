@@ -505,3 +505,20 @@ afternoon.
 - **Live, counted in the recordings.** A frame of only the film's box starts with the film's black bar, where the
   page has its light header. Before the fix, 47 of 265 and 45 of 296 frames of two Commons recordings were the clip.
   After it, 0 of 108 (`commons-film-recorded-without-clipped-frames.mp4`). The watch's keyframes were still the film.
+
+## Evening: the reflexes' "broken frames" were their own clipped captures
+
+The reflexes' screen feed checked any frame that replaced a region of the picture with a capture before feeding it.
+That guarded against "broken frames": a playing video missing for a frame, or the whole frame black, about half a
+second into playback, which caused false cuts in 3-4 of 10 plays.
+- **Checked:** with the check turned off and captures no longer clipping, the two screen-reading tests passed 20 runs
+  of 20. If the old 35% rate still held, ten clean runs alone would happen about 1% of the time. The broken frames
+  were the feed's own top-up captures (clipped, scaled to 240 px) showing in its screencast.
+- **Removed the check,** and with it a capture on every real cut. A cross-origin clip's cut is now caught 19-27 ms
+  after it happens (the video's own clock, six runs), against 45-72 ms before. Reflex file 14/14.
+- **Live on Commons** (`commons-film-rules-catch-only-real-cuts.mp4`): the rule `see.changed({from: 'video'}) > 0.5`
+  fired at video 16.43, 20.31 and 27.65 s. The film's cuts are at 16.30, 20.17 and 27.47 s. Nothing else fired. This
+  morning the same rule fired at 0.19, 1.31 and 1.63 s (taken then for the player's overlay), and earlier at 7.23,
+  9.41 and 9.93 s; those were probably the same leaked captures, but that is a likely reading, not proven. The lag,
+  0.13-0.18 s of video, is longer than in the test (19-27 ms): pictures were 44.6 ms old at the median on this busy
+  page (521 from the screencast).

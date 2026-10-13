@@ -236,10 +236,8 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
   - `from`: the largest canvas by default, else `'video'`, a CSS selector, or `'screen'`: everything on screen as
     the compositor draws it, frames from other sites included (a game embedded from another origin, as on itch.io).
     The screen comes to the rules as the compositor draws it (a screencast on its own DevTools connection): a
-    picture is ~10 ms old when they get it. A frame that replaces some region of the picture at once (a cut, or one
-    of the screencast's broken frames, which drop a playing video for a frame) is confirmed with a capture first, so
-    a cut costs ~50 ms. In tests, a square drawn in a frame from another origin was clicked 34-39 ms after it was
-    drawn, and a cross-origin clip's cut was caught 45-72 ms after it happened; a same-page canvas, read directly, is
+    picture is ~10 ms old when they get it. In tests, a square drawn in a frame from another origin was clicked 34-39 ms after it was
+    drawn, and a cross-origin clip's cut was caught 19-27 ms after it happened (by the video's own clock, six runs; 45-72 ms while each cut was confirmed with a capture); a same-page canvas, read directly, is
     still faster (~2 ms). A browser this session did not launch (remote, or the person's own through the bridge) is
     captured instead, ~50 ms a picture or more on a busy page. A video the page may not read (another origin without
     CORS, as on Wikimedia Commons) is read on screen automatically, within its box.
@@ -261,7 +259,7 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
   input channel.
 - `action=status` gives counts and latency, and, when rules read the screen, how many pictures they got, how old a
   picture was when they read it (`screen_ms_p50`), where the pictures came from (`screen_source`: screencast or
-  captures) and how many frames a capture replaced (`screen_confirmed`). On a page drawn without a GPU (a WebGL game)
+  captures). On a page drawn without a GPU (a WebGL game)
   the pictures are slower because the browser is. `action=clear` stops the rules and releases held keys.
 - **Look after `retinat_wait` returns, not alongside it.** A client may send both at once, and the look then runs
   straight away, before what you are waiting for. Such a look says so ("asked while a retinat_wait was still

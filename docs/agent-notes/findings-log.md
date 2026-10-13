@@ -3434,11 +3434,17 @@ container restart).
 That is judged from the two films, not measured on live content: YouTube's ISS stream answered this network with
 Google's CAPTCHA page, and CAPTCHAs are out of bounds.
 
+**The reflexes' "broken frames" were their own clipped captures** showing in their screencast. With the check off
+and captures no longer clipping, the screen tests passed 20 runs of 20 (they had failed 3-4 in 10). The check, and
+its capture on every real cut, are removed: a cut is caught 19-27 ms after it happens in the test (45-72 ms before).
+Live on Commons, a cut rule fired at the film's three real cuts (16.43/20.31/27.65 s against 16.30/20.17/27.47 s)
+and nowhere else; this morning it had also fired on the opening.
+
 **Next, in order:**
-1. **The reflexes' "broken frames".** Check whether they are gone now that captures no longer show in the
-   screencast. If so, the confirming captures can go, which takes ~50 ms off a confirmed picture.
-2. **The cost of the crop path:** a full-viewport JPEG at quality 90, decoded and cropped in Python, for each
+1. **The cost of the crop path:** a full-viewport JPEG at quality 90, decoded and cropped in Python, for each
    compositor picture (6 a second). Measure it on a busy page against the clipped capture.
+2. **The live lag of a cut rule** on Commons (0.13-0.18 s of video) against 19-27 ms in the test: pictures were 45 ms
+   old there. Find where the rest goes.
 3. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
 4. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
    or CORS WebM/VP9 source.
