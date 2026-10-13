@@ -13,7 +13,6 @@ from browser_use.browser.events import AgentFocusChangedEvent, BrowserConnectedE
 from browser_use.browser.profile import ViewportSize
 from browser_use.browser.video_recorder import VideoRecorderService
 from browser_use.browser.watchdog_base import BaseWatchdog
-from browser_use.utils import create_task_with_error_handling
 
 
 class RecordingWatchdog(BaseWatchdog):
@@ -31,6 +30,10 @@ class RecordingWatchdog(BaseWatchdog):
 	# The newest screencast frame as sent (base64): a view that joins this stream starts from it, since a still page
 	# sends no further frame
 	latest_frame: str | None = None
+	# The newest frame's acknowledgement, held back until the ticker has used it: the browser sends the next frame only
+	# once the last is acknowledged, so the stream runs at the video's frame rate, not at every repaint of a 60 fps page
+	# (each one encoded by the browser and parsed on the event loop: that held the reflexes' input up ~50 ms)
+	_unacked: tuple[int, str | None] | None = PrivateAttr(default=None)
 
 	async def on_BrowserConnectedEvent(self, event: BrowserConnectedEvent) -> None:
 		"""
@@ -86,8 +89,10 @@ class RecordingWatchdog(BaseWatchdog):
 		self._recorder = recorder
 		self.browser_session.cdp_client.register.Page.screencastFrame(self.on_screencastFrame)
 		self._screencast_params = {
-			'format': 'png',
-			'quality': 90,
+			# JPEG, not PNG: the browser encodes and we decode every repaint, and a lossless frame of the whole viewport
+			# costs tens of milliseconds each way for a video that h264 compresses lossily anyway
+			'format': 'jpeg',
+			'quality': 85,
 			'maxWidth': size['width'],
 			'maxHeight': size['height'],
 			'everyNthFrame': 1,
@@ -103,7 +108,10 @@ class RecordingWatchdog(BaseWatchdog):
 		period = 1.0 / max(1, recorder.framerate)
 		due = loop.time()
 		while True:
-			recorder.tick()
+			await asyncio.to_thread(recorder.tick)  # decoding and encoding stay off the event loop
+			if self._unacked is not None:
+				(frame, session_id), self._unacked = self._unacked, None
+				await self._ack(frame, session_id)
 			due += period
 			await asyncio.sleep(max(0.0, due - loop.time()))
 
@@ -121,7 +129,7 @@ class RecordingWatchdog(BaseWatchdog):
 		if self._ticker is not None:
 			self._ticker.cancel()
 			self._ticker = None
-		recorder.tick()  # the last picture closes the video
+		await asyncio.to_thread(recorder.tick)  # the last picture closes the video
 		self._recorder = None
 		self._current_session_id = None
 		self.latest_frame = None
@@ -218,21 +226,12 @@ class RecordingWatchdog(BaseWatchdog):
 			return
 		self.latest_frame = event['data']
 		self._recorder.add_frame(event['data'])
-		create_task_with_error_handling(
-			self._ack_screencast_frame(event, session_id),
-			name='ack_screencast_frame',
-			logger_instance=self.logger,
-			suppress_exceptions=True,
-		)
+		self._unacked = (event['sessionId'], session_id)
 
-	async def _ack_screencast_frame(self, event: ScreencastFrameEvent, session_id: str | None) -> None:
-		"""
-		Asynchronously acknowledges a screencast frame.
-		"""
+	async def _ack(self, frame: int, session_id: str | None) -> None:
+		"""Acknowledge a screencast frame, so the browser sends the next one."""
 		try:
-			await self.browser_session.cdp_client.send.Page.screencastFrameAck(
-				params={'sessionId': event['sessionId']}, session_id=session_id
-			)
+			await self.browser_session.cdp_client.send.Page.screencastFrameAck(params={'sessionId': frame}, session_id=session_id)
 		except Exception as e:
 			self.logger.debug(f'Failed to acknowledge screencast frame: {e}')
 

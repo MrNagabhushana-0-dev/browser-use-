@@ -262,3 +262,47 @@ async def test_new_rules_start_clean_an_old_rule_s_event_is_not_handed_to_the_ne
 	event = await reflexes.wait(timeout=5)
 	assert event is not None and event.label == 'new', event
 	await reflexes.clear()
+
+
+async def test_reflexes_keep_their_speed_while_the_eyes_watch_the_same_tab(session, game, tmp_path):
+	"""Found live on the T-Rex runner through Retinat: decision to input was ~80 ms at p50, against ~2 ms here. In
+	Retinat the eyes are open on the tab too, sampling the same canvas every frame into the same event loop."""
+	from browser_use.eyes.service import Eyes
+
+	await session.navigate_to(game.url_for('/follow'))
+	eyes = Eyes(session, seed=7, speech=False, now_path=tmp_path / 'now.json')
+	await eyes.open()
+	try:
+		reflexes = Reflexes(session)
+		await reflexes.install(FOLLOW)
+		event = await reflexes.wait(timeout=10)
+		assert event is not None and event.label == 'game over', event
+		stats = reflexes.stats()
+		await reflexes.clear()
+	finally:
+		await eyes.close()
+	assert stats['actions'] >= 4, stats
+	assert stats['latency_ms_p50'] is not None and stats['latency_ms_p50'] < 40, f'decision to key arriving: {stats}'
+
+
+async def test_reflexes_keep_their_speed_while_the_session_is_recorded(session, game, tmp_path):
+	"""Found live on the T-Rex runner: with retinat_record running, decision to input went from ~2 ms to ~150 ms. The
+	recording took every repaint of the moving game as a full-size PNG and decoded it on the event loop the reflexes'
+	input goes out on."""
+	await session.navigate_to(game.url_for('/follow'))
+	recorder = session._recording_watchdog
+	assert recorder is not None
+	await recorder.start_recording(tmp_path / 'played.mp4', framerate=10)
+	try:
+		reflexes = Reflexes(session)
+		await reflexes.install(FOLLOW)
+		event = await reflexes.wait(timeout=10)
+		assert event is not None and event.label == 'game over', event
+		stats = reflexes.stats()
+		await reflexes.clear()
+	finally:
+		saved = await recorder.stop_recording()
+	assert saved is not None and saved.stat().st_size > 10_000, 'the game is on the recording'
+	assert stats['actions'] >= 4, stats
+	assert stats['latency_ms_p50'] is not None and stats['latency_ms_p50'] < 40, f'decision to key arriving: {stats}'
+	assert stats['latency_ms_p95'] < 80, f'decision to key arriving: {stats}'

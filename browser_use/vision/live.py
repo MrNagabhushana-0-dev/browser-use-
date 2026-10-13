@@ -52,7 +52,9 @@ def frame_signature(jpeg_bytes: bytes) -> bytes:
 	try:
 		from PIL import Image
 
-		image = Image.open(BytesIO(jpeg_bytes)).convert('RGB').resize((_THUMB, _THUMB), Image.Resampling.BILINEAR)
+		image = Image.open(BytesIO(jpeg_bytes))
+		image.draft('RGB', (_THUMB * 8, _THUMB * 8))  # a JPEG is decoded at 1/8 size: this runs for every frame
+		image = image.convert('RGB').resize((_THUMB, _THUMB), Image.Resampling.BILINEAR)
 	except Exception:
 		return b''
 	return image.tobytes()

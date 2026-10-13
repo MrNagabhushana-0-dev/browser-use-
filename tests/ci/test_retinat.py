@@ -459,3 +459,20 @@ async def test_reflexes_act_the_moment_a_button_appears_and_the_agent_sleeps_unt
 	assert clicks['result']['value'] == 1, 'one real click, as the button appeared'
 	bad = await _call(retinat, 'retinat_reflex', {'rules': [{'when': 'see.el(', 'notify': 'x'}]})
 	assert bad.is_error and 'did not compile' in _text(bad), _text(bad)
+
+
+async def test_reflexes_through_retinat_act_within_a_frame_or_two(retinat, site):
+	"""Found live on the T-Rex runner: through Retinat, decision to input was ~80 ms at p50, while the library alone
+	measures ~2 ms. A reflex that lands five frames late is a reflex too late for a game."""
+	from tests.ci.test_reflex import FOLLOW, GAME
+
+	site.expect_request('/follow').respond_with_data(GAME, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/follow')})
+	await _call(retinat, 'retinat_look', {})  # as an agent does before it writes rules: the page watcher is running too
+	installed = _text(await _call(retinat, 'retinat_reflex', {'rules': FOLLOW}))
+	assert 'running every frame' in installed, installed
+	woke = _text(await _call(retinat, 'retinat_wait', {'timeout': 10}))
+	assert '"game over"' in woke, woke
+	stats = json.loads(_text(await _call(retinat, 'retinat_reflex', {'action': 'status'})))
+	assert stats['actions'] >= 4, stats
+	assert stats['latency_ms_p50'] is not None and stats['latency_ms_p50'] < 40, f'decision to key arriving: {stats}'
