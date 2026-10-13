@@ -3439,6 +3439,7 @@ and captures no longer clipping, the screen tests passed 20 runs of 20 (they had
 its capture on every real cut, are removed: a cut is caught 19-27 ms after it happens in the test (45-72 ms before).
 Live on Commons, a cut rule fired at the film's three real cuts (16.43/20.31/27.65 s against 16.30/20.17/27.47 s)
 and nowhere else; this morning it had also fired on the opening.
+**Full `tests/ci` on `c1c0e39`: 1,713 passed, 30 skipped, 0 failed** (37m10s).
 
 **Next, in order:**
 1. **The cost of the crop path:** a full-viewport JPEG at quality 90, decoded and cropped in Python, for each
