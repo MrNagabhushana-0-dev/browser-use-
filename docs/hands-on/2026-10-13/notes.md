@@ -540,3 +540,25 @@ video's box at 320 px wide, 30 of each at 6 a second:
 - **What it means:** compositor sight still keeps 6 pictures a second, but spends ~60% of the time capturing. The
   real fix is to stop capturing for it: crop the video's box from screencast frames, which Chrome sends anyway. It
   needs its own DevTools connection, as the reflexes' screen feed has.
+
+## Night: compositor sight from the screencast, no captures
+
+**Recording:** `commons-film-sight-from-the-screencast.mp4`, made by `retinat_record`: a 30 s watch of the Commons film.
+
+**What changed:**
+- **Before:** compositor sight captured the cross-origin video's box 6 times a second. Since captures stopped
+  clipping, that took ~95 ms each on a busy page.
+- **Now:** it opens a screencast on a DevTools connection of its own (as the reflexes' screen feed does) and cuts the
+  box from the newest frame at each tick. A frame's media time is the video's `currentTime` less the frame's age,
+  which Chrome stamps. If no screencast can be had, it captures as before.
+- **The test:** a 3 s watch of a cross-origin clip. It failed first (18 captures for 23 pictures) and now takes
+  none. The stall test and the cross-origin tests pass, and the eyes, reflex, Retinat and eyesbench files pass
+  127/127.
+
+**Live:** the best shot list of the film yet:
+- the title fade at 3.9 -> 4.6 s (3.65-4.85 in the edit list), which was missed in some runs before;
+- cuts at 16.3, 20.3 and 27.5 s (16.30, 20.17 and 27.47);
+- nothing at the bird;
+- keyframes in order.
+
+The recording, with the recorder's screencast running alongside the eyes', was the page in 227 of 227 frames.

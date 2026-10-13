@@ -3442,20 +3442,22 @@ and nowhere else; this morning it had also fired on the opening.
 **Full `tests/ci` on `c1c0e39`: 1,713 passed, 30 skipped, 0 failed** (37m10s).
 **Full `tests/ci` on `9b90786`: 1,713 passed, 30 skipped, 0 failed** (37m23s).
 
+**Compositor sight takes its pictures from the screencast** (test first; live). The video's box is cut from the
+newest frame of a screencast on its own DevTools connection, labelled with the video's `currentTime` less the frame's
+age; captures remain the fallback. The test's 3 s watch went from 18 captures to none. Live on Commons: the title fade
+and all three cuts found, and the recording was the page in 227 of 227 frames.
+
 **Next, in order:**
-1. **Compositor sight from the screencast.** The crop path was measured: 84-100 ms a picture against 32 ms clipped,
-   almost all of it Chrome's full-viewport capture (decoding is now 6 ms with `draft`). Cropping the video's box out
-   of screencast frames, on a DevTools connection of its own as the reflexes do, would need no capture at all.
-2. **The live lag of a cut rule** on Commons (0.13-0.18 s of video) against 19-27 ms in the test: pictures were 45 ms
-   old there. Find where the rest goes.
-3. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+1. **The live lag of a cut rule** on Commons (0.13-0.18 s of video) against 19-27 ms in the test: pictures were
+   45 ms old there. Find where the rest goes.
+2. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+3. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
+   the Bunny, 0.926 -> 0.941 on Steel) is nearly free; measure the screencast's CPU first.
 4. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
    or CORS WebM/VP9 source.
 5. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
-6. **Compositor sight at 10 fps instead of 6.** Offline it gains F1 0.966 -> 0.970 on the Bunny and 0.926 -> 0.941
-   on Steel.
-7. **Intermittents to watch in full runs:** the feed test, the region-runner test, the play-arena title screen, and
+6. **Intermittents to watch in full runs:** the feed test, the region-runner test, the play-arena title screen, and
    the reflex speed test.
-8. **Carried over:**
+7. **Carried over:**
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).

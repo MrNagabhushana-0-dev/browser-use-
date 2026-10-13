@@ -407,6 +407,25 @@ async def test_a_cross_origin_video_watched_later_is_still_said_to_be_cross_orig
 	assert 'sound cannot be read' in p.text and 'none captured' not in p.text, 'unreadable is not absent: ' + p.text
 
 
+async def test_compositor_sight_takes_its_pictures_from_the_screencast(eyes, session, site, elsewhere):
+	"""Compositor sight captured the video's box six times a second. Captures no longer clip (they showed in the
+	screencast), and a capture of the whole viewport costs ~95 ms on a busy page against ~32 ms clipped. Chrome's
+	screencast already sends the page as drawn: the box is cut from its frames, with no capture."""
+	from browser_use.browser import capture
+
+	site.expect_request('/cross-cast').respond_with_data(
+		PLAYER.format(src=elsewhere.url_for('/calib.webm'), attrs='autoplay muted', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/cross-cast'))
+	await asyncio.sleep(1.0)
+	before = capture.captures_taken
+	p = await eyes.watch(seconds=3.0, until='time')
+	taken = capture.captures_taken - before
+	assert p.items and p.items[0].tainted and len(p.items[0].frames) >= 12, p.text
+	assert taken <= 2, f'{taken} captures for {len(p.items[0].frames)} pictures'
+	assert len(p.items[0].sight.cuts) >= 1, p.text  # the calibration clip cuts from red to the test pattern at 2.5 s
+
+
 async def test_compositor_pictures_carry_the_time_the_film_was_at(eyes, session, site, elsewhere, tmp_path):
 	"""Found on Wikimedia Commons: keyframes of a cross-origin film listed "at 2.2s 3.9s 3.5s 4.8s", and the one at
 	3.5 s showed clouds that come in after 4.2 s. A compositor picture was labelled with the page's last report of

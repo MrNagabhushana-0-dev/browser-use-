@@ -30,6 +30,9 @@ _locks: 'weakref.WeakKeyDictionary[CDPClient, asyncio.Lock]' = weakref.WeakKeyDi
 # A JPEG taken to be cropped is taken at least this good, so cropping and encoding again loses little.
 CROP_SOURCE_QUALITY = 90
 
+# Captures taken through `capture_screenshot` in this process: what a caller can read to see what its work costs.
+captures_taken = 0
+
 
 def capture_lock(client: 'CDPClient') -> asyncio.Lock:
 	"""The lock every capture through this client holds."""
@@ -42,7 +45,9 @@ def capture_lock(client: 'CDPClient') -> asyncio.Lock:
 async def capture_screenshot(client: 'CDPClient', params: Any, session_id: str | None) -> Any:
 	"""`Page.captureScreenshot` with `params` on `session_id`, never overlapping another capture through `client`, and
 	without a clip where cropping a capture of the viewport gives the same picture (see the module docstring)."""
+	global captures_taken
 	async with capture_lock(client):
+		captures_taken += 1
 		clip = params.get('clip') if isinstance(params, dict) else None
 		if clip and float(clip.get('scale') or 1) <= 1 and not params.get('captureBeyondViewport'):
 			shot = await _cropped(client, params, clip, session_id)
