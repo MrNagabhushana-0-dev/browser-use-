@@ -400,3 +400,7 @@ changed the picture, then carried on with whatever moved in the next shot.
   and fades do.
 - **The test:** a ball falling in one shot, then another rising after a cut. It was read as one bounce (a bottom at
   0.98 s) and now gets no motion line. One shot with one ball is still tracked.
+- **A correction.** The message of commit `6852df3` says the live watch showed "no motion line". It did show one:
+  that watch ran before the tracker fix. I checked again after the fix, with the same default 35 s watch. This time
+  there was no motion line. The watch ran its full 35 s and found cuts at 16.2, 20.0 and 27.3 s, with nothing at the
+  bird. The title fade was missed this time (0.0-16.2 s came back as one shot).
