@@ -391,6 +391,22 @@ async def test_a_cross_origin_video_is_watched_from_the_compositor(eyes, session
 	assert 'sound cannot be read' in p.text and 'none captured' not in p.text, 'unreadable is not absent: ' + p.text
 
 
+async def test_a_cross_origin_video_watched_later_is_still_said_to_be_cross_origin(eyes, session, site, elsewhere):
+	"""Found hands-on on Wikimedia Commons: the film was found unreadable when it started, and a watch begun some
+	seconds later forgot it: no "from the compositor" line, and its sound "none captured (no audio track)" rather
+	than unreadable. The retina says a video is unreadable once; a percept must know it whenever it is built."""
+	site.expect_request('/cross-later').respond_with_data(
+		PLAYER.format(src=elsewhere.url_for('/calib.webm'), attrs='autoplay loop', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/cross-later'))
+	await asyncio.sleep(2.0)  # it plays, and is found unreadable, before anyone watches
+	p = await eyes.watch(seconds=2.0, until='time')
+
+	assert len(p.items) == 1, p.text
+	assert p.items[0].tainted and 'from the compositor' in p.text, p.text
+	assert 'sound cannot be read' in p.text and 'none captured' not in p.text, 'unreadable is not absent: ' + p.text
+
+
 async def test_a_muted_video_is_still_heard_and_said_to_be_muted(eyes, session, site):
 	# captureStream taps the audio before volume and mute: the agent can listen without
 	# making a sound, and must not report a muted reel as silent.

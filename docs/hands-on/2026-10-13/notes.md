@@ -201,3 +201,23 @@ tiled, inside the film's box. A shot was also listed as "0.9s-0.2s".
   failed 2 of 2 before and passes 3 of 3.
 - **Open:** the "0.9s-0.2s" shot (an end before its start) was not looked into. It probably came from a corrupted
   first picture, but that is a guess.
+
+## Later morning: the eyes and the rules on the film together (`b840ca2` checked live, a new bug fixed)
+
+**Recording:** `commons-film-eyes-and-rules-together.mp4`, the first 50 s at 640 px. It was made by `retinat_record`
+and shows the click, the rules going in, and the start of a 20 s `retinat_watch` while they run.
+
+**Checked live:** a rule read the film on screen while the eyes watched it for 20 s.
+- All 7 of the eyes' keyframes were the film. Before the capture lock (`b840ca2`), this combination gave a keyframe of
+  the whole page, tiled.
+- The shot list was sane: no shot ending before it started.
+- The title-to-clouds change at 3.9 s now reads `fade->`; earlier today it was `cut->`. Not checked against the film's
+  own edit list.
+
+**Bug found:** the same watch dropped its line "picture: from the compositor ... its sound cannot be read". It said
+instead "sound: none captured (no audio track, or it had not started)". The rules' stats (374 screen pictures) showed
+the film was still unreadable to the page.
+- **The cause:** the retina says a video is unreadable once, when it finds out, and a percept looked only at events
+  since the watch began. I had installed the rules first, so the watch began after that event.
+- **Fixed:** a percept takes this from everything the retina said. A test (play, wait 2 s, then watch) failed first
+  and passes now. Eyes and Retinat files: 91/91.

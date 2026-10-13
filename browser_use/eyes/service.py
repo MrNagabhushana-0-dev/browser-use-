@@ -357,12 +357,12 @@ class Eyes:
 			if e.type == 'attend' and e.data.get('vid'):
 				info_by_vid[e.data['vid']] = e.data
 		muted_by_vid: dict[int, bool] = {}
-		tainted: set[int] = set()
 		for e in events:
 			if e.type == 'state' and e.data.get('vid'):
 				muted_by_vid[e.data['vid']] = bool(e.data.get('muted'))
-			elif e.type == 'tainted':
-				tainted.add(e.data.get('vid', 0))
+		# The retina says a video is unreadable once, when it finds out: from all it said, not only since `since` (a
+		# watch begun after that forgot it, found on Commons: no compositor line, its sound "none captured")
+		tainted = {e.data.get('vid', 0) for e in list(self.retina.events) if e.type == 'tainted'}
 		k = keyframes or KEYFRAMES[detail]
 		do_speech = self.speech if transcribe is None else (transcribe and asr.available())
 		items: list[ItemPercept] = []

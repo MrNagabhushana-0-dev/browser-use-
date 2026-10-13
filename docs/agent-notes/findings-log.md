@@ -3313,8 +3313,15 @@ driving a real browser through the Retinat MCP tools, or measured that way. Hand
 
 **Full `tests/ci` on `b5069f5`: 1,699 passed, 30 skipped, 0 failed** (36m05s, quiet machine).
 
+**Checked live on Commons after the lock:**
+- A rule read the film while the eyes watched it for 20 s. All 7 keyframes were the film, and the shot list was sane.
+- The title-to-clouds change read `fade->`, not checked against the film's edit list.
+- **Bug fixed** (test first): a watch begun after the film was found unreadable forgot that it was. The compositor
+  line was missing, and its sound read "none captured (no audio track)" instead of unreadable. A percept now takes
+  taint from all the retina said, not only since the watch began.
+
 **Next, in order:**
-1. Re-check live on Commons: rules and a look together, with the lock in place. Look into the "0.9s-0.2s" shot.
+1. A full `tests/ci` on the head, then the PR update.
 2. Ground-truth live accuracy: a rule tuned to cuts on a film whose shot list is known, checked against it. The
    player's overlay is inside the video's box on screen. Decide whether `{from: 'video'}` on screen should leave out
    the player's controls.
