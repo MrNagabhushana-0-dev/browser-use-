@@ -3096,3 +3096,84 @@ passed 36/36 inside it. There were 3 stalls, the longest 1.5 s.
 2. The A/B test of sheet vs recall vs journal, with blind agents (open since Round 10).
 3. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 4. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 56 (owner's request, then the unattended loop): reflexes, sight through the compositor, and hands-on use
+
+PR #11. The owner asked for a real-time perception stream rather than screenshot tools. Each item here was found by
+driving a real browser through the Retinat MCP tools, or measured that way. Hands-on notes and recordings are in
+`docs/hands-on/2026-10-12/` and `docs/hands-on/2026-10-13/`.
+
+**Built:**
+- **Reflexes** (`e319fab`, `a2d19a5`, `67f13b1`, `a3ff316`): the agent writes rules once; the page evaluates them
+  every animation frame against what it draws and hears, and real input goes out on their edges. The agent sleeps in
+  `retinat_wait` until a rule notifies. `see.locate` and `see.changed` read a canvas, a video or one region (`in`);
+  `see.level` and `see.onset` hear the playing media. New rules start clean.
+- **Compositor sight** (`20f32d0`, `5bac6fd`): a cross-origin video without CORS is watched from the compositor at
+  6 fps. Taint is re-tested for each source, so a player switching quality stays seen.
+- **A TLS-intercepting proxy's CA is learned** from the chain the browser refused (`39d5d1f`). It is learned only if
+  the environment's bundle trusts it, it is a CA, it is not a public root, and its key verifiably signed that chain.
+- **`retinat_record`** and a recorder that keeps time (`d1f027d`). Recording no longer slows anything (`63c2d52`):
+  frames are paced, sent as JPEG and decoded off the event loop.
+- **Shutdown** (`a2d19a5`, `b669d69`): a stopped MCP server closes its browser, bridge and Tor, and a signalled one
+  exits even while its client holds stdin.
+- **What the eyes report**:
+  - the page's own text as it loads is one line (`afea835`..`de9a228`);
+  - ticking readouts are folded (`2885693`, `6eb147c`);
+  - a film is named by its page or its player dialog, not its badges (`c0817da`, `ed8387c`);
+  - `find` matches control names (`a2d19a5`);
+  - a look during a recording costs what a look costs (`2516ff5`).
+
+**Measured, not estimated:**
+- **Reflex decision to input, on the page's clock:**
+  - p50 1.6 ms, p95 2.2 ms in a canvas game (tests);
+  - p50 1.6 ms, p95 2.1 ms live on the T-Rex runner;
+  - while recording, p50 1.8 ms, p95 22 ms in the test (it was 58 / 96 ms before `63c2d52`).
+- **Region reads:** a runner whose player, ground and obstacles share one grey passes 6 obstacles with no hit; the
+  control (nobody at the keys) hits 3 or more.
+- **The Commons film through the compositor:** 24 s, 1 item, 4 correct keyframes, ~870 tokens.
+- **A look:** 640x360, ~332 tokens, with or without a recording (it was 1920x1080 PNG, ~2,724 tokens, during one).
+- **Shutdown:** a SIGTERM'd Retinat server exits in 0.2 s with all 9 of its browser processes. Before `b669d69` it
+  hung indefinitely.
+
+**Not reproduced, not fixed:**
+- Twice, with a recording running, a look showed the T-Rex start screen after the rules had seen the game start.
+  - A reload test passes on every variant tried, so it stays as a guard (`9a3d6a1`).
+  - A freshness check keyed on first paint fixed nothing I could show failing, so it was not kept.
+- In the same runs the game froze in mid-air at score 49:
+  - its frame loop was alive;
+  - it had focus;
+  - its console was empty;
+  - Space did nothing.
+
+  Unexplained; possibly this copy of the game.
+
+**Mistakes of mine worth not repeating:**
+- `pkill -f` patterns matched my own shell.
+- A test page that changed at 600 ms raced a look that waits 300 ms to settle, and I chased that race as a
+  browser bug for several runs. Give a page's change a margin longer than the look takes.
+- A reflex's p50 over two actions, one of them sent during page load, is noise, not a measurement.
+
+**Research, this round** (sources read through search summaries, not full papers):
+- [VideoGameBench](https://arxiv.org/pdf/2505.18134) (2025): a VLM's response latency is the main reason it fails
+  real-time games. Its authors added a paused "Lite" mode to separate reasoning from reaction.
+- [GameSense](https://preview.aclanthology.org/ingestion-acl-25/2025.acl-long.643.pdf) (ACL 2025): the VLM should
+  not drive reactive actions directly. It writes task-specific modules that do. That is the shape of the reflex rules
+  here.
+- [The Latent Bridge](https://www.emergentmind.com/papers/2606.24470) (2026): about 1.5 s per reasoning VLM step
+  against a 15 Hz control loop.
+- [Reflex](https://huggingface.co/papers/2607.14695) (robotics, 2026): reports 82-110 ms reaction latencies, per a
+  blog summary. The reflexes here decide and deliver input in ~2 ms because the decision is a rule, not a model.
+- **Fades.** [TransNet V2](https://arxiv.org/pdf/2008.04838) is still the reference shot detector. A light,
+  model-free option for gradual transitions is twin-comparison: accumulate frame differences over a window, and
+  call a transition when the sum crosses the cut threshold while no single frame does. That fits the 16x16 luma
+  frames the retina already sends.
+
+**Next, in order:**
+1. `find`'s crop of a large match: cap it (~665 tokens for an 800x450 player, seen twice).
+2. A reflex that reads motion: an object's velocity from two `locate`s a few frames apart, so rules need not guess a
+   game's speed from the frame count.
+3. Reflexes on cross-origin video: the compositor path is Python-side at 6 fps; per-frame reads need a page-side
+   source.
+4. A fade as a shot change (the Commons title card fades to the clouds as one shot).
+5. Carried over: confine the AI's page script to the page's own world (Round 54); the A/B test of sheet vs recall vs
+   journal with blind agents (Round 10).
