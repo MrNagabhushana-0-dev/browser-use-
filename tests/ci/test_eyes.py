@@ -1545,6 +1545,27 @@ LOOKALIKE_PAGE = (
 )
 
 
+def test_a_scan_sheet_too_small_for_the_page_spreads_over_it_from_the_top():
+	"""Found on Wikipedia (a 12-screen list, and a 61-screen one in two calls): six keyframes can show only half of a
+	12-screen page, and all six were from its bottom half (4.9 to 10.9 screens down), so the title and the start of the
+	table were on none. Of frames that add as much, the later one was kept, which fills the sheet from the bottom up.
+	The sheet now begins at the top and spreads over the page; of two frames at one place the later is still kept."""
+	from browser_use.eyes.page import PageFrame, choose_page_frames
+
+	vh = 1000.0
+	frames = [PageFrame(i * 0.5, i * 0.8 * vh, b'') for i in range(15)]  # a reader's steps down a 12-screen page
+	frames.insert(1, PageFrame(0.2, 0.0, b''))  # a second frame of the top: the later of the two is kept
+	chosen, shown = choose_page_frames(frames, [], 6, vh, 12 * vh)
+	ys = sorted(frames[i].scroll_y / vh for i in chosen)
+	assert ys[0] == 0 and 1 in chosen, ys
+	assert ys[-1] >= 10.4, ys  # the end of the page
+	assert max(b - a for a, b in zip(ys, ys[1:])) <= 3.3, ys  # no stretch of the page left far from every frame
+	assert shown >= 0.45, shown
+	# A page the frames can cover is still covered
+	chosen, shown = choose_page_frames(frames[:5], [], 6, vh, 3.4 * vh)
+	assert shown >= 0.99, shown
+
+
 async def test_a_scan_sheet_shows_the_whole_page_not_two_frames_of_its_top(eyes, session, site):
 	"""Found hands-on on BBC News: a scan of a 4.6-screen front page chose frames 0.0, 0.1, 1.5, 1.9, 2.2 and 3.6
 	screens down. Two were nearly the same picture, and 1.1-1.5 and 3.2-3.6 screens down were on no frame. Frames

@@ -105,8 +105,10 @@ def choose_page_frames(
 	A scan knows where each frame was scrolled, so frames are first chosen for the page height they add, the way a
 	reader would page through it (found on BBC News: chosen by how alike they look, as for a film, two frames 0.1
 	screens apart were both kept while strips of the page were on none; white pages of headlines all look alike at
-	16x16). Of two frames that add as much, the later is kept: lazy images have had longer to load. Frames left over
-	go to what differs most from those chosen, which is what moves on its own (a canvas, an animation)."""
+	16x16). Of frames that add as much, the one farthest from those chosen is taken, beginning at the top: a sheet too
+	small for the page spreads over it (found on Wikipedia: six frames of a 12-screen list were all of its bottom
+	half, the title on none). Of two at one place the later is kept: lazy images have had longer to load. Frames left
+	over go to what differs most from those chosen, which is what moves on its own (a canvas, an animation)."""
 	if not frames or k <= 0 or viewport_h <= 0:
 		return [], 0.0
 	page_h = max(page_h, max(f.scroll_y for f in frames) + viewport_h)
@@ -124,9 +126,16 @@ def choose_page_frames(
 		gains = [(added(i), i) for i in range(len(frames)) if i not in chosen]
 		if not gains:
 			break
-		gain, best = max(gains)  # ties: the later frame
+		gain = max(gains)[0]
 		if gain < 0.02 * viewport_h:
 			break
+
+		def spread(i: int) -> tuple[int, int]:
+			# how far from every frame chosen (the first: how near the top); then the later frame of two at one place
+			far = min((abs(frames[i].scroll_y - frames[j].scroll_y) for j in chosen), default=-frames[i].scroll_y)
+			return round(far), i
+
+		best = max((i for g, i in gains if g >= gain - 0.02 * viewport_h), key=spread)
 		chosen.append(best)
 		lo, hi = frames[best].scroll_y, min(frames[best].scroll_y + viewport_h, page_h)
 		for a, b in sorted(spans):  # keep only the new part, so spans stay disjoint
