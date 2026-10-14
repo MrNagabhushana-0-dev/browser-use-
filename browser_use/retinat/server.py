@@ -543,6 +543,7 @@ def _browser_tools() -> list['types.Tool']:
 				'just ahead of a runner) -> {x, y, n} '
 				'viewport px; see.track([r,g,b], {...}) -> the same plus vx, vy in px per second; '
 				'see.changed({from, in}) -> share of the picture changed since the last frame; '
+				'see.mean({from, in}) -> average colour {r, g, b, n} of a region (for what has no fixed colour); '
 				'see.level() -> loudness dB of the playing media; see.onset(jumpDb) -> true as a sound starts; '
 				'see.el(css) -> {x, y, w, h, cx, cy}; see.text(css); see.t; see.frame; see.memory. '
 				'action=install replaces the rules; clear stops them and lets go of held keys; status gives counts and '

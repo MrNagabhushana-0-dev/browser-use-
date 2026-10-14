@@ -656,3 +656,37 @@ async def test_rules_can_ask_for_a_sharper_screen_to_read_small_things(session):
 		await reflexes.clear()
 		server.clear()
 		server.stop()
+
+
+async def test_a_rule_reads_the_average_colour_of_a_region(session):
+	"""Found racing in MR Racer on Poki: the road's colour shifts with the game's tint and light, so no fixed colour
+	tells road from traffic. A rule can now read a region's average colour, the road beside the car, and look for what
+	differs from it ahead: see.mean({from, in}) gives {r, g, b, n}."""
+	server = HTTPServer()
+	server.start()
+	server.expect_request('/patches').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#fff">'
+		'<div style="position:fixed;left:100px;top:100px;width:200px;height:120px;background:rgb(30,140,200)"></div>'
+		'<div style="position:fixed;left:400px;top:100px;width:200px;height:120px;background:rgb(220,90,40)"></div>'
+		'</body>',
+		content_type='text/html',
+	)
+	try:
+		await session.navigate_to(server.url_for('/patches'))
+		reflexes = Reflexes(session)
+		near = '(m, c) => m && Math.abs(m.r - c[0]) + Math.abs(m.g - c[1]) + Math.abs(m.b - c[2]) < 12 && m.n > 50'
+		await reflexes.install(
+			[
+				{
+					'when': f"({near})(see.mean({{from: 'screen', in: [120, 120, 160, 80]}}), [30, 140, 200]) && "
+					f"({near})(see.mean({{from: 'screen', in: [420, 120, 160, 80]}}), [220, 90, 40])",
+					'notify': 'both patches read',
+				}
+			]
+		)
+		event = await reflexes.wait(timeout=8)
+		assert event is not None and event.label == 'both patches read', reflexes.stats()
+	finally:
+		await reflexes.clear()
+		server.clear()
+		server.stop()

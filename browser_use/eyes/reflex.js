@@ -13,6 +13,8 @@
 //                                        A source the page may not read (a cross-origin video without CORS, a tainted
 //                                        canvas) is read from the screen instead, within its box on screen
 //   see.changed({from, in})              share (0-1) of the picture (or of that region) changed since the last frame
+//   see.mean({from, in})                 average colour {r, g, b, n} of the picture or of that region, e.g. the road
+//                                        beside a car, to look for what differs from it ahead
 //   see.track([r,g,b], {tol, from, in})  locate() plus its velocity {vx, vy} in viewport px per second, over the last
 //                                        few frames it was seen: where a ball will be, not only where it is
 //   see.level(), see.onset(jumpDb)       loudness (dB) of the playing media; true on the frame a sound starts
@@ -242,6 +244,34 @@
 			}
 			memo.set(key, found);
 			return found;
+		},
+		// The average colour of the picture or of a region: {r, g, b, n}, or null. For what has no fixed colour: the
+		// road beside a car changes with a game's tint and light, and what differs from it ahead is the traffic.
+		mean(opts = {}) {
+			const key = 'mean' + JSON.stringify(opts);
+			if (memo.has(key)) return memo.get(key);
+			const px = pixelsOf(sourceOf(opts), opts.from || opts.canvas || 'canvas');
+			let out = null;
+			if (px) {
+				const { data, W, H, rect, clip } = px;
+				const [x0, y0, x1, y1] = boxOf(opts, W, H, rect, clip);
+				let r = 0;
+				let g = 0;
+				let b = 0;
+				let n = 0;
+				for (let y = y0; y < Math.min(H, y1); y++) {
+					for (let x = x0; x < Math.min(W, x1); x++) {
+						const i = (y * W + x) * 4;
+						r += data[i];
+						g += data[i + 1];
+						b += data[i + 2];
+						n++;
+					}
+				}
+				if (n) out = { r: r / n, g: g / n, b: b / n, n };
+			}
+			memo.set(key, out);
+			return out;
 		},
 		// Where a colour is and how fast it moves (px per second), from its last few sightings. Not seen this frame:
 		// null, and its history starts over.
