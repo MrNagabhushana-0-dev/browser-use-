@@ -3550,6 +3550,8 @@ labels are drawn into image tiles.
   per batch of changes.
 - **Live:** the 429s are now said. The rows fix was not seen live, since every suggestion request was refused by then.
 
+**Full `tests/ci` on `8197f1a`: 1,728 passed, 30 skipped, 0 failed** (38m22s).
+
 **Next, in order:**
 1. **`retinat_scroll` live** from a fresh session (Python docs, `to: "wait_for"`).
 2. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
