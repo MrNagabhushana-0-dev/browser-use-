@@ -3539,6 +3539,8 @@ labels are drawn into image tiles.
   site, and an http link from an https page is checked at its https address, with one low finding for the plain-http
   links. Live: 2 pages, and one real 404, confirmed with curl.
 
+**Full `tests/ci` on `fb6530d`: 1,726 passed, 30 skipped, 0 failed** (37m22s).
+
 **Next, in order:**
 1. **`retinat_scroll` live** from a fresh session (Python docs, `to: "wait_for"`).
 2. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
