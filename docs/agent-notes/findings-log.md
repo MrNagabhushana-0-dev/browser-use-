@@ -3613,6 +3613,8 @@ Fixed, test first, each found by the games:
 **Unexplained:** Retinat's Chrome died once at 08:34 while rendering the game at 1905x1080. There was no log, and it
 recovered on its own.
 
+**Full `tests/ci` on `a5e10a0`: 1,737 passed, 30 skipped, 0 failed** (38m50s), first run.
+
 **Next, in order:**
 1. **Games, continued:**
    - a rule for Subway Surfers' Left/Right tutorial step (read the prompt's arrow), then a run with rules only;
