@@ -265,7 +265,8 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
 - `action=status` gives counts and latency, and, when rules read the screen, how many pictures they got, how old a
   picture was when they read it (`screen_ms_p50`), where the pictures came from (`screen_source`: screencast or
   captures). On a page drawn without a GPU (a WebGL game)
-  the pictures are slower because the browser is. `action=clear` stops the rules and releases held keys.
+  the pictures are slower because the browser is: Subway Surfers on Poki drew 3 frames a second at 1905x1080, with
+  pictures 600 ms old, and 8 a second, 136 ms, with the profile's `viewport` set to 960x540 in the browser-use config. `action=clear` stops the rules and releases held keys.
 - **Look after `retinat_wait` returns, not alongside it.** A client may send both at once, and the look then runs
   straight away, before what you are waiting for. Such a look says so ("asked while a retinat_wait was still
   waiting").

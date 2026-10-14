@@ -205,3 +205,88 @@ A container restart reconnected the MCP client, which then listed `retinat_scrol
   "C", … "Z")".
 - When changes must still be cut, pages, items, sounds and failed requests are kept before texts, and what was left
   out is said by kind: "(7 earlier text(s) not shown)".
+
+## 08:27: Poki games, played by reflex rules (the owner's ask: Subway Surfers, Temple Run, a car race)
+
+The owner asked for games instead of websites, as a test of real-time sight. All of it ran through Retinat's own
+tools: `retinat_open`, `retinat_click`, `retinat_key`, `retinat_reflex` (rules over `{from: 'screen'}`, since the
+games run in a frame from another origin), `retinat_wait` and `retinat_record`. No page script was injected and no
+game state was read: the rules see pixels and press arrow keys.
+
+**What this machine can do.** There is no GPU, so Chrome draws WebGL on the CPU (SwiftShader). At the 1905x1080
+viewport, Subway Surfers drew **3 frames a second**, the GPU process used 280% CPU and pictures reached the rules
+**600 ms old**. I set the browser-use profile's viewport to 960x540 (config only, no code), which gave **8 fps and
+136 ms**. With a recording running alongside, it was 6-8 fps and **270-330 ms** (p50, `reflex status`). Temple Run 2
+drew ~16 fps with pictures **91 ms** old. A person playing at 3-8 fps would struggle too.
+
+### Subway Surfers (SYBO, on Poki)
+
+| Version | What the rule looked at | Score | What went wrong |
+|---|---|---|---|
+| none | no input | 42-43 | ran into the first barrier |
+| v1 | ground colour in boxes per lane | 12 | geometry taken from the crash camera: the "near" boxes sat on the runner's own body, so it dodged all the time (`subway-surfers-rules-v1-aimed-at-the-runner.mp4`) |
+| v2 | boxes recalibrated on a running frame; ratios to box size | 43 | dodged the oncoming trains (1 → 40), then the barrier: its near count fell 3 frames before impact, too late at 330 ms (`subway-surfers-rules-v2-dodge-trains-miss-barrier.mp4`) |
+| v3 | far box counts as danger too; jump when no side lane is clear | 43 | the score froze at 43 because the game's **tutorial** rewinds a step done wrong; a 900 ms jump cooldown blocked the press inside the prompt |
+| v4 | 400 ms cooldowns | **206** | passed the jump step, then looped on "Press Arrow Key Down" (an overhead barrier) |
+| v5 | + red in the runner's column above y=190 → roll | 158+ | **passed the roll step** (stuck at 97 for a minute before; `subway-surfers-rules-v5-roll-passes-the-tutorial.mp4`), then looped on the Left/Right step |
+
+- Best run: **323** ("New High Score!"). To be exact: the rules played it to 206, and the last stretch ran after I had
+  cleared them, with no input.
+- I did the tutorial's Left/Right step by hand with `retinat_key`: the game waits at a prompt. It went to 318.
+- v5's rule is `subway-surfers-rule-v5.js`.
+- How the rules were tuned: frames from the recording replayed offline through the same boxes (numpy, scratch
+  scripts), against what the live rule had done.
+  - The counts were clean. The right lane's far count fell 64 → 5 as a train came.
+  - The overhead sign scored ~100 red pixels in the column, low barriers 20-40, and three other frames in 420 scored
+    over 60.
+
+**Not done:**
+- A rule for the Left/Right tutorial step. The prompt's arrow shows the direction; I did not get to reading it.
+- Coins.
+- A run past the tutorial with rules only.
+
+The tutorial comes back on every run: the game does not seem to keep its progress in this profile.
+
+### Temple Run 2 (Imangi, on Poki)
+
+- No input: it ran the opening straight for over a minute.
+- The tutorial shows an on-screen arrow pad and **lights the key it wants**: a solid grey face (211,207,210), where the
+  others let the path show through. A rule pressing whichever key is lit never fired.
+- Replayed offline, the lit ▲ gave 23-25 grey pixels (threshold 20). Live, fewer than 10 even at tol 60.
+- That led to a Retinat bug (below).
+- I pressed ArrowUp by hand at the first prompt and the jump cleared it. The tutorial then looped at an arch with
+  hanging ropes, a slide (`temple-run-2-tutorial-pad-and-arch.mp4`).
+- No score yet.
+
+### A car racing game
+
+Not started this round.
+
+### Bugs the games found, fixed test first
+
+1. **Every look on a page with a scrollbar was ~1% out.**
+   - On Poki, `retinat_find` put "Temple Run 2" at (329, 400); the look's pixels times its factor gave (322, 394).
+   - The cause is in `browser/capture.py`. A clipped capture is taken as a whole-viewport capture and cropped (to keep
+     clips out of the screencast). The crop took the device scale as image width / client width. The whole capture
+     includes the scrollbar (1920 against 1905), so the crop took in the scrollbar and squeezed it into the picture.
+   - Now it uses `visualViewport` (device px) over `cssVisualViewport`.
+   - Test: a tall page with a fixed marker at the bottom right, found in the look image and scaled back. It was 18 px
+     off, now within 4.
+2. **Reflex screen pictures were mapped onto the window's width whatever they spanned.**
+   - Screencast frames take in the scrollbar; captures, after fix 1, do not.
+   - Each picture now carries its CSS size: the screencast's `deviceWidth`/`deviceHeight`, or the clip.
+   - Test: a still page and an animated one, each with a scrollbar and a red square near the right edge; the rule must
+     find it within 5 px.
+3. **`retinat_wait(timeout=60)` came back as an error, "timed out after 60s".** MCP clients give a call 60 s.
+   - `retinat_scan` had failed that way twice in this session.
+   - Waits now go to 50 s and watches to 45 s, `eyes_watch`/`eyes_browse` included; the wait says to call again.
+   - A test checks every tool's duration maxima.
+   - Not fixed: scan, browse and explore have no overall deadline. A long one can still run past 60 s.
+4. **`retinat_requests` hid what its limit left out.**
+   - On Poki, 594 of 624 requests were analytics beacons; the list said "30 requests after #0" and offered since=624
+     next, so the game's own frame could never be listed.
+   - It now says "The newest 30 of 624 … (594 earlier not shown)", and `pattern=` (a regular expression on the URL)
+     found the game frame at `*.gdn.poki.com` live. The console's log gets the same header.
+
+**Unexplained:** at 08:34 Retinat's Chrome died while Subway Surfers was rendering at 1905x1080, as a test run
+started. The test profiles are separate, nothing in the log says why, and Retinat came back on about:blank by itself.

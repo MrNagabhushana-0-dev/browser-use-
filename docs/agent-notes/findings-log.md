@@ -3581,23 +3581,61 @@ than the 1-2 hops that fix covers. It passed 5 of 5 alone, and nothing this roun
 **Second run on the same commit: 1,731 passed, 30 skipped, 0 failed** (39m08s). The beep-count intermittent stays open.
 (A first full run on `0386900` was cut at 48%, with no failures, by a container restart.)
 
+**Games, at the owner's ask** (Poki: Subway Surfers, Temple Run 2; details and clips in
+`docs/hands-on/2026-10-14/notes.md`).
+
+Measured on this GPU-less machine (WebGL drawn on the CPU):
+
+| Game, viewport | Frames a second | Age of the rules' pictures (p50) |
+|---|---|---|
+| Subway Surfers, 1905x1080 | 3 | 600 ms |
+| Subway Surfers, 960x540 | 8 | 136 ms (270-330 ms while recording) |
+| Temple Run 2, 960x540 | ~16 | 91 ms |
+
+Subway Surfers:
+- With no input, the run scored 42-43.
+- Pixel rules (ground colour per lane, near and far; red in the runner's column for an overhead barrier) dodged
+  oncoming trains and went through the tutorial's jump and roll steps. That is 206 with rules alone.
+- Best score 323. That run included a stretch with no rules; a hand-done tutorial run reached 318.
+- The tutorial repeats every run and rewinds a step done wrong. Its Left/Right step needs a rule that reads the
+  prompt's arrow (not done).
+
+Temple Run 2: the tutorial lights the key it wants on an on-screen pad. The rule for that missed live, which found
+bug 1 below. No score yet. A car racing game was not started.
+
+Fixed, test first, each found by the games:
+1. **Looks on a page with a scrollbar were ~1% out (~15 px at the far edge).** The crop in `browser/capture.py` took
+   the device scale from a capture that includes the scrollbar. Now it uses `visualViewport` over `cssVisualViewport`.
+2. **Reflex screen pictures now say the CSS size they span.** Screencast frames include the scrollbar; captures do not.
+3. **No tool offers a wait past what a client waits for a call (60 s).** Wait 50 s; watch, browse and eyes 45 s.
+4. **`retinat_requests` and the console say what a limit left out**, and requests filter by URL `pattern`.
+
+**Unexplained:** Retinat's Chrome died once at 08:34 while rendering the game at 1905x1080. There was no log, and it
+recovered on its own.
+
 **Next, in order:**
-1. **From the owner's links:**
+1. **Games, continued:**
+   - a rule for Subway Surfers' Left/Right tutorial step (read the prompt's arrow), then a run with rules only;
+   - Temple Run 2: the pad rule with the corrected geometry, then turns at corners;
+   - a car racing game.
+2. **An overall deadline for scan, browse and explore** under the client's 60 s: return what was done and how to go on.
+3. **From the owner's links:**
    - a HAR export of what the eyes saw on the network (`retinat_requests`);
    - hands-on with the Puter app demos (canvas-heavy web apps).
-2. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
+4. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
    Look at feeding pictures off the main thread (a worker, or a smaller picture of only the box a rule reads).
-3. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
-4. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
+5. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+6. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
    the Bunny, 0.926 -> 0.941 on Steel) is nearly free; measure the screencast's CPU first.
-5. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
+7. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
    or CORS WebM/VP9 source.
-6. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
-7. **Intermittents to watch in full runs:** the beep-count test (failed again on `bfb2530`: a dropout longer than
-   the 1-2 hops the Round 50 fix covers, most likely; keep the hops of a failing run to check), the play-arena title screen (failed again in one of two runs on
-   `89df927`; 10 of 10 alone or under load), the feed test (failed in the `c09d801` run; with every core busy, 2 of 30
-   flicks overshot, and 1 of those 2 was not brought back in three flicks), the region-runner test, and the reflex
-   speed test.
-8. **Carried over:**
-   - confine the AI's page script to the page's own world (Round 54);
-   - the A/B test of sheet vs recall vs journal with blind agents (Round 10).
+8. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
+9. **Intermittents to watch in full runs:**
+   - the beep-count test (a dropout longer than the 1-2 hops of the Round 50 fix, most likely);
+   - the play-arena title screen;
+   - the feed test;
+   - the region-runner test;
+   - the reflex speed test.
+10. **Carried over:**
+    - confine the AI's page script to the page's own world (Round 54);
+    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).
