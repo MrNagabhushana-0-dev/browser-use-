@@ -191,3 +191,17 @@ A container restart reconnected the MCP client, which then listed `retinat_scrol
   It had taken 13 PageDown calls.
 - `to: "wait_for", nth: 4` brought the fourth match to y 540.
 - `screens: -2` moved 2.0 screens up: "12.6 screens from the top of 24.9".
+
+## 08:00: Puter's spreadsheet (from the owner's links)
+
+`spreadsheet.puter.com`, an Excel-like grid. Typed "Revenue", Tab, "1200", Enter into A1:B1
+(`puter-spreadsheet-changes-flooded-by-labels.mp4`).
+- `retinat_changes` listed the grid's column letters, "A", "B", "C" … "T", one line each, under "(41 earlier
+  change(s) not shown)". Whatever it said of the cells was cut off.
+- Asking again with a larger limit gave nothing: the hidden changes had been marked read.
+
+**Fixed, test first** (a journal with the same burst):
+- Five or more short labels (3 characters or fewer) within one second are one line: "26 short labels ("A", "B",
+  "C", … "Z")".
+- When changes must still be cut, pages, items, sounds and failed requests are kept before texts, and what was left
+  out is said by kind: "(7 earlier text(s) not shown)".

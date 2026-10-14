@@ -713,3 +713,35 @@ async def test_a_look_asked_while_a_wait_is_pending_says_so(retinat, site):
 	late = _text(await _call(retinat, 'retinat_look', {}))
 	assert 'still waiting' in early and 'retinat_wait' in early, early
 	assert 'still waiting' not in late, late
+
+
+def test_changes_folds_a_burst_of_labels_and_keeps_what_matters_when_cut(tmp_path):
+	"""Found hands-on on Puter's spreadsheet: after typing two cells, changes listed the grid's column letters, "A",
+	"B", "C" ... "T", one line each, and "(41 earlier change(s) not shown)": what the cells said was cut off, and could
+	not be asked for again. A burst of short labels is one line now; when changes must still be cut, pages, requests
+	and items are kept before texts, and what was left out is said by kind."""
+	import json
+	import time
+
+	from browser_use.eyes.hook import new_entries
+
+	now = time.time()
+	journal = tmp_path / 'journal.jsonl'
+	entries = [{'at': now, 'kind': 'page', 'text': 'opened https://sheet.example/'}]
+	entries += [{'at': now + 1, 'kind': 'text', 'text': 'text appeared: "Revenue"'}]
+	entries += [{'at': now + 1, 'kind': 'text', 'text': 'text appeared: "1200"'}]
+	entries += [{'at': now + 2, 'kind': 'text', 'text': f'text appeared: "{c}"'} for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ']
+	entries += [{'at': now + 3, 'kind': 'request', 'text': 'a request the page made failed: 500 POST /save'}]
+	journal.write_text('\n'.join(json.dumps(e) for e in entries) + '\n')
+	lines = new_entries(tmp_path / 'now.json', limit=5, reader='test')
+	text = '\n'.join(lines)
+	assert 'Revenue' in text and '1200' in text and 'opened https://sheet.example/' in text and '500 POST /save' in text, text
+	assert 'text appeared: "A"\n' not in text + '\n' and '26 short labels' in text, text
+	assert 'not shown' not in text, f'everything fits once the labels are folded: {text}'
+
+	entries = [{'at': now + 10 + i, 'kind': 'text', 'text': f'text appeared: "Row {i} of the report"'} for i in range(10)]
+	entries.insert(0, {'at': now + 9, 'kind': 'page', 'text': 'opened https://other.example/'})
+	journal.write_text(journal.read_text() + '\n'.join(json.dumps(e) for e in entries) + '\n')
+	text = '\n'.join(new_entries(tmp_path / 'now.json', limit=4, reader='test'))
+	assert 'opened https://other.example/' in text, f'a page is kept before texts: {text}'
+	assert 'Row 9 of the report' in text and '7 earlier text(s) not shown' in text, text

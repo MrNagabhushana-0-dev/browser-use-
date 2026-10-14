@@ -74,18 +74,80 @@ def new_entries(path: Path | None = None, limit: int = MAX_ENTRIES, reader: str 
 		offset.write_text(str(len(lines)))
 	except Exception:
 		pass
-	out = []
-	for raw in fresh[-limit:]:
+	entries = []
+	for raw in fresh:
 		try:
-			e = json.loads(raw)
+			entries.append(json.loads(raw))
 		except Exception:
 			continue
+	entries = _fold_labels(entries)
+	kept = _keep(entries, limit)
+	out = []
+	for e in kept:
 		when = time.strftime('%H:%M:%S', time.localtime(float(e.get('at', 0))))
 		where = f' (item {e["vid"]} at {e["t"]:.1f}s)' if e.get('vid') and isinstance(e.get('t'), (int, float)) else ''
 		out.append(f'  {when} {e.get("text", "")}{where}')
-	if len(fresh) > limit:
-		out.insert(0, f'  ({len(fresh) - limit} earlier change(s) not shown)')
+	left = [e for e in entries if not any(e is k for k in kept)]
+	if left:
+		kinds: dict[str, int] = {}
+		for e in left:
+			kind = str(e.get('kind') or 'change')
+			kinds[kind] = kinds.get(kind, 0) + 1
+		said = ', '.join(f'{n} earlier {kind}(s)' for kind, n in kinds.items())
+		out.insert(0, f'  ({said} not shown)')
 	return out
+
+
+# A label this short, in a burst within one second, is part of something redrawn (a grid's column letters, a row of
+# numbers), not news one by one (found on Puter's spreadsheet: "A", "B", "C" ... one line each crowded out the cells)
+SHORT_LABEL = 3
+
+
+def _label(e: dict) -> str | None:
+	"""The text of a text-appeared entry, if it is a short label."""
+	text = str(e.get('text', ''))
+	if e.get('kind') != 'text' or not text.startswith('text appeared: "'):
+		return None
+	body = text[len('text appeared: "') :].split('"', 1)[0]
+	return body if 0 < len(body) <= SHORT_LABEL else None
+
+
+def _fold_labels(entries: list[dict]) -> list[dict]:
+	"""Runs of five or more short labels within one second become one entry."""
+	out: list[dict] = []
+	run: list[dict] = []
+
+	def flush() -> None:
+		if len(run) >= 5:
+			labels = [_label(e) for e in run]
+			shown = ', '.join(f'"{t}"' for t in labels[:3]) + f', … "{labels[-1]}"'
+			out.append({**run[-1], 'text': f'text appeared: {len(run)} short labels ({shown})'})
+		else:
+			out.extend(run)
+		run.clear()
+
+	for e in entries:
+		if _label(e) is not None and (not run or int(float(e.get('at', 0))) == int(float(run[0].get('at', 0)))):
+			run.append(e)
+			continue
+		flush()
+		if _label(e) is not None:
+			run.append(e)
+		else:
+			out.append(e)
+	flush()
+	return out
+
+
+def _keep(entries: list[dict], limit: int) -> list[dict]:
+	"""At most `limit` entries, in order: pages, items, sounds and requests before texts, then the newest texts."""
+	if len(entries) <= limit:
+		return entries
+	others = [e for e in entries if e.get('kind') != 'text'][-limit:]
+	room = limit - len(others)
+	texts = [e for e in entries if e.get('kind') == 'text'][-room:] if room > 0 else []
+	chosen = {id(e) for e in others + texts}
+	return [e for e in entries if id(e) in chosen]
 
 
 def main() -> int:
