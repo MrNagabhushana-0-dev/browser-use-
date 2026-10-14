@@ -3486,6 +3486,8 @@ and all three cuts found, and the recording was the page in 227 of 227 frames.
   - Test: 64% -> at least 95%, plus a guard test for the leftover rule.
   - Live: "showing 98% of the page height".
 
+**Full `tests/ci` on `3492b95`: 1,718 passed, 30 skipped, 0 failed** (36m34s).
+
 **Next, in order:**
 1. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
    Look at feeding pictures off the main thread (a worker, or a smaller picture of only the box a rule reads).
