@@ -290,3 +290,43 @@ Not started this round.
 
 **Unexplained:** at 08:34 Retinat's Chrome died while Subway Surfers was rendering at 1905x1080, as a test run
 started. The test profiles are separate, nothing in the log says why, and Retinat came back on about:blank by itself.
+
+## 09:55: Temple Run 2 again, with looks that line up and a sharper screen for the rules
+
+Retinat was restarted with the scrollbar fixes.
+- The look is now 640x366 with factor 1.48 and no scrollbar in it.
+- "Temple Run 2" at look (222, 272) times 1.48 is (329, 402). `retinat_find` says (329, 400).
+
+**The tutorial pad, read properly.**
+- The key the game wants is drawn **larger**. Its grey face was not the tell: over the fog every key looks grey.
+- Counting the arrow's yellow per key separates them: the lit ▼ had 1554 pixels in a 4x zoom, the others 52-260.
+- At the rules' 240 px screen, that is about 6 sample pixels against 1, too few to trust.
+- Separately, the yellow path behind the pad matched the old colour at tolerance 90, and the rule pressed keys on the
+  start screen. In one run that left the game frozen, with ▼ lit for 70 s and no key, swipe or S doing anything
+  (`temple-run-2-stuck-after-start-screen-presses.mp4`).
+- The rule now in use is `temple-run-2-pad-rule.js`:
+  - the arrow's own yellow (240, 200, 80) at tolerance 45, which the path (L1 distance 108) does not match;
+  - the largest count, at least twice the next one;
+  - the same key seen on 3 pictures in a row.
+
+**Built, test first: `screen_width` for a rule set** (`retinat_reflex`, `Reflexes.install`). The test is a 4x4 px dot.
+At 240 px the rules never see it; at 960 px they find it within 3 px of where it is. Measured live on Temple Run 2:
+
+| Width | Pictures (p50 age) | Pictures in the first ~18 s |
+|---|---|---|
+| 240 | 72-117 ms | (earlier runs) |
+| 480 | 160 ms | 50 |
+| 960 | 510 ms | 20 |
+
+**With 480 the rules got furthest so far** (`temple-run-2-pad-rule-480px-zipline-and-on.mp4`).
+- The jump, then the zipline under the rope arch (which I had taken for a failure), twice.
+- Both times the runner fell into the clouds at a gap after landing: ▲ lit once it was already falling.
+- On the third pass it cleared the gap, crossed a broken bridge and reached a second zipline.
+- No score read yet: the score panel is at the top right and was not read.
+
+**Not done:**
+- Temple Run's turns at corners outside the tutorial.
+- Reading the score.
+- A car racing game.
+- Subway Surfers' Left/Right step.
+- A feed that sends only the regions rules read, at full resolution. It would avoid the cost table above.

@@ -267,6 +267,10 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
   captures). On a page drawn without a GPU (a WebGL game)
   the pictures are slower because the browser is: Subway Surfers on Poki drew 3 frames a second at 1905x1080, with
   pictures 600 ms old, and 8 a second, 136 ms, with the profile's `viewport` set to 960x540 in the browser-use config. `action=clear` stops the rules and releases held keys.
+- **`screen_width`** (install): how wide the screen picture is, 240 by default. That sees a game's player and
+  obstacles, but a 30 px on-screen key is 7 of its pixels. Ask for 480 to read small things. Every picture is decoded
+  and handed over whole, so it costs: on Temple Run 2, 480 gave pictures 160 ms old (72-117 at 240), and 960 gave
+  510 ms.
 - **Look after `retinat_wait` returns, not alongside it.** A client may send both at once, and the look then runs
   straight away, before what you are waiting for. Such a look says so ("asked while a retinat_wait was still
   waiting").

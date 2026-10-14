@@ -3615,29 +3615,41 @@ recovered on its own.
 
 **Full `tests/ci` on `a5e10a0`: 1,737 passed, 30 skipped, 0 failed** (38m50s), first run.
 
+**09:55 round, Temple Run 2.**
+- Looks line up live after the scrollbar fix.
+- The tutorial pad's lit key is the enlarged one, read by its arrow's yellow, the largest count by 2x.
+- **`screen_width` for a rule set** (built, test first): measured 240 px → 72-117 ms pictures, 480 → 160 ms,
+  960 → 510 ms.
+- At 480 the rules took the runner over the jump and the zipline, and on the third pass past a gap and a broken
+  bridge.
+- No score read yet.
+
 **Next, in order:**
 1. **Games, continued:**
-   - a rule for Subway Surfers' Left/Right tutorial step (read the prompt's arrow), then a run with rules only;
-   - Temple Run 2: the pad rule with the corrected geometry, then turns at corners;
-   - a car racing game.
-2. **An overall deadline for scan, browse and explore** under the client's 60 s: return what was done and how to go on.
-3. **From the owner's links:**
+   - Temple Run 2: press as the key lights, not after it (the gap after the zipline); turns at corners; read the
+     score;
+   - a car racing game;
+   - a rule for Subway Surfers' Left/Right tutorial step (read the prompt's arrow), then a run with rules only.
+2. **A screen feed of only what the rules read.** Crops of their `in:` regions at full resolution, next to the 240 px
+   overview, instead of a whole wider picture (480 px costs 160 ms a picture, 960 px 510 ms).
+3. **An overall deadline for scan, browse and explore** under the client's 60 s: return what was done and how to go on.
+4. **From the owner's links:**
    - a HAR export of what the eyes saw on the network (`retinat_requests`);
    - hands-on with the Puter app demos (canvas-heavy web apps).
-4. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
+5. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
    Look at feeding pictures off the main thread (a worker, or a smaller picture of only the box a rule reads).
-5. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
-6. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
+6. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+7. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
    the Bunny, 0.926 -> 0.941 on Steel) is nearly free; measure the screencast's CPU first.
-7. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
+8. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
    or CORS WebM/VP9 source.
-8. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
-9. **Intermittents to watch in full runs:**
+9. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
+10. **Intermittents to watch in full runs:**
    - the beep-count test (a dropout longer than the 1-2 hops of the Round 50 fix, most likely);
    - the play-arena title screen;
    - the feed test;
    - the region-runner test;
    - the reflex speed test.
-10. **Carried over:**
+11. **Carried over:**
     - confine the AI's page script to the page's own world (Round 54);
     - the A/B test of sheet vs recall vs journal with blind agents (Round 10).
