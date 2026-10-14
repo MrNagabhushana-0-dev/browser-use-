@@ -76,3 +76,30 @@ def stop_line(deadline: Deadline | None, why: str, covered: str, resume: dict[st
 	if resume:
 		line += ' To go on, call again with ' + ', '.join(f'{k}={json.dumps(v)}' for k, v in resume.items()) + '.'
 	return line
+
+
+# What a browse sets aside before it has measured the call itself (seconds); it grows them to what it measures
+BROWSE_FINAL_RESERVE_S = 3.0  # after the last item: pause the feed and build the percept
+BROWSE_NEXT_EST_S = 3.0  # a flick to the next item, the check that it moved, a correction
+BROWSE_OVERHEAD_EST_S = 1.5  # a watch's own work around the watching
+# After a watch's last frame: pause what plays and build the percept (keyframes come out of the page)
+WATCH_TAIL_S = 3.0
+# How much faster than real time the speech model transcribes, at least: an estimate, not measured here
+ASR_REALTIME_X = 4.0
+
+
+def browse_cap(
+	left: float,
+	more: bool,
+	max_s: float,
+	min_s: float,
+	final_reserve: float = BROWSE_FINAL_RESERVE_S,
+	next_est: float = BROWSE_NEXT_EST_S,
+	overhead_est: float = BROWSE_OVERHEAD_EST_S,
+) -> float | None:
+	"""How long the next item of a browse may be watched with `left` seconds of the call to go, or None when it cannot
+	be watched for `min_s` and a little: after it come a watch's own work, a flick on when there are `more` items, and
+	the end of the browse."""
+	assert max_s > 0 and min_s >= 0, (max_s, min_s)
+	cap = min(max_s, left - final_reserve - overhead_est - (next_est if more else 0.0))
+	return cap if cap >= min_s + 0.5 else None

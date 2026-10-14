@@ -846,9 +846,10 @@ def test_every_tool_that_can_run_long_is_under_the_call_budget():
 
 
 async def test_a_call_keeps_to_its_budget_by_itself_or_the_backstop_stops_it(tmp_path, monkeypatch, site):
-	"""A call held to a 1 s budget. A wait ends with the budget by itself (after a cold browser launch a 50 s wait went
-	past the client's 60 s). A tool that does not yet keep to the budget (watch, until it takes a deadline) is stopped
-	half a second past it and says so, instead of the client giving up on it; the next call works."""
+	"""A call held to a 1 s budget. A wait and a watch end with the budget by themselves (after a cold browser launch a
+	50 s wait went past the client's 60 s). A tool that does not yet keep to the budget (explore, until it takes a
+	deadline) is stopped half a second past it and says so, instead of the client giving up on it; the next call
+	works."""
 	import time
 
 	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
@@ -870,11 +871,41 @@ async def test_a_call_keeps_to_its_budget_by_itself_or_the_backstop_stops_it(tmp
 		assert not waited.is_error and 'Nothing notified' in _text(waited), _text(waited)
 		assert took < 2, f'the wait took {took:.1f}s with a 1 s budget'
 		started = time.monotonic()
-		stopped = await _call(server, 'retinat_watch', {'seconds': 10})
+		watched = await _call(server, 'retinat_watch', {'seconds': 10})
+		took = time.monotonic() - started
+		assert not watched.is_error and 'out of time' in _text(watched), _text(watched)
+		assert took < 2.5, f'the watch took {took:.1f}s with a 1 s budget'
+		started = time.monotonic()
+		stopped = await _call(server, 'retinat_explore', {'url': site.url_for('/spin'), 'max_pages': 3})
 		took = time.monotonic() - started
 		assert stopped.is_error and 'past its 1s budget' in _text(stopped), _text(stopped)
-		assert took < 3, f'the watch took {took:.1f}s'
+		assert took < 3, f'the explore took {took:.1f}s'
 		after = await _call(server, 'retinat_look', {})
 		assert not after.is_error, _text(after)
+	finally:
+		await server._close_all_sessions()
+
+
+async def test_a_browse_through_mcp_keeps_to_the_call_budget(tmp_path, monkeypatch, site):
+	"""retinat_browse allows 30 items of up to 45 s, far past the client's 60 s, and is held to its call's budget:
+	given too little time for even one item, it says so at once with how to go on, instead of starting one."""
+	import time
+
+	from browser_use.eyes.views import BROWSE_FINAL_RESERVE_S, BROWSE_NEXT_EST_S, BROWSE_OVERHEAD_EST_S
+
+	site.expect_request('/plain').respond_with_data('<!doctype html><title>Plain</title><body>plain', content_type='text/html')
+	budget = BROWSE_FINAL_RESERVE_S + BROWSE_OVERHEAD_EST_S + BROWSE_NEXT_EST_S + 1.0
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(call_budget_s=budget)
+	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	try:
+		await _call(server, 'retinat_open', {'url': site.url_for('/plain')})
+		await _call(server, 'retinat_look', {})  # the eyes open here, not in the timed call
+		started = time.monotonic()
+		r = await _call(server, 'retinat_browse', {'items': 5, 'max_seconds': 10, 'min_seconds': 2})
+		took = time.monotonic() - started
+		assert not r.is_error, _text(r)
+		assert took < 4, f'took {took:.1f}s'
+		assert 'out of time' in _text(r) and 'call again with items=5' in _text(r), _text(r)
 	finally:
 		await server._close_all_sessions()

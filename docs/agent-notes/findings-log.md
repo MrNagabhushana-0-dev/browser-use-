@@ -3673,6 +3673,19 @@ about:blank) holds that profile.
 The full `tests/ci` was **not** run on `bdd1d87`: the owner hit their usage limit and asked for everything to be
 handed off in a new PR (`docs/agent-notes/handoff-2026-10-14/README.md`).
 
+**16:42 round (after the handoff, PR #12).**
+- Applied the follow-up patch to the call budget (`2925247`): the wait keeps to the budget, a scan captures where no
+  frame came from, the archiver keeps out of a scan's way. Without the wait's clamp its test fails ("the wait took
+  10.0s with a 1 s budget").
+- **Full `tests/ci` on `2925247`: red, 1 failed, 1,745 passed, 30 skipped** (40m17s). The failure was
+  `test_screenrec.py::test_a_recording_is_finalized_into_a_playable_file`: asked for ~2 s, got 0.9 s.
+  - This file is not touched by the commit. The test failed the same way once on `aec0d20` (Round 56) and was
+    thought fixed in `409482f`; it is back, so that fix did not cover it.
+  - Alone it passed 5 of 5 straight after.
+  - Likely mechanism, not verified: `record_display` yields before ffmpeg begins grabbing (its comment says the
+    start does not wait), so under the suite's load ffmpeg's start-up ate ~1 s of the 2 s window.
+  - Pushed to PR #12 with this stated.
+
 **Next, in order:**
 1. **Games, continued:**
    - Temple Run 2: press as the key lights, not after it (the gap after the zipline); turns at corners; read the
@@ -3697,6 +3710,7 @@ handed off in a new PR (`docs/agent-notes/handoff-2026-10-14/README.md`).
    or CORS WebM/VP9 source.
 9. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
 10. **Intermittents to watch in full runs:**
+   - the screen-recorder length test (back on `2925247`; see the 16:42 round: wait for ffmpeg's grab to begin?);
    - the beep-count test (a dropout longer than the 1-2 hops of the Round 50 fix, most likely);
    - the play-arena title screen;
    - the feed test;

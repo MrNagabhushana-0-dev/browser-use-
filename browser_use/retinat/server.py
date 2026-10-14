@@ -317,7 +317,11 @@ def _browser_tools() -> list['types.Tool']:
 		),
 		types.Tool(
 			name='retinat_browse',
-			description='Scroll a short-video feed like a person: watch each item until nothing new happens, flick to the next with a real touch swipe (confirmed by sight), repeat. One sheet, a row per item.',
+			description=(
+				'Scroll a short-video feed like a person: watch each item until nothing new happens, flick to the next '
+				'with a real touch swipe (confirmed by sight), repeat. One sheet, a row per item. Answers within ~50 s '
+				'(clients stop a call at 60 s): more items than fit end with "call again with items=..." to go on.'
+			),
 			input_schema={
 				'type': 'object',
 				'properties': {
@@ -865,6 +869,7 @@ class RetinatServer(BrowserUseServer):
 						until=args.get('until', 'bored'),
 						detail=detail,
 						hold=bool(args.get('hold', True)),
+						deadline=deadline,
 					)
 				)
 			)
@@ -887,6 +892,7 @@ class RetinatServer(BrowserUseServer):
 						max_seconds=float(args.get('max_seconds', 12)),
 						min_seconds=float(args.get('min_seconds', 3)),
 						detail=detail,
+						deadline=deadline,
 					)
 				)
 			)

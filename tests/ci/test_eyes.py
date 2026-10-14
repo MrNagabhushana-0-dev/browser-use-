@@ -1029,6 +1029,51 @@ async def test_browse_watches_each_reel_once_and_puts_them_on_one_sheet(eyes, se
 	assert p.image is not None and p.image_size[1] > 3 * 150, 'one row per reel'
 
 
+def test_a_browse_watches_an_item_only_with_time_for_what_comes_after_it():
+	"""The plan for one item of a browse, from the call's time left. After an item come a watch's own work, a flick on
+	when there are more, and the end of the browse; the item gets what is left, up to its max, or is not begun."""
+	from browser_use.eyes.views import browse_cap
+
+	assert browse_cap(left=40, more=True, max_s=15, min_s=3) == 15
+	assert browse_cap(left=20, more=True, max_s=15, min_s=3) == 12.5  # 3 s at the end, 1.5 s of work, a 3 s flick
+	assert browse_cap(left=12, more=False, max_s=15, min_s=3) == 7.5  # the last item needs no flick after it
+	assert browse_cap(left=10.5, more=True, max_s=15, min_s=3) is None  # not even min_s and a little
+	assert browse_cap(left=20, more=True, max_s=15, min_s=3, next_est=6, overhead_est=2) == 9  # what was measured
+
+
+async def test_a_browse_out_of_time_stops_on_the_next_reel_and_goes_on_from_it(eyes, session, site):
+	"""A browse of many reels ran past the client's 60 s (30 items of up to 45 s are allowed). With a deadline it
+	watches what fits, flicks on, stops, and says how many are left; the next call watches from that reel on, and
+	each reel is watched once across the two."""
+	from browser_use.eyes.views import BROWSE_FINAL_RESERVE_S, BROWSE_NEXT_EST_S, BROWSE_OVERHEAD_EST_S, Deadline
+
+	await _open(eyes, session, site.url_for('/feed'))
+	# Time for the first reel at its 4 s and not for a second: the plan sets aside the flick and the end each time
+	budget = BROWSE_FINAL_RESERVE_S + BROWSE_OVERHEAD_EST_S + BROWSE_NEXT_EST_S + 4.0 + 1.5
+	started = time.monotonic()
+	first = await eyes.browse(items=3, max_seconds=4.0, min_seconds=1.0, deadline=Deadline.after(budget))
+	took = time.monotonic() - started
+	assert took < budget + 2, f'took {took:.1f}s with a {budget:.1f} s deadline'
+	assert [i.info.get('text', '').split()[0] for i in first.items] == ['@first'], first.text
+	assert first.stop_reason == 'time' and first.resume and first.resume['items'] == 2, (first.resume, first.text)
+	assert 'out of time' in first.text and 'call again with items=2' in first.text, first.text
+	second = await eyes.browse(**first.resume)
+	assert [i.info.get('text', '').split()[0] for i in second.items] == ['@second', '@third'], second.text
+
+
+async def test_a_watch_out_of_time_says_how_much_of_what_was_asked_it_watched(eyes, session, site):
+	"""A watch asked for more than its call has left stops in time and says so, rather than being dropped."""
+	from browser_use.eyes.views import Deadline
+
+	await _open(eyes, session, site.url_for('/feed'))
+	started = time.monotonic()
+	p = await eyes.watch(seconds=30, until='time', deadline=Deadline.after(6))
+	took = time.monotonic() - started
+	assert took < 7.5, f'took {took:.1f}s with a 6 s deadline'
+	assert p.stop_reason.startswith('out of time: watched') and 'of the asked 30s' in p.stop_reason, p.stop_reason
+	assert p.items and p.items[0].info.get('text', '').startswith('@first'), p.text
+
+
 # -- speech (optional extra) ---------------------------------------------------------------
 
 

@@ -248,8 +248,9 @@ class Retina:
 		"""JPEG bytes of the keyframes taken at these sample numbers (None if evicted, or if the page did not answer)."""
 		return (await self.read_keyframes(seqs))[0]
 
-	async def read_keyframes(self, seqs: list[int]) -> tuple[list[bytes | None], str | None]:
-		"""Like keyframes(), plus why they are all missing when the page did not hand them over in time."""
+	async def read_keyframes(self, seqs: list[int], timeout: float | None = None) -> tuple[list[bytes | None], str | None]:
+		"""Like keyframes(), plus why they are all missing when the page did not hand them over in time (by `timeout`,
+		default `keyframes_timeout`)."""
 		if not seqs:
 			return [], None
 		page_seqs = [s for s in seqs if s < COMPOSITOR_SEQ]
@@ -257,7 +258,10 @@ class Retina:
 		why = None
 		if page_seqs:
 			try:
-				urls = await self.evaluate(f'window.__retina.keyframes({json.dumps(page_seqs)})', timeout=self.keyframes_timeout)
+				urls = await self.evaluate(
+					f'window.__retina.keyframes({json.dumps(page_seqs)})',
+					timeout=self.keyframes_timeout if timeout is None else timeout,
+				)
 				got.update(zip(page_seqs, [_decode_data_url(u) for u in (urls or [None] * len(page_seqs))]))
 			except TimeoutError:
 				# What was seen and heard is already held; losing the pictures must not lose the watch.

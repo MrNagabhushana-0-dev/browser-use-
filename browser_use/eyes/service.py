@@ -62,7 +62,16 @@ from browser_use.eyes.percept import (
 )
 from browser_use.eyes.requests import RequestLog, told_as_page_failure
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
-from browser_use.eyes.views import Deadline, stop_line
+from browser_use.eyes.views import (
+	ASR_REALTIME_X,
+	BROWSE_FINAL_RESERVE_S,
+	BROWSE_NEXT_EST_S,
+	BROWSE_OVERHEAD_EST_S,
+	WATCH_TAIL_S,
+	Deadline,
+	browse_cap,
+	stop_line,
+)
 from browser_use.human.input import HumanInput
 from browser_use.human.touch import HumanTouch
 
@@ -300,10 +309,13 @@ class Eyes:
 		keyframes: int | None = None,
 		hold: bool = False,
 		transcribe: bool | None = None,
+		deadline: Deadline | None = None,
 	) -> Percept:
-		"""Watch for up to `seconds`, stopping early per `until`, and return a percept."""
+		"""Watch for up to `seconds`, stopping early per `until`, and return a percept. With a `deadline`, it stops in
+		time to pause and describe what it saw, and says how much of what was asked it watched."""
 		assert seconds > 0, 'seconds must be positive'
 		assert until in ('time', 'event', 'bored', 'item'), f'unknown until={until!r}'
+		dl = deadline or Deadline.unbounded()
 		if not self.retina.running:
 			await self.open()
 		await self._resume_held()
@@ -312,11 +324,15 @@ class Eyes:
 		since = self._unreported_since(start, start_vid)
 		text_since = self._text_since(start)
 		reason = f'watched {seconds:.0f}s'
+		# What was asked, and no more than the call leaves after the work that follows the watching
+		stop_at = min(start + seconds, dl.at - WATCH_TAIL_S)
 		while True:
-			elapsed = time.monotonic() - start
-			if elapsed >= seconds:
+			now = time.monotonic()
+			if now >= stop_at:
+				if stop_at < start + seconds:
+					reason = f'out of time: watched {now - start:.0f}s of the asked {seconds:.0f}s'
 				break
-			await self.retina.wait_for_data(min(0.5, seconds - elapsed))
+			await self.retina.wait_for_data(min(0.5, stop_at - now))
 			if time.monotonic() - start < min_seconds:
 				continue
 			frames, hops, _ = self._since(start)
@@ -333,7 +349,13 @@ class Eyes:
 		if hold:
 			await self._hold()
 		percept = await self.perceive(
-			since=since, detail=detail, keyframes=keyframes, transcribe=transcribe, text_since=text_since, watch_start=start
+			since=since,
+			detail=detail,
+			keyframes=keyframes,
+			transcribe=transcribe,
+			text_since=text_since,
+			watch_start=start,
+			deadline=deadline,
 		)
 		if not percept.items:
 			await self._show_page(percept)  # nothing played (no video, or a paused one): the page as drawn is what there is
@@ -355,9 +377,13 @@ class Eyes:
 		text_since: float | None = None,
 		order: list[int] | None = None,
 		watch_start: float | None = None,
+		deadline: Deadline | None = None,
+		exclude: frozenset[int] = frozenset(),
 	) -> Percept:
 		"""Build a percept from everything the retina gathered since `since` (monotonic time), and the page text
-		that appeared since `text_since` (default: `since`). `order` puts these items first, in this order."""
+		that appeared since `text_since` (default: `since`). `order` puts these items first, in this order; items in
+		`exclude` are left out. With a `deadline`, speech and pictures are only waited for while the call has time."""
+		dl = deadline or Deadline.unbounded()
 		frames, hops, events = self._since(since)
 		if watch_start is not None and (frames or hops):
 			# Backfill reaches before the watch, and the page boundary it is clamped to is learnt from a heartbeat that
@@ -367,7 +393,7 @@ class Eyes:
 			latest = max([*frames, *hops], key=lambda x: x.wall).vid // 1000
 			frames = [f for f in frames if f.vid // 1000 == latest or f.wall >= watch_start]
 			hops = [h for h in hops if h.vid // 1000 == latest or h.wall >= watch_start]
-		seen = [vid for vid in dict.fromkeys([f.vid for f in frames] + [h.vid for h in hops]) if vid]
+		seen = [vid for vid in dict.fromkeys([f.vid for f in frames] + [h.vid for h in hops]) if vid and vid not in exclude]
 		# Items in the given order (what was watched, in turn), then anything else seen, in order of first sight.
 		order = [vid for vid in (order or []) if vid in seen] + [vid for vid in seen if vid not in (order or [])]
 		info_by_vid: dict[int, dict] = {}
@@ -402,10 +428,14 @@ class Eyes:
 			heard = hearing.listen(h, self.retina.state.get('sr'))
 			untranscribed = None
 			if do_speech and h and any(x.pcm for x in h):
-				regions, said = await asyncio.to_thread(_speech, h)
-				if regions is not None:
-					hearing.apply_speech_regions(heard, regions)
-				heard.transcript = said or []
+				# A thread cannot be stopped once started: begin the speech model only with time for it in this call
+				if dl.allows(_watched_time([x.wall for x in h]) / ASR_REALTIME_X + 1.5):
+					regions, said = await asyncio.to_thread(_speech, h)
+					if regions is not None:
+						hearing.apply_speech_regions(heard, regions)
+					heard.transcript = said or []
+				elif transcribe or self.speech:
+					untranscribed = 'no time was left in this call for the speech model'
 			elif transcribe and heard.heard:
 				# Asked for words and none can come: say why, rather than look as if nothing was said.
 				untranscribed = (
@@ -421,7 +451,9 @@ class Eyes:
 			if trouble:
 				jpegs: list[bytes | None] = [None] * len(seqs)
 			else:
-				jpegs, trouble = await self.retina.read_keyframes(seqs)
+				jpegs, trouble = await self.retina.read_keyframes(
+					seqs, timeout=max(0.5, dl.clamp(self.retina.keyframes_timeout, reserve=1.0)) if dl.bounded else None
+				)
 			self._items_seen = max(self._items_seen, vid)
 			items.append(
 				ItemPercept(
@@ -1037,21 +1069,58 @@ class Eyes:
 		detail: Detail = 'glance',
 		keyframes: int = 4,
 		hold: bool = True,
+		deadline: Deadline | None = None,
 	) -> Percept:
-		"""Scroll a feed: watch each item until bored (or `max_seconds`), then flick on."""
+		"""Scroll a feed: watch each item until bored (or `max_seconds`), then flick on.
+
+		With a `deadline`, an item is begun only with time to watch it and do what follows (see `browse_cap`); out of
+		time, it stops on the next item, not yet watched, and says how many are left (`resume`)."""
 		assert items >= 1, 'browse at least one item'
+		dl = deadline or Deadline.unbounded()
 		if not self.retina.running:
 			await self.open()
 		start = time.monotonic()
 		log: list[str] = []
 		watched: list[int] = []  # the item each step watched, in order (a reel glimpsed while overshooting is not one)
+		covered = 0
+		stopped = ''
+		next_est, overhead_est = BROWSE_NEXT_EST_S, BROWSE_OVERHEAD_EST_S
+		# The speech model runs over everything watched at the end: its time grows with each item
+		speech_rate = ASR_REALTIME_X if self.speech else math.inf
 		for i in range(items):
-			p = await self.watch(seconds=max_seconds, until='bored', min_seconds=min_seconds, detail=detail, keyframes=keyframes)
+			more = i + 1 < items
+			cap: float | None = max_seconds
+			if dl.bounded:
+				final_reserve = BROWSE_FINAL_RESERVE_S + (time.monotonic() - start) / speech_rate
+				cap = browse_cap(dl.left(), more, max_seconds, min_seconds, final_reserve, next_est, overhead_est)
+			if cap is None:
+				stopped = 'time'
+				break
+			t = time.monotonic()
+			# Its own words are not needed: the browse's percept at the end transcribes everything watched
+			p = await self.watch(
+				seconds=cap,
+				until='bored',
+				min_seconds=min(min_seconds, cap),
+				detail=detail,
+				keyframes=keyframes,
+				transcribe=False,
+				deadline=dl,
+			)
+			if p.stop_reason.startswith('watched'):
+				overhead_est = max(overhead_est, time.monotonic() - t - cap)
 			if (vid := self.retina.attended.get('vid', 0)) and vid not in watched:
 				watched.append(vid)  # what the watch ended on (before it, a just-opened page may attend nothing yet)
-			log.append(f'item {i + 1}: {p.stop_reason}')
-			if i + 1 < items:
+			covered += 1
+			short = " (cut short by this call's time)" if cap < max_seconds and p.stop_reason.startswith('watched') else ''
+			log.append(f'item {i + 1}: {p.stop_reason}{short}')
+			if more:
+				if not dl.allows(next_est + BROWSE_FINAL_RESERVE_S):
+					stopped = 'time'
+					log.append('  -> no time left to flick on: call retinat_next before going on')
+					break
 				moved = await self.next()
+				next_est = max(next_est, moved.seconds + 0.5)
 				log.append(
 					f'  -> next by {moved.method} in {moved.seconds:.1f}s' + (f' ({moved.note})' if moved.note else '')
 					if moved.moved
@@ -1061,10 +1130,19 @@ class Eyes:
 					break
 		if hold:
 			await self._hold()
-		percept = await self.perceive(since=start, detail=detail, keyframes=keyframes, order=watched)
-		percept.text = percept.text.replace('{REASON}', f'browsed {len(log) - sum(1 for x in log if x.startswith("  "))} item(s)')
+		# Stopped for time after a flick: the item now on screen was not watched, and the next call begins with it
+		on_screen = self.retina.attended.get('vid', 0)
+		exclude = frozenset({on_screen}) if stopped and on_screen and on_screen not in watched else frozenset()
+		percept = await self.perceive(
+			since=start, detail=detail, keyframes=keyframes, order=watched, deadline=deadline, exclude=exclude
+		)
+		percept.text = percept.text.replace('{REASON}', f'browsed {covered} item(s)')
 		percept.text += '\n' + '\n'.join(log)
 		percept.stop_reason = 'browsed'
+		if stopped:
+			percept.stop_reason = stopped
+			percept.resume = {'items': items - covered, 'max_seconds': max_seconds, 'min_seconds': min_seconds, 'detail': detail}
+			percept.text += '\n' + stop_line(deadline, 'time', f'{covered} of {items} items', percept.resume)
 		return percept
 
 	async def tap(self, x: float, y: float) -> None:
