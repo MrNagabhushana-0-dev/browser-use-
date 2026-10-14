@@ -476,7 +476,8 @@ def _browser_tools() -> list['types.Tool']:
 			name='retinat_requests',
 			description=(
 				'What the page fetched since it opened: one line per request (method, status or failure, type, path, '
-				'size, time), newest last, plus a cursor. only="failed" for errors, "api" for fetch/XHR/JSON. '
+				'size, time), newest last, plus a cursor; it says how many a limit left out. only="failed" for errors, '
+				'"api" for fetch/XHR/JSON; pattern is a regular expression on the URL. '
 				'body=<#n> returns that response body. Passwords, tokens, keys and card numbers are masked by name and '
 				'by shape. It only listens: nothing is intercepted or changed.'
 			),
@@ -485,6 +486,7 @@ def _browser_tools() -> list['types.Tool']:
 				'properties': {
 					'since': {'type': 'integer', 'default': 0, 'description': 'Only requests after this #n (the cursor).'},
 					'only': {'type': 'string', 'enum': ['all', 'failed', 'api'], 'default': 'all'},
+					'pattern': {'type': 'string', 'description': 'A regular expression the URL must match.'},
 					'limit': {'type': 'integer', 'default': 30, 'minimum': 1, 'maximum': 200},
 					'body': {'type': 'integer', 'description': 'Return the response body of request #n instead.'},
 					'max_chars': {'type': 'integer', 'default': 3000, 'minimum': 200, 'maximum': 20000},
@@ -784,12 +786,10 @@ class RetinatServer(BrowserUseServer):
 			log = eyes.console
 			since = int(args.get('since', 0))
 			picked = log.entries(
-				since=since,
-				level=str(args.get('level', 'all')),
-				pattern=str(args.get('pattern') or ''),
-				limit=int(args.get('limit', 30)),
+				since=since, level=str(args.get('level', 'all')), pattern=str(args.get('pattern') or ''), limit=0
 			)
-			return render_console(picked, since, log.last_seq)
+			limit = max(1, int(args.get('limit', 30)))
+			return render_console(picked[-limit:], since, log.last_seq, matched=len(picked))
 		if name == 'retinat_requests':
 			from browser_use.eyes.requests import render
 
@@ -797,8 +797,10 @@ class RetinatServer(BrowserUseServer):
 			if args.get('body') is not None:
 				return await log.body(int(args['body']), max_chars=int(args.get('max_chars', 3000)))
 			since = int(args.get('since', 0))
-			picked = log.entries(since=since, only=str(args.get('only', 'all')), limit=int(args.get('limit', 30)))
-			return render(picked, since, log.last_seq, await self.browser_session.get_current_page_url())
+			picked = log.entries(since=since, only=str(args.get('only', 'all')), pattern=str(args.get('pattern') or ''), limit=0)
+			limit = max(1, int(args.get('limit', 30)))
+			url = await self.browser_session.get_current_page_url()
+			return render(picked[-limit:], since, log.last_seq, url, matched=len(picked))
 		detail = args.get('detail', 'glance')
 		if name == 'retinat_look':
 			return self._content(await eyes.look(detail=detail if detail != 'glance' else 'look'))

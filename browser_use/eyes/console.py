@@ -116,8 +116,10 @@ class ConsoleLog(TabListener):
 		return picked[-limit:] if limit > 0 else picked
 
 
-def render(entries: list[ConsoleEntry], since: int, last_seq: int) -> str:
+def render(entries: list[ConsoleEntry], since: int, last_seq: int, matched: int | None = None) -> str:
+	from browser_use.eyes.requests import _counted
+
 	errors = sum(e.level == 'error' for e in entries)
-	head = f'{len(entries)} console entr{"y" if len(entries) == 1 else "ies"} after #{since}'
+	head = _counted(len(entries), matched, 'console entry', 'console entries', since).replace('only=', 'level=')
 	head += f', {errors} error{"" if errors == 1 else "s"}' if errors else ''
 	return '\n'.join([f'{head}. Next: since={last_seq}.', *(e.line() for e in entries)])

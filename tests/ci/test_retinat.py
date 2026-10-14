@@ -745,3 +745,38 @@ def test_changes_folds_a_burst_of_labels_and_keeps_what_matters_when_cut(tmp_pat
 	text = '\n'.join(new_entries(tmp_path / 'now.json', limit=4, reader='test'))
 	assert 'opened https://other.example/' in text, f'a page is kept before texts: {text}'
 	assert 'Row 9 of the report' in text and '7 earlier text(s) not shown' in text, text
+
+
+async def test_requests_and_console_say_what_a_limit_left_out_and_filter_by_pattern(retinat, site):
+	"""Found on Poki: 624 requests, 594 of them analytics beacons, and retinat_requests showed the newest 30 as
+	"30 requests after #0", with since=624 next: the game's own frame, loaded first, could not be reached at all.
+	A limit now says how many it left out, and a pattern (a regular expression on the URL) finds one request."""
+	import asyncio
+	import re
+
+	site.expect_request('/beacon').respond_with_data('ok')
+	site.expect_request('/game/frame.html').respond_with_data('<p>game</p>', content_type='text/html')
+	site.expect_request('/noisy').respond_with_data(
+		"""<iframe src="/game/frame.html"></iframe><script>
+		for (let i = 0; i < 40; i++) { fetch('/beacon?n=' + i); console.log('beacon ' + i); }
+		console.log('the game is ready');
+		</script>""",
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/noisy')})
+	newest = ''
+	for _ in range(50):
+		newest = _text(await _call(retinat, 'retinat_requests', {'limit': 10}))
+		if 'beacon?n=39' in newest:
+			break
+		await asyncio.sleep(0.1)
+	head = newest.splitlines()[0]
+	total = re.match(r'The newest 10 of (\d+) requests after #0', head)
+	assert total and int(total[1]) >= 42 and f'{int(total[1]) - 10} earlier not shown' in head, head
+	frame = _text(await _call(retinat, 'retinat_requests', {'pattern': r'game/.*\.html'}))
+	assert frame.startswith('1 request after #0') and '/game/frame.html' in frame and 'beacon' not in frame, frame
+	assert 'not a regular expression' in _text(await _call(retinat, 'retinat_requests', {'pattern': '('}))
+
+	logged = _text(await _call(retinat, 'retinat_console', {'limit': 5}))
+	total = re.match(r'The newest 5 of (\d+) console entries after #0', logged)
+	assert total and int(total[1]) >= 41 and f'{int(total[1]) - 5} earlier not shown' in logged, logged
