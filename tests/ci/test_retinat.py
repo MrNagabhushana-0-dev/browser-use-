@@ -187,6 +187,51 @@ async def test_changes_reports_text_that_appeared_once_then_nothing(retinat, sit
 	assert 'Saved #4242' not in second, second
 
 
+async def test_changes_says_what_a_list_now_says_when_its_rows_are_rewritten_in_place(retinat, site):
+	"""Found hands-on on Wikipedia: typing "Ada Lovelace" into the search box turned the suggestions for "A" into
+	"Ada Lovelace English mathematician (1815-1852)" and the rest, in the same rows. Neither changes nor a look said
+	so: only the first suggestions, for "A", were ever reported."""
+	import asyncio
+
+	rows = ''.join(f'<li><b>Alpha {n}</b> <i>first letter {n}</i></li>' for n in range(1, 8))
+	site.expect_request('/suggest-rows').respond_with_data(
+		f'<!doctype html><body><input value="Ada Lovelace"><ul id="s" style="position:absolute;top:40px">{rows}</ul><script>'
+		"setTimeout(() => { const names = ['Ada Lovelace', 'Ada Lovelace Award', 'Ada Lovelace Day', 'Alan M. Lovelace',"
+		" 'Lovelace (film)', 'Ada (programming language)', 'Byron'];"
+		" document.querySelectorAll('#s li').forEach((li, i) => { li.querySelector('b').firstChild.data = names[i];"
+		" li.querySelector('i').firstChild.data = 'English mathematician ' + (1815 + i); }); }, 2500);</script></body>",
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/suggest-rows')})
+	await _call(retinat, 'retinat_changes', {})  # what opening it did
+	await asyncio.sleep(3.5)
+	text = _text(await _call(retinat, 'retinat_changes', {}))
+	assert 'Ada Lovelace Award' in text and 'Byron' in text, text
+
+
+async def test_changes_says_when_a_request_the_page_made_failed(retinat, site):
+	"""Found hands-on on Wikipedia: "Alan Turing" typed into the search box left the suggestions for "Al" on screen,
+	and changes said nothing had changed. True, and no help: the suggestion request had been refused (429), which only
+	retinat_requests showed. A fetch or XHR that fails is now a change; images and the like are left out."""
+	import asyncio
+
+	site.expect_request('/api/suggest').respond_with_data('slow down', status=429, content_type='text/plain')
+	site.expect_request('/api/ok').respond_with_data('{"ok": true}', content_type='application/json')
+	site.expect_request('/gone.png').respond_with_data('', status=404)
+	site.expect_request('/typeahead').respond_with_data(
+		'<!doctype html><body><input id="q" value="Alan Turing"><img src="/gone.png"><script>'
+		"setTimeout(() => { fetch('/api/ok'); fetch('/api/suggest?q=Alan+Turing'); }, 2500);</script></body>",
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/typeahead')})
+	opened = _text(await _call(retinat, 'retinat_changes', {}))  # what opening it did, before the page fetches
+	assert '/api/suggest' not in opened, opened
+	await asyncio.sleep(3.0)
+	text = _text(await _call(retinat, 'retinat_changes', {}))
+	assert '429' in text and '/api/suggest' in text, text
+	assert '/api/ok' not in text and 'gone.png' not in text, text
+
+
 async def test_the_server_hears_a_muted_video_with_no_gesture_even_when_asked_late(retinat, site, beeps):
 	# Through the server's own launch profile, as an MCP client gets it: no autoplay flag passed in by the
 	# test, and no click on the page. The model's first call after opening comes seconds later; beeps

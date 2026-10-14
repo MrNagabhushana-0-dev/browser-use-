@@ -121,3 +121,31 @@ while the run started at https.
   - Rule tests are pure: Chrome trusts loopback, so the block cannot be made against a local server.
 - **Live:** 2 pages, TheProject.html 200, the false alarm gone. One new high finding, a 404 for
   /hypertext/WWW/Administration/Mailing/Overview.html, which curl confirms on both schemes. It is a real dead link.
+
+## 04:45: Wikipedia's search box
+
+**Before** (`wikipedia-search-suggestions-missed-before.mp4`). find, click and type worked: the box took "Alan
+Turing", then "Ada Lovelace". Two things went unsaid:
+- **"Alan Turing":** the suggestions stayed those for "Al", and `retinat_changes` said "No changes since last asked".
+  True, but no help: retinat_requests showed the suggestion request for "Alan Turing" refused (429). Wikimedia
+  rate-limits this network.
+- **"Ada Lovelace":** the request got 200 and the rows on screen became "Ada Lovelace / English mathematician
+  (1815-1852)", "Ada Lovelace Award" and so on. Neither changes nor a look said so: only the first suggestions, for
+  "A", had ever been reported.
+
+**Fixed, test first:**
+- **A fetch or XHR that fails is a change:** "a request the page made failed: 429 GET /w/rest.php/v1/search/title?q=…".
+  - Once each. Images, scripts and requests the page cancelled itself are left out.
+  - `retinat_changes` journals them as it is asked. On a still page no batch from the retina comes along to do it,
+    which my first version relied on: its test passed only because the first changes call had already taken the line.
+- **Rows rewritten in place are reported:**
+  - The watcher's budget was 8 texts a second, and a suggestion's title and description were two texts. A list of
+    seven was cut off after its fourth row.
+  - Changed text is now said as its row (list item, option, table row, link) when that is 240 characters or less.
+  - The budget is per batch of changes, 8 a second with up to 20 texts each: a ticker makes many batches, a list
+    update one.
+  - Test: seven rows rewritten through their text nodes are all reported.
+
+**After** (`wikipedia-search-refused-requests-said.mp4`): typing "Grace Hopper", changes said the suggestion requests
+for "Grace Hop" and "Grace Hopper" were refused (429). Every suggestion request was being refused by then, so the rows
+fix could not be seen live. I did not retry against Wikimedia's limit.

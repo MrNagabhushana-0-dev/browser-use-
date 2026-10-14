@@ -44,6 +44,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlparse
 
 from browser_use.browser.capture import capture_screenshot
 from browser_use.eyes import asr, hearing, motion, ocr, sight
@@ -134,6 +135,7 @@ class Eyes:
 		self.speech = asr.available() if speech is None else speech
 		self.retina = Retina(browser_session, fps=fps, audio=audio, pcm=bool(self.speech and audio))
 		self.requests = RequestLog(browser_session)  # what the page fetched; passive, redacted
+		self._requests_noted: set[int] = set()  # failed requests already told of in the journal
 		self.console = ConsoleLog(browser_session)  # what the page logged and threw; passive, redacted
 		self.touch = HumanTouch(browser_session, seed=seed)
 		self.hand = HumanInput(browser_session, seed=seed)
@@ -1167,8 +1169,37 @@ class Eyes:
 			entries.append(('text', f'the page filled in {self._filled_in} block(s) of its own text as it loaded'))
 			self._filled_in = 0
 		entries += [('text', f'text appeared: "{t}') for t in texts]  # each already closes its quote and carries its note
+		entries += [('request', line) for line in self._failed_requests()]
 		if entries:
 			self._append_journal(entries, vid, t)
+
+	def note_requests(self) -> None:
+		"""Journal the page's failed fetches now. On a still page no batch from the retina comes along to do it, so a
+		request refused after the page settled was never told of."""
+		if self.journal_path is None:
+			return
+		lines = self._failed_requests()
+		if lines:
+			self._append_journal(
+				[('request', line) for line in lines], int(self.retina.state.get('vid') or 0), self.retina.state.get('t')
+			)
+
+	def _failed_requests(self) -> list[str]:
+		"""A line for each fetch or XHR the page made that failed since the last call, once each.
+
+		Found on Wikipedia: "Alan Turing" typed into the search box left the suggestions for "Al" on screen, and
+		changes said nothing had changed; the suggestion request had been refused (429), which only the request log
+		showed. Images, scripts and the like are left out (an ad that 404s is not news), and so are requests the page
+		cancelled itself (a typeahead drops the one for the previous keystroke)."""
+		lines = []
+		for req in self.requests.entries(since=max(0, self.requests.last_seq - 60), only='api', limit=60):
+			if req.seq in self._requests_noted or not req.failed or req.error == 'canceled':
+				continue
+			self._requests_noted.add(req.seq)
+			path = urlparse(req.url)
+			where = (path.path or '/') + (f'?{path.query}' if path.query else '')
+			lines.append(f'a request the page made failed: {req.status or req.error} {req.method} {where[:140]}')
+		return lines[:5]
 
 	def _append_journal(self, entries: list[tuple[str, str]], vid: int, t: Any) -> None:
 		assert self.journal_path is not None

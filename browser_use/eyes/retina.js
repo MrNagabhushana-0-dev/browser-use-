@@ -655,9 +655,6 @@ registerProcessor('retina-ear', RetinaEar);
 		if (!text || text.length > 240) return null;
 		const now = performance.now();
 		if (now - (lastText.get(text) || -1e9) < 1000) return text;
-		const sec = Math.floor(now / 1000);
-		if (textBudget.second !== sec) textBudget = { second: sec, n: 0 };
-		if (++textBudget.n > 8) return null; // a ticker repainting every frame is not news
 		lastText.set(text, now);
 		const faint = contrast(el) < 1.5;
 		R.events.push(
@@ -672,14 +669,35 @@ registerProcessor('retina-ear', RetinaEar);
 	};
 	// The outermost changed blocks first; a block whose words an enclosing block just said is not said again
 	// (found on Wikipedia: its Appearance panel came back once per nesting level).
+	// A changed piece of a row is said as its row: a list item, an option, a table row or a link that holds it, when
+	// that is short enough to be one thing (found on Wikipedia: a suggestion's title and its description were said
+	// apart, so a list of seven cost fourteen texts).
+	const ROW = 'li, tr, [role=option], [role=row], [role=listitem], [role=menuitem], a';
+	const rowOf = (el) => {
+		const row = el && el.nodeType === 1 && el.closest ? el.closest(ROW) : null;
+		return row && (row.innerText || '').replace(/\s+/g, ' ').trim().length <= 240 ? row : el;
+	};
+	// The budget is per batch of changes, not per text: a ticker repainting every frame makes many batches a second,
+	// a list whose rows are rewritten together (a search box's suggestions) makes one. The cap was 8 texts a second
+	// and cut that list off after its fourth row.
 	const reportAll = (touched, added) => {
+		const now = performance.now();
+		const sec = Math.floor(now / 1000);
+		if (textBudget.second !== sec) textBudget = { second: sec, n: 0 };
+		if (++textBudget.n > 8) return; // a ticker repainting every frame is not news
 		const said = [];
-		const order = [...touched].filter((el) => el && el.nodeType === 1).sort((a, b) => depth(a) - depth(b));
+		const rows = new Set([...touched].map(rowOf));
+		const order = [...rows].filter((el) => el && el.nodeType === 1).sort((a, b) => depth(a) - depth(b)).slice(0, 60);
+		let n = 0;
 		for (const el of order) {
+			if (n >= 20) break;
 			const own = (el.innerText || '').replace(/\s+/g, ' ').trim();
 			if (said.some(([outer, text]) => outer !== el && outer.contains(el) && text.includes(own))) continue;
 			const text = reportText(el, added.has(el));
-			if (text) said.push([el, text]);
+			if (text) {
+				said.push([el, text]);
+				n++;
+			}
 		}
 	};
 	let textReady = false; // false while the page is still being parsed: its own content has not "appeared"

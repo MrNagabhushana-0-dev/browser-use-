@@ -3541,6 +3541,15 @@ labels are drawn into image tiles.
 
 **Full `tests/ci` on `fb6530d`: 1,726 passed, 30 skipped, 0 failed** (37m22s).
 
+**Wikipedia's search box** (hands-on; tests first).
+- **Failed requests now show in changes.** Changes said "no changes" while the suggestion request had been refused
+  (429), which only the request log showed. A failed fetch or XHR is now a change (once each; images and
+  self-cancelled requests left out), journaled when changes is asked.
+- **Rows rewritten in place are now reported.** The suggestions for "Ada Lovelace" replaced those for "A" in the same
+  rows and were never reported: 8 texts a second, two per row. Changed text is now said as its row, and the budget is
+  per batch of changes.
+- **Live:** the 429s are now said. The rows fix was not seen live, since every suggestion request was refused by then.
+
 **Next, in order:**
 1. **`retinat_scroll` live** from a fresh session (Python docs, `to: "wait_for"`).
 2. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
