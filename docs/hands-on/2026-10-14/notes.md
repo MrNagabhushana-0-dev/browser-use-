@@ -379,3 +379,26 @@ our car's roof at y≈137.
 **The game's camera key (C) gives more road:** the next view has ~48 px from the horizon to the roof. Not played yet.
 
 Highest MR Racer scores so far: **159** (challenge, time ran out), **71** (Endless, crashed).
+
+## 12:45: MR Racer again, after a container restart
+
+**Retinat after the restart:** the first `retinat_open` failed with "BrowserStartEvent ... timed out after 30.0s" (a
+cold Chrome start). The second open, a moment later, worked. Not looked into further yet.
+
+**The C camera did not take** (a frame from that run has the same horizon as the default view). What mattered was
+something else: **our car drives on the road's solid centre divider.** It is a two-way road. Oncoming traffic on the
+left and same-direction traffic on the right could both clip it.
+
+| Run | Rule | Endless score |
+|---|---|---|
+| throttle only (default position) | hold Up | 101 (0.31 km) |
+| into the right lane | hold Up; at 9 s hold Right 300 ms | **109** (0.33 km): oncoming cars passed safely on the left; rear-ended a slower car in our lane (`mr-racer-right-lane-109-rear-ends-a-slow-car.mp4`) |
+| v2, dodge on the roof box | as above, and change lane when the dark count above our roof passes 15 (`mr-racer-rule-v2.js`) | 82 (0.25 km): 19 inputs; it changed lanes without looking at the lane it moved into, and hit a van there (`mr-racer-rule-v2-dodges-into-a-van.mp4`) |
+
+**The roof box works as a sensor.** A car ahead in our lane hides behind our own roof until late, so the box sits
+right on it (x 488-568, y 108-136 CSS px). Offline at 480 px it read 0 while the lane was clear, then
+3 → 10 → 19 → 26 → 41 → 65 → 80 over ~4 s before the rear-end. A threshold of 15 fires ~3 s ahead.
+
+**Next for the racer:**
+- look at the target lane before moving (a box beside the roof on that side);
+- keep to a lane by the lane lines rather than by counting steering presses.
