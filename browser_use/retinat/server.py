@@ -244,7 +244,7 @@ def _desktop_tools() -> list['types.Tool']:
 			),
 			input_schema={
 				'type': 'object',
-				'properties': {'seconds': {'type': 'number', 'default': 8, 'minimum': 1, 'maximum': 60}},
+				'properties': {'seconds': {'type': 'number', 'default': 8, 'minimum': 1, 'maximum': 45}},
 			},
 			annotations=ro,
 		),
@@ -280,7 +280,7 @@ def _browser_tools() -> list['types.Tool']:
 			input_schema={
 				'type': 'object',
 				'properties': {
-					'seconds': {'type': 'number', 'default': 12, 'minimum': 1, 'maximum': 90},
+					'seconds': {'type': 'number', 'default': 12, 'minimum': 1, 'maximum': 45},
 					'until': {'type': 'string', 'enum': ['bored', 'event', 'time', 'item'], 'default': 'bored'},
 					'detail': _DETAIL,
 					'hold': {'type': 'boolean', 'default': True, 'description': 'Pause when done so nothing plays unseen.'},
@@ -305,7 +305,7 @@ def _browser_tools() -> list['types.Tool']:
 				'type': 'object',
 				'properties': {
 					'items': {'type': 'integer', 'default': 5, 'minimum': 1, 'maximum': 30},
-					'max_seconds': {'type': 'number', 'default': 12, 'minimum': 2, 'maximum': 90},
+					'max_seconds': {'type': 'number', 'default': 12, 'minimum': 2, 'maximum': 45},
 					'min_seconds': {'type': 'number', 'default': 3, 'minimum': 0.5, 'maximum': 30},
 					'detail': _DETAIL,
 				},
@@ -561,11 +561,12 @@ def _browser_tools() -> list['types.Tool']:
 			description=(
 				'Sleep until a reflex rule with "notify" fires (or timeout), then say which, when, and what the '
 				'reflexes did meanwhile. Costs nothing while waiting: no images, no polling. Look after it returns, '
-				'not alongside it: a look sent with it runs at once.'
+				'not alongside it: a look sent with it runs at once. Up to 50 s (clients stop a call at 60 s): to '
+				'wait longer, call it again.'
 			),
 			input_schema={
 				'type': 'object',
-				'properties': {'timeout': {'type': 'number', 'default': 30, 'minimum': 0.1, 'maximum': 300}},
+				'properties': {'timeout': {'type': 'number', 'default': 30, 'minimum': 0.1, 'maximum': 50}},
 			},
 			annotations=ro,
 		),

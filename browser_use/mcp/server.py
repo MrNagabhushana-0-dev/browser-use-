@@ -763,7 +763,7 @@ class BrowserUseServer:
 							'type': 'number',
 							'default': 12,
 							'minimum': 1,
-							'maximum': 90,
+							'maximum': 45,
 							'description': 'Longest to watch.',
 						},
 						'until': {
@@ -797,7 +797,7 @@ class BrowserUseServer:
 							'type': 'number',
 							'default': 12,
 							'minimum': 2,
-							'maximum': 90,
+							'maximum': 45,
 							'description': 'Longest to spend on one item.',
 						},
 						'min_seconds': {'type': 'number', 'default': 3, 'minimum': 0.5, 'maximum': 30},

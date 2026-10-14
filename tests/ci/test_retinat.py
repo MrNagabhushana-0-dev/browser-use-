@@ -780,3 +780,21 @@ async def test_requests_and_console_say_what_a_limit_left_out_and_filter_by_patt
 	logged = _text(await _call(retinat, 'retinat_console', {'limit': 5}))
 	total = re.match(r'The newest 5 of (\d+) console entries after #0', logged)
 	assert total and int(total[1]) >= 41 and f'{int(total[1]) - 5} earlier not shown' in logged, logged
+
+
+async def test_no_tool_offers_a_wait_longer_than_a_client_waits_for_a_call():
+	"""Found playing Subway Surfers: retinat_wait(timeout=60) came back as an error, "timed out after 60s". MCP
+	clients (Claude Code among them) give a tool call 60 s, so a wait or watch offered up to 300 s or 90 s failed
+	instead of answering; retinat_scan failed that way twice too. What a tool may be asked to wait now fits."""
+	server = RetinatServer()
+	handler = server.server.get_request_handler('tools/list')
+	assert handler is not None
+	listed = await handler.handler(None, types.PaginatedRequestParams())  # type: ignore[arg-type]
+	assert isinstance(listed, types.ListToolsResult)
+	too_long = {
+		f'{t.name}.{name}': spec['maximum']
+		for t in listed.tools
+		for name, spec in (t.input_schema.get('properties') or {}).items()
+		if name in ('timeout', 'seconds', 'max_seconds') and spec.get('maximum', 0) > 50
+	}
+	assert not too_long, too_long
