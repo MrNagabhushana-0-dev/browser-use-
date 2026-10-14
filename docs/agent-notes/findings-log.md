@@ -3513,6 +3513,8 @@ The arena clicks through the changed glide, so it was checked: 5 of 5 alone and 
   (real wheel; `screens`, or `to` a text with `nth`) is added, test first through the MCP handler on a real browser.
   Not run live: this session's MCP client lists tools only at its start.
 
+**Full `tests/ci` on `58dad8e`: 1,722 passed, 30 skipped, 0 failed** (37m04s).
+
 **Next, in order:**
 1. **`retinat_scroll` live** from a fresh session (Python docs, `to: "wait_for"`).
 2. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
