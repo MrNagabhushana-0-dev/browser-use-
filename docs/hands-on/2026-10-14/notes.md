@@ -92,3 +92,32 @@ on onnxruntime, Apache-2.0).
   answer says how long it took.
 - Only what is on screen now.
 - Small labels crossed by lines can still be missed.
+
+## 04:00: the site explorer on gnu.org and info.cern.ch
+
+**gnu.org, Hello's pages** (`explore-gnu-proxy-502-taken-for-the-site.mp4`):
+- `retinat_explore` reported "[high] Link to /software/hello/ returns 502" and explored one page.
+- The page it had loaded said "upstream request failed": this environment's egress proxy, not gnu.org. curl at the
+  same time: 2 of 3 requests failed, the third got 200 in 0.6 s.
+- The run took its links from that one error page, found none, and stopped.
+
+**Fixed, test first** (a site whose home page answers 502 once, then 200):
+- A load that meets a 502/503/504, or no answer, is tried once more 2 s later. That covers the first load, which
+  discovery takes its links from, and every page.
+- A page that then loads is "[medium] ... failed once (502), then loaded on a retry", and the run goes on.
+- One that fails again stays high, and now says "on both of two tries 2 s apart (a gateway error: it may be the
+  network, not the site)".
+- Link checks get the same one retry.
+- Live afterwards gnu.org was unreachable (3 of 3), so it was reported broken, as it was.
+
+**info.cern.ch** (`explore-info-cern-own-http-links.mp4`). The site links its own pages as http://info.cern.ch/...
+while the run started at https.
+- **Before:** one page explored, plus "[high] Link to /hypertext/WWW/TheProject.html returns no response". Discovery
+  took http for another site, and the link check's fetch of an http address from an https page is blocked by the
+  browser as mixed content. That page loads fine.
+- **Now:**
+  - The same host on a default port is the same site, whatever the scheme.
+  - An http link on an https page is checked at its https address, and reported once as a low finding.
+  - Rule tests are pure: Chrome trusts loopback, so the block cannot be made against a local server.
+- **Live:** 2 pages, TheProject.html 200, the false alarm gone. One new high finding, a 404 for
+  /hypertext/WWW/Administration/Mailing/Overview.html, which curl confirms on both schemes. It is a real dead link.

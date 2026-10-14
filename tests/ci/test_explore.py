@@ -147,3 +147,69 @@ async def test_the_run_is_costed_timed_and_rendered(explored):
 async def test_the_sessions_own_cdp_listeners_survive_the_run(explored):
 	_, _, before, after = explored
 	assert after is before, 'the downloads watchdog (and anyone else) keeps its Network.responseReceived handler'
+
+
+async def test_a_gateway_error_that_goes_away_is_flaky_not_broken():
+	"""Found hands-on on gnu.org: the explorer's one load of the start page met a 502 from a flaky network ("upstream
+	request failed"), reported "[high] Link to /software/hello/ returns 502" and explored nothing else; a request a
+	moment later got 200. A gateway error or no answer is now tried once more: if it then loads it is a flaky page,
+	not a broken one, and the run goes on. One that fails again is still broken."""
+	from werkzeug import Request, Response
+
+	server = HTTPServer()
+	server.start()
+	answered = {'/': 0}
+
+	def home(request: Request) -> Response:
+		answered['/'] += 1
+		if answered['/'] == 1:
+			return Response('upstream request failed', status=502, content_type='text/plain')
+		return Response(
+			'<!doctype html><html lang="en"><head><title>Home</title></head><body><h1>Home</h1>'
+			'<a href="/fine">fine</a> <a href="/down">down</a></body></html>',
+			content_type='text/html',
+		)
+
+	server.expect_request('/').respond_with_handler(home)
+	server.expect_request('/fine').respond_with_data(
+		'<!doctype html><html lang="en"><head><title>Fine</title></head><body><h1>Fine</h1></body></html>',
+		content_type='text/html',
+	)
+	server.expect_request('/down').respond_with_data('bad gateway', status=502, content_type='text/plain')
+	server.expect_request('/robots.txt').respond_with_data('', status=404)
+	server.expect_request('/sitemap.xml').respond_with_data('', status=404)
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, user_data_dir=None, keep_alive=False))
+	await session.start()
+	try:
+		report = await Explorer(session, settle_s=0.5, scroll=False, mobile=False, max_pages=4).run(server.url_for('/'))
+		paths = [p.url.rsplit('/', 1)[-1] for p in report.pages]
+		assert len(report.pages) >= 2 and 'fine' in paths, f'the run went on past the start page: {paths}'
+		home_findings = _on(report, '/')
+		assert not any(f.severity == 'high' and '502' in f.title for f in home_findings if f.pages == [server.url_for('/')]), (
+			_titles(home_findings)
+		)
+		assert any('flaky' in f.title.casefold() or 'once' in f.title for f in report.findings), _titles(report.findings)
+		assert any(
+			'down' in f.title and '502' in f.title and 'two tries' in f.title and f.severity == 'high' for f in report.findings
+		), _titles(report.findings)
+	finally:
+		await session.kill()
+		server.clear()
+		server.stop()
+
+
+def test_a_sites_own_http_links_are_its_pages_and_are_checked_as_https():
+	"""Found hands-on on info.cern.ch: its home page links to its own pages as http://info.cern.ch/..., while the run
+	started at https. Discovery took the other scheme for another site and explored one page; the link check fetched
+	the http address from the https page, which the browser blocks as mixed content, and reported "[high] Link to
+	/hypertext/WWW/TheProject.html returns no response". (Loopback is trusted by Chrome, so the block cannot be
+	reproduced against a local server: these are the rules, checked live on info.cern.ch.)"""
+	from browser_use.explore.service import _check_url, _same_site
+
+	assert _same_site('https://info.cern.ch/', 'http://info.cern.ch/hypertext/WWW/TheProject.html')
+	assert _same_site('http://a.example:8080/', 'http://a.example:8080/x')
+	assert not _same_site('https://a.example/', 'http://a.example:8080/x'), 'another port is another service'
+	assert not _same_site('https://a.example/', 'https://b.example/')
+	assert _check_url('http://info.cern.ch/x', 'https://info.cern.ch/') == 'https://info.cern.ch/x'
+	assert _check_url('http://info.cern.ch/x', 'http://info.cern.ch/') == 'http://info.cern.ch/x'
+	assert _check_url('https://info.cern.ch/x', 'https://info.cern.ch/') == 'https://info.cern.ch/x'

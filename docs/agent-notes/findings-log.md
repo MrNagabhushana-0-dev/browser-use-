@@ -3529,6 +3529,16 @@ labels are drawn into image tiles.
 
 **Full `tests/ci` on `76ace3b`: 1,724 passed, 30 skipped, 0 failed** (38m32s).
 
+**The site explorer took the network's failures for the site's** (hands-on on gnu.org and info.cern.ch; tests first).
+- **gnu.org:** a flaky egress proxy's 502 ("upstream request failed") was reported as "[high] returns 502". The run
+  stopped at the start page: discovery took its links from the error page. Now a gateway error or no answer is tried
+  once more 2 s later, for the first load, every page and every link check. A page that then loads is "failed once,
+  then loaded" (medium); a second failure says it was tried twice and may be the network.
+- **info.cern.ch:** its own http:// links were taken for another site, and checked by a fetch the browser blocks as
+  mixed content ("[high] returns no response" for a page that loads). The same host on a default port is now the same
+  site, and an http link from an https page is checked at its https address, with one low finding for the plain-http
+  links. Live: 2 pages, and one real 404, confirmed with curl.
+
 **Next, in order:**
 1. **`retinat_scroll` live** from a fresh session (Python docs, `to: "wait_for"`).
 2. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
