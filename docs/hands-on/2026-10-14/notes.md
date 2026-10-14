@@ -330,3 +330,27 @@ At 240 px the rules never see it; at 960 px they find it within 3 px of where it
 - A car racing game.
 - Subway Surfers' Left/Right step.
 - A feed that sends only the regions rules read, at full resolution. It would avoid the cost table above.
+
+## 10:51: a car racing game, MR Racer (ChennaiGames, on Poki)
+
+A highway traffic racer. Challenge 1 is "reach the finish line in time" (a 36.7 s countdown). Arrow keys: Up
+accelerates, Left/Right steer, Down brakes. It drew ~8 fps here.
+
+| Run | What the rules did | Score | What happened |
+|---|---|---|---|
+| 1 | nothing for most of it, then hold ArrowUp | 159 | crawled at 30 km/h in gear 1 while I read the controls; time ran out at 0.66 km |
+| 2 | hold ArrowUp from the start | 40 | gear 3, 82 km/h, then hit a red pickup in our lane at 0.14 km (`mr-racer-throttle-only-crashes-into-a-pickup.mp4`) |
+
+A crash fails the challenge, so steering is needed. Seeing the traffic was harder than in Subway Surfers:
+- the whole picture has a red tint, so the road, the verges and a red pickup are close in colour;
+- a fixed road palette scored the box ahead as *less* blocked while the pickup closed in;
+- a road colour sampled beside the car did not hold either: the road ahead is lighter (haze).
+
+**Built, test first: `see.mean({from, in})`**, a region's average colour `{r, g, b, n}`, for rules that must compare
+regions instead of matching a fixed colour.
+- Test: two patches of known colour, each read within 12 (L1).
+- Offline on the crash frames, the centre lane's mean stood out from the median of the three lanes by ~22, rising
+  to ~35 as the pickup closed. That is too weak to steer on yet.
+
+**Not done:** a steering rule. Next round: record a full run with traffic to tune on, and try the lane-vs-lane mean
+over several depths.

@@ -3628,11 +3628,19 @@ recovered on its own.
 passed. The extra skip is the default-profile test, which skips by design while a running Chrome (Retinat's, on
 about:blank) holds that profile.
 
+**10:51 round, a car racing game (MR Racer on Poki, ~8 fps).**
+- Throttle only, the run scored 159 (time ran out) and then 40 (a crash into a pickup, which fails the challenge).
+- Under the game's red tint no fixed colour separated road from traffic.
+- **Built: `see.mean({from, in})`** (test first), a region's average colour.
+- Offline, the lane-vs-lane mean rose from ~22 to ~35 as the pickup closed: too weak to steer on yet.
+- The reflex speed test failed once in the affected-files run while the racer was still rendering in Retinat's
+  browser (p95 515 ms). With the game parked it passed 3 of 3.
+
 **Next, in order:**
 1. **Games, continued:**
    - Temple Run 2: press as the key lights, not after it (the gap after the zipline); turns at corners; read the
      score;
-   - a car racing game;
+   - MR Racer: a steering rule (record a run with traffic to tune on; lane-vs-lane means at several depths);
    - a rule for Subway Surfers' Left/Right tutorial step (read the prompt's arrow), then a run with rules only.
 2. **A screen feed of only what the rules read.** Crops of their `in:` regions at full resolution, next to the 240 px
    overview, instead of a whole wider picture (480 px costs 160 ms a picture, 960 px 510 ms).

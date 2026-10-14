@@ -247,6 +247,9 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
     captured instead, ~50 ms a picture or more on a busy page. A video the page may not read (another origin without
     CORS, as on Wikimedia Commons) is read on screen automatically, within its box.
   - `see.changed({in})`: the share of the picture, or of that region, that changed since the last frame.
+  - `see.mean({in})`: the average colour `{r, g, b, n}` of a region. Use it for what has no fixed colour. In MR Racer on
+    Poki the road's colour shifts with the game's tint and light, so a rule compares regions with each other instead
+    of with a fixed colour.
   - `see.track([r,g,b], {in})`: `locate` plus `vx`, `vy` in px per second, so a rule can act on where a thing will
     be: `see.track(red).x + see.track(red).vx * 0.2` is where it will be in 200 ms.
   - `see.el(css)`: `{x, y, w, h, cx, cy}`.
