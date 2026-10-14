@@ -3501,6 +3501,11 @@ and all three cuts found, and the recording was the page in 227 of 227 frames.
   and each turn waited on the page. It now writes every frame owed. Test: 16-17 -> 40-65 frames for 5 s at 10 fps.
   My first version left the old clock step in and halved the rate; the existing still-page test caught it.
 
+**Full `tests/ci` on `89df927`: first run red, 1 failed, 1,720 passed, 30 skipped** (38m18s). The failure was the
+play-arena title screen ("the title screen was never dismissed"), the same message as on `fb23f7c`, before this change.
+The arena clicks through the changed glide, so it was checked: 5 of 5 alone and 5 of 5 with every core busy.
+**Second run on the same commit: 1,721 passed, 30 skipped, 0 failed** (38m02s). It stays an open intermittent.
+
 **Next, in order:**
 1. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
    Look at feeding pictures off the main thread (a worker, or a smaller picture of only the box a rule reads).
@@ -3510,9 +3515,10 @@ and all three cuts found, and the recording was the page in 227 of 227 frames.
 4. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
    or CORS WebM/VP9 source.
 5. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
-6. **Intermittents to watch in full runs:** the feed test (failed in the `c09d801` run; with every core busy, 2 of 30
-   flicks overshot, and 1 of those 2 was not brought back in three flicks), the region-runner test, the play-arena
-   title screen, and the reflex speed test.
+6. **Intermittents to watch in full runs:** the play-arena title screen (failed again in one of two runs on
+   `89df927`; 10 of 10 alone or under load), the feed test (failed in the `c09d801` run; with every core busy, 2 of 30
+   flicks overshot, and 1 of those 2 was not brought back in three flicks), the region-runner test, and the reflex
+   speed test.
 7. **Carried over:**
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).
