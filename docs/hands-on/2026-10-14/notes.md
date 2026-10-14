@@ -182,3 +182,12 @@ was a fair check of last hour's rewritten-rows fix.
 
 **A run of the eyes and Retinat files had one failure I did not keep the log of.** Two reruns with the same code:
 115 of 115, then 115 of 115 with the log kept. It is an intermittent I cannot name.
+
+## 06:36: `retinat_scroll` live at last
+
+A container restart reconnected the MCP client, which then listed `retinat_scroll`
+(`python-docs-scroll-to-wait-for-live.mp4`). On the Python asyncio docs:
+- `to: "wait_for"` scrolled 13.0 screens in one call and put the match at y 540, mid-screen, with the crop on it.
+  It had taken 13 PageDown calls.
+- `to: "wait_for", nth: 4` brought the fourth match to y 540.
+- `screens: -2` moved 2.0 screens up: "12.6 screens from the top of 24.9".

@@ -3571,23 +3571,25 @@ labels are drawn into image tiles.
   MIT project.
 - **Awesome-Hacking:** lists for security work; nothing beyond the REA ideas fits here.
 
+**`retinat_scroll` live** (after a restart reconnected the MCP client): on the Python docs, `to: "wait_for"` scrolled 13
+screens in one call (13 PageDown calls before), `nth: 4` reached the fourth match, and `screens: -2` moved 2.0 screens.
+
 **Next, in order:**
-1. **`retinat_scroll` live** from a fresh session (Python docs, `to: "wait_for"`).
-2. **From the owner's links:**
+1. **From the owner's links:**
    - a HAR export of what the eyes saw on the network (`retinat_requests`);
    - hands-on with the Puter app demos (canvas-heavy web apps).
-3. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
+2. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
    Look at feeding pictures off the main thread (a worker, or a smaller picture of only the box a rule reads).
-4. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
-5. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
+3. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+4. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
    the Bunny, 0.926 -> 0.941 on Steel) is nearly free; measure the screencast's CPU first.
-6. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
+5. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
    or CORS WebM/VP9 source.
-7. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
-8. **Intermittents to watch in full runs:** the play-arena title screen (failed again in one of two runs on
+6. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
+7. **Intermittents to watch in full runs:** the play-arena title screen (failed again in one of two runs on
    `89df927`; 10 of 10 alone or under load), the feed test (failed in the `c09d801` run; with every core busy, 2 of 30
    flicks overshot, and 1 of those 2 was not brought back in three flicks), the region-runner test, and the reflex
    speed test.
-9. **Carried over:**
+8. **Carried over:**
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).
