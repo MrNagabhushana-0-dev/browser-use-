@@ -16,6 +16,7 @@ import io
 import random
 import re
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -1397,6 +1398,98 @@ async def test_a_scan_labels_each_frame_with_where_it_was_scrolled(eyes, session
 		if sum(abs(a - b) for a, b in zip(got, expected)) > 90:
 			wrong.append((round(frame.scroll_y / vh, 2), got))
 	assert not wrong, f'{len(wrong)} of {len(scan.frames)} frames show another band than their label says: {wrong[:5]}'
+
+
+TALL_COLOURS = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255), (255, 128, 0), (128, 0, 255)]
+
+
+def _bands_page(screens: int) -> str:
+	return (
+		'<!doctype html><style>body{margin:0} div{height:100vh}</style><body>'
+		+ ''.join(f'<div style="background:rgb{TALL_COLOURS[i % 8]}"></div>' for i in range(screens))
+		+ '</body>'
+	)
+
+
+TALL_PAGE = _bands_page(20)
+
+
+async def test_a_scan_shows_nothing_from_before_it_began(eyes, session, site):
+	"""The frames a scan keeps were taken from the stream from its start, so frames of an earlier page in the same tab
+	(a scan, a look) came along: a scan of a grey page showed the bands of the page before it."""
+	site.expect_request('/bands').respond_with_data(BANDS_PAGE, content_type='text/html')
+	site.expect_request('/grey').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#808080;height:300vh"></body>', content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/bands'))
+	await eyes._page_watcher().scan(max_screens=3, dwell_s=0.3)
+	await _open(eyes, session, site.url_for('/grey'))
+	scan = await eyes._page_watcher().scan(max_screens=3, dwell_s=0.3)
+	banded = []
+	for frame in scan.frames:
+		with Image.open(io.BytesIO(frame.jpeg)) as img:
+			got = img.convert('RGB').getpixel((img.width // 2, img.height // 2))
+		assert isinstance(got, tuple)
+		if any(sum(abs(a - b) for a, b in zip(got, c)) < 90 for c in BAND_COLOURS):
+			banded.append(got)
+	assert scan.frames and not banded, f'{len(banded)} of {len(scan.frames)} frames show the page before: {banded[:3]}'
+
+
+async def test_a_scan_stopped_by_max_screens_says_what_it_did_not_see(eyes, session, site):
+	"""A 20-screen page scanned with max_screens=2 said nothing of the 17 screens below: now it says where to go on."""
+	site.expect_request('/tall').respond_with_data(TALL_PAGE, content_type='text/html')
+	await _open(eyes, session, site.url_for('/tall'))
+	p = await eyes.scan(max_screens=2, keyframes=2)
+	assert p.stop_reason == 'max_screens', (p.stop_reason, p.text)
+	assert 'call again with from_screen=' in p.text and p.resume and p.resume['from_screen'] >= 1.5, (p.resume, p.text)
+
+
+async def test_a_scan_out_of_time_says_how_far_it_got_and_where_to_go_on(eyes, session, site):
+	"""MCP clients give a call 60 s, and a long scan was simply lost (retinat_scan "timed out after 60s", twice). With a
+	deadline a scan stops in time with what it saw, and says what to call to go on."""
+	from browser_use.eyes.views import Deadline
+
+	site.expect_request('/tall').respond_with_data(TALL_PAGE, content_type='text/html')
+	await _open(eyes, session, site.url_for('/tall'))
+	started = time.monotonic()
+	p = await eyes.scan(max_screens=40, keyframes=4, deadline=Deadline.after(4))
+	took = time.monotonic() - started
+	assert took < 5.5, f'took {took:.1f}s with a 4 s deadline'
+	assert p.stop_reason == 'time' and p.image, (p.stop_reason, p.text)
+	assert p.resume and 0 < p.resume['from_screen'] < 20, (p.resume, p.text)
+	assert 'out of time' in p.text and f'call again with from_screen={p.resume["from_screen"]}' in p.text, p.text
+
+
+async def test_scans_cut_short_by_time_go_on_from_where_they_stopped_without_a_gap(eyes, session, site):
+	"""What matters in a scan that takes several calls is that together they see the whole page: no screen skipped
+	between one call and the next, and nothing above where a call was told to begin (a frame drawn before its jump)."""
+	from browser_use.eyes.views import Deadline
+
+	site.expect_request('/ten').respond_with_data(_bands_page(10), content_type='text/html')
+	await _open(eyes, session, site.url_for('/ten'))
+	watcher = eyes._page_watcher()
+	spans: list[tuple[float, float]] = []
+	stops: list[str] = []
+	frm = 0.0
+	for _ in range(8):
+		scan = await watcher.scan(max_screens=40, dwell_s=0.3, keyframes=2, from_screen=frm, deadline=Deadline.after(3))
+		vh = scan.viewport[1]
+		lowest = min(frm * vh, scan.page_height - vh) - 2
+		assert scan.frames and min(f.scroll_y for f in scan.frames) >= lowest, (
+			frm,
+			sorted({round(f.scroll_y / vh, 2) for f in scan.frames})[:5],
+		)
+		spans += [(f.scroll_y, f.scroll_y + vh) for f in scan.frames]
+		stops.append(scan.stopped)
+		if scan.next_y is None:
+			break
+		frm = scan.next_y / vh
+	assert len(stops) >= 2 and stops[-1] == 'end' and set(stops[:-1]) == {'time'}, stops
+	reach = 0.0
+	for top, bottom in sorted(spans):
+		assert top <= reach + 2, f'nothing seen from {reach:.0f} to {top:.0f} px down (stops {stops})'
+		reach = max(reach, bottom)
+	assert reach >= scan.page_height - 2, (reach, scan.page_height)
 
 
 LOOKALIKE_PAGE = (
