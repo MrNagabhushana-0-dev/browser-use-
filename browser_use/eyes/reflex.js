@@ -150,7 +150,8 @@
 		}
 		if (!screen) return null;
 		screenSeen = screen.t;
-		return { data: screen.data, W: screen.W, H: screen.H, rect: { left: 0, top: 0, width: innerWidth, height: innerHeight }, clip, seq: screen.seq, t: screen.t };
+		const [width, height] = screen.span || [innerWidth, innerHeight];
+		return { data: screen.data, W: screen.W, H: screen.H, rect: { left: 0, top: 0, width, height }, clip, seq: screen.seq, t: screen.t };
 	};
 
 	// The source, downscaled once this frame: {data, W, H, rect, clip, seq, t}. seq and t are the screen picture's
@@ -392,7 +393,7 @@
 
 	window.__reflex = {
 		// Python's picture of the screen: W x H, RGB, base64, drawn at `drawn` (seconds since the epoch). Returns that on the page's clock.
-		feed(W, H, b64, seq, drawn) {
+		feed(W, H, b64, seq, drawn, span) {
 			const bin = atob(b64);
 			const n = W * H;
 			const data = new Uint8ClampedArray(n * 4);
@@ -403,7 +404,8 @@
 				data[p * 4 + 3] = 255;
 			}
 			// t: when the compositor drew it (drawn: seconds since the epoch), on this page's clock
-			screen = { data, W, H, seq, t: drawn ? drawn * 1000 - performance.timeOrigin : performance.now() };
+			// span: the CSS px the picture covers (a screencast frame takes in the scrollbar, a capture does not)
+			screen = { data, W, H, seq, span, t: drawn ? drawn * 1000 - performance.timeOrigin : performance.now() };
 			return screen.t;
 		},
 		stop() {

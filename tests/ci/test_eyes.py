@@ -883,6 +883,32 @@ async def test_a_look_says_how_its_image_maps_to_click_coordinates(eyes, session
 	assert abs(cx * factor - 660) < 12 and abs(cy * factor - 330) < 12, (cx * factor, cy * factor)
 
 
+async def test_a_look_maps_to_click_coordinates_on_a_page_with_a_scrollbar(eyes, session, site):
+	"""Found on Poki: "Temple Run 2" was at (329, 400) by retinat_find and at (322, 394) by a look's pixels times its
+	factor, 1.45 = 945/650. The look image showed the page's scrollbar: it spanned more than the 945 px client width
+	the factor was taken from, so clicks from a look drifted toward the top-left, ~15 px at the far edge, and reflex
+	regions taken from looks missed what they were aimed at."""
+	import re
+
+	from PIL import Image
+
+	site.expect_request('/tall-target').respond_with_data(
+		'<!doctype html><body style="margin:0;height:4000px"><div style="position:fixed;right:40px;bottom:40px;'
+		'width:60px;height:40px;background:#e00"></div></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/tall-target'))
+	seen = await eyes.look()
+	match = re.search(r'of the (\d+)x(\d+) CSS px viewport: to click, multiply its pixels by ([\d.]+)', seen.text)
+	assert match and seen.image is not None, seen.text
+	view_w, view_h, factor = (float(g) for g in match.groups())
+	img = Image.open(io.BytesIO(seen.image)).convert('RGB')
+	reds = [(x, y) for y in range(img.height) for x in range(img.width) if (p := img.getpixel((x, y)))[0] > 180 and p[1] < 80]  # type: ignore[index]
+	cx, cy = sum(x for x, _ in reds) / len(reds), sum(y for _, y in reds) / len(reds)
+	want = (view_w - 70, view_h - 60)
+	assert abs(cx * factor - want[0]) < 4 and abs(cy * factor - want[1]) < 4, ((cx * factor, cy * factor), want)
+
+
 async def test_the_retina_averages_a_video_into_its_grid_rather_than_picking_pixels(eyes, session, site, tmp_path):
 	"""Shot detection scored better on area-averaged grids than on point-sampled ones (on two films' edit lists, most
 	on live action: F1 0.941 against 0.921 at 10 a second). The retina draws videos with low smoothing, which I took

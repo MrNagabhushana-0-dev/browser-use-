@@ -591,3 +591,37 @@ async def test_rules_reading_the_screen_leave_the_eyes_sight_of_a_film_alone(cli
 		for server in (media, page):
 			server.clear()
 			server.stop()
+
+
+@pytest.mark.parametrize('moving', [False, True], ids=['still', 'animated'])
+async def test_rules_read_the_screen_where_it_is_on_a_page_with_a_scrollbar(session, moving):
+	"""Found playing Temple Run 2 on Poki: a rule aimed at the game's on-screen key, from a look, read ~9 px off it.
+	The screen comes to the rules as screencast frames (the whole window, the scrollbar too) and as captures (the
+	page's client area only); both were mapped onto the window's width. Each picture now says what it spans."""
+	server = HTTPServer()
+	server.start()
+	spin = (
+		'<div style="position:fixed;left:10px;top:300px;width:30px;height:30px;background:#00f;'
+		'animation:s 0.5s linear infinite"></div><style>@keyframes s{to{transform:rotate(360deg)}}</style>'
+	)
+	server.expect_request('/tall').respond_with_data(
+		'<!doctype html><body style="margin:0;height:4000px"><div style="position:fixed;right:30px;top:100px;'
+		f'width:40px;height:40px;background:#f00"></div>{spin if moving else ""}</body>',
+		content_type='text/html',
+	)
+	try:
+		await session.navigate_to(server.url_for('/tall'))
+		reflexes = Reflexes(session)
+		red = "see.locate([255,0,0], {from: 'screen', tol: 60})"
+		off = 'Math.abs(r.x - (document.documentElement.clientWidth - 50)) + Math.abs(r.y - 120)'
+		await reflexes.install(
+			[
+				{'when': f'(r => r && r.n > 3 && {off} < 5)({red})', 'notify': 'on it'},
+				{'when': f'(r => r && r.n > 3 && {off} >= 5)({red})', 'notify': 'off it'},
+			]
+		)
+		event = await reflexes.wait(timeout=8)
+		assert event is not None and event.label == 'on it', (event, reflexes.stats())
+	finally:
+		server.clear()
+		server.stop()

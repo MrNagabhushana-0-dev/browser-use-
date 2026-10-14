@@ -73,13 +73,14 @@ async def _cropped(client: 'CDPClient', params: dict, clip: dict, session_id: st
 	shot = await client.send.Page.captureScreenshot(params=cast('CaptureScreenshotParameters', whole), session_id=session_id)
 	with Image.open(io.BytesIO(base64.b64decode(shot['data']))) as img:
 		scale = float(clip.get('scale') or 1)
-		device = img.width / max(1.0, float(view['clientWidth']))  # image pixels per CSS px (device scale)
+		device = _device_scale(metrics, img.width)
 		size = (max(1, round(width * scale * device)), max(1, round(height * scale * device)))
+		full = img.width
 		if img.format == 'JPEG' and scale < 1:
 			# Decode at a fraction of the size when the clip is wanted smaller: ~6 ms instead of ~20 for a 1920x1080
 			# frame cut to a 320 px picture (the JPEG decoder scales by 1/2, 1/4 or 1/8 as it goes)
 			img.draft('RGB', (max(1, round(img.width * scale)), max(1, round(img.height * scale))))
-		px = img.width / max(1.0, float(view['clientWidth']))  # pixels per CSS px as decoded
+		px = device * img.width / full  # pixels per CSS px as decoded
 		box = (round(max(0.0, left) * px), round(max(0.0, top) * px), round((left + width) * px), round((top + height) * px))
 		part = img.crop(box)
 		if part.size != size:
@@ -90,3 +91,12 @@ async def _cropped(client: 'CDPClient', params: dict, clip: dict, session_id: st
 		else:
 			part.save(out, 'WEBP' if fmt == 'webp' else 'PNG')
 	return {'data': base64.b64encode(out.getvalue()).decode()}
+
+
+def _device_scale(metrics: Any, image_width: int) -> float:
+	"""Image pixels per CSS px in a capture of the viewport. Not the image's width over the client width: the capture
+	takes in the page's scrollbar and the client width leaves it out (1920 against 1905 px on Poki), which put every
+	look on a page with a scrollbar ~1% out, ~15 px at its far edge. `visualViewport` is in device pixels."""
+	css = float(metrics['cssVisualViewport']['clientWidth'])
+	device = float((metrics.get('visualViewport') or {}).get('clientWidth') or 0)
+	return device / css if device > 0 and css > 0 else image_width / max(1.0, css)

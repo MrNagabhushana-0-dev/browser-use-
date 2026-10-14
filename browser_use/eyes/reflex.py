@@ -301,7 +301,7 @@ class Reflexes:
 		while self._handler is not None:
 			started = time.time()
 			try:
-				png = await self._capture()
+				png, span = await self._capture()
 			except asyncio.CancelledError:
 				raise
 			except Exception as e:
@@ -312,7 +312,7 @@ class Reflexes:
 				await asyncio.sleep(0.25)  # a navigation: try again shortly
 				continue
 			failing_since = None
-			await self._feed(png, started)
+			await self._feed(png, started, span)
 
 	async def _feed_by_screencast(self) -> None:
 		"""A screencast of this tab on a DevTools connection of its own, so it shares no event slot with the recorder
@@ -337,7 +337,7 @@ class Reflexes:
 			raise _NoScreencast(f'{type(e).__name__}: {e}') from e
 		self._screen_source = 'screencast'
 		async with connection as ws:
-			newest: list[tuple[bytes, float] | None] = [None]
+			newest: list[tuple[bytes, float, tuple[float, float] | None] | None] = [None]
 			arrived = asyncio.Event()
 
 			async def read() -> None:
@@ -348,16 +348,18 @@ class Reflexes:
 					params = msg['params']
 					ack = {'id': 2, 'method': 'Page.screencastFrameAck', 'params': {'sessionId': params['sessionId']}}
 					await ws.send(json.dumps(ack))  # at once: Chrome sends the next frame only after this
-					drawn = float(params.get('metadata', {}).get('timestamp') or time.time())
-					newest[0] = (base64.b64decode(params['data']), drawn)  # an older frame not yet fed is dropped
+					meta = params.get('metadata', {})
+					drawn = float(meta.get('timestamp') or time.time())
+					span = (float(meta['deviceWidth']), float(meta['deviceHeight'])) if meta.get('deviceWidth') else None
+					newest[0] = (base64.b64decode(params['data']), drawn, span)  # an older frame not yet fed is dropped
 					arrived.set()
 
 			reader = asyncio.create_task(read())
 			try:
 				start = {'format': 'png', 'maxWidth': SCREEN_WIDTH, 'maxHeight': SCREEN_WIDTH * 4, 'everyNthFrame': 1}
 				await ws.send(json.dumps({'id': 1, 'method': 'Page.startScreencast', 'params': start}))
-				shown = await self._capture()  # a still page sends no frame until it changes
-				await self._feed(shown, time.time())
+				shown, span = await self._capture()  # a still page sends no frame until it changes
+				await self._feed(shown, time.time(), span)
 				topped_up = True
 				while self._handler is not None:
 					if reader.done():
@@ -368,8 +370,8 @@ class Reflexes:
 					except TimeoutError:
 						if not topped_up:
 							topped_up = True
-							shown = await self._capture()
-							await self._feed(shown, time.time())
+							shown, span = await self._capture()
+							await self._feed(shown, time.time(), span)
 						continue
 					arrived.clear()
 					frame, newest[0] = newest[0], None
@@ -380,8 +382,9 @@ class Reflexes:
 				reader.cancel()
 				await asyncio.gather(reader, return_exceptions=True)
 
-	async def _capture(self) -> bytes:
-		"""The viewport now, as a PNG SCREEN_WIDTH wide (forces a frame: ~50 ms headless, more on a busy page)."""
+	async def _capture(self) -> tuple[bytes, tuple[float, float]]:
+		"""The viewport now, as a PNG SCREEN_WIDTH wide (forces a frame: ~50 ms headless, more on a busy page), and the
+		CSS px it spans: the page's client area, without its scrollbar."""
 		assert self._cdp is not None
 		send = self._cdp.cdp_client.send
 		vp = (await send.Page.getLayoutMetrics(session_id=self._session_id))['cssLayoutViewport']
@@ -393,17 +396,19 @@ class Reflexes:
 			'scale': SCREEN_WIDTH / max(1, vp['clientWidth']),
 		}
 		shot = await capture_screenshot(self._cdp.cdp_client, {'format': 'png', 'clip': clip}, self._session_id)
-		return base64.b64decode(shot['data'])
+		return base64.b64decode(shot['data']), (float(vp['clientWidth']), float(vp['clientHeight']))
 
-	async def _feed(self, png: bytes, drawn: float) -> None:
-		"""Hand one picture to the rules; `drawn` is when the compositor drew it (time.time())."""
+	async def _feed(self, png: bytes, drawn: float, span: tuple[float, float] | None = None) -> None:
+		"""Hand one picture to the rules; `drawn` is when the compositor drew it (time.time()), `span` the CSS px it
+		covers. A screencast frame takes in the window, its scrollbar too; a capture only the client area: mapped
+		alike, one was ~1% out (found aiming a rule at Temple Run 2's on-screen key on Poki)."""
 		assert self._cdp is not None and self._context_id is not None
 		try:
 			w, h, rgb = await asyncio.to_thread(_rgb, png)
 			self._screen_seq += 1
 			await self._cdp.cdp_client.send.Runtime.evaluate(
 				params={
-					'expression': f'window.__reflex && window.__reflex.feed({w}, {h}, "{base64.b64encode(rgb).decode()}", {self._screen_seq}, {drawn!r})',
+					'expression': f'window.__reflex && window.__reflex.feed({w}, {h}, "{base64.b64encode(rgb).decode()}", {self._screen_seq}, {drawn!r}, {json.dumps(list(span) if span else None)})',
 					'contextId': self._context_id,
 				},
 				session_id=self._session_id,
