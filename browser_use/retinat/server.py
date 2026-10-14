@@ -324,7 +324,9 @@ def _browser_tools() -> list['types.Tool']:
 			description=(
 				'Find visible text on the page: where each match is (its centre in viewport CSS px, ready for '
 				'retinat_click/tap), whether it is in view or how far to scroll, and a magnified crop around the first '
-				'match in view. Cheaper than a look when you know what you are after.'
+				'match in view. Text the page does not have as text (map labels, words in images, canvas or other '
+				"sites' frames) is read from the screen's pixels when the ocr extra is installed: slower, on screen only. "
+				'Cheaper than a look when you know what you are after.'
 			),
 			input_schema={
 				'type': 'object',

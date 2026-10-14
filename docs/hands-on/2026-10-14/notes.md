@@ -59,3 +59,36 @@ smooth scrolling fell short, then answers as find does, with where the match is 
   6 px, and `screens: -2` moved 2 screens up.
 - **Not checked live:** this session's MCP client lists tools only when it starts, so the new tool cannot be called
   from it. The test calls it through the server's MCP handler, on a real browser.
+
+## 03:00: OpenStreetMap, and text that is only pixels
+
+**Before** (`osm-find-map-label-not-found-before.mp4`). The map of London looked right, but at 640 px its labels
+could not be read. `retinat_find "Westminster"` said "not found": find searched the page's text and the names of
+controls, and map labels are drawn into image tiles.
+
+**Added: find reads the screen when the page's text has no match** (the new `ocr` extra: RapidOCR, PP-OCR models
+on onnxruntime, Apache-2.0).
+- **Measured on OpenStreetMap screens:**
+  - A full 1920x1080 read is 4.5-6 s on 4 cores, most of it recognising ~200 lines.
+  - Lines too short to hold the query are skipped: "Westminster" 6.2 -> 4.1 s, "City of Westminster" 5.0 -> 2.7 s,
+    no gain for a short word.
+  - A lower box threshold (0.3, default 0.5) recovered "Lambeth", which had come back as "eth": 11 of 12 district
+    names, against 10.
+- **Live, three things showed up only on the real screen:**
+  - Labels came back as "Cityof-Westminster", so matching keeps only letters and digits.
+  - "Southwark" was read as "uthwark" at every setting tried. A line holding all but up to 30% of the query at one
+    end counts, said to be "read only in part", and its box is extended over what was missed.
+  - Matching was right on a frame of a recording and wrong live. The live screenshot read differently from the h264
+    frame I had measured on, so the measures above were redone on a saved live screenshot.
+- **Tests:** a canvas with "Kensington Gardens" drawn in it is found within its drawn box, and an absent name is not.
+  Pure tests cover the matching rules.
+
+**After** (`osm-find-map-label-read-from-pixels.mp4`):
+- "Southwark": 4.8 s, at (1123, 586), read in part, with the crop centred on it.
+- "City of Westminster": 7.3 s, at (906, 664).
+
+**Limits:**
+- Seconds, not milliseconds, so it runs only when the page's text has no match. Every miss costs a read, and the
+  answer says how long it took.
+- Only what is on screen now.
+- Small labels crossed by lines can still be missed.

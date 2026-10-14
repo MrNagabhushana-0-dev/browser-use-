@@ -3515,6 +3515,18 @@ The arena clicks through the changed glide, so it was checked: 5 of 5 alone and 
 
 **Full `tests/ci` on `58dad8e`: 1,722 passed, 30 skipped, 0 failed** (37m04s).
 
+**Text that is only pixels** (hands-on on OpenStreetMap). `retinat_find "Westminster"` said "not found": map
+labels are drawn into image tiles.
+- **Added:** find reads the screen with OCR (the `ocr` extra: RapidOCR, PP-OCR on onnxruntime) when the page's text
+  has no match.
+- **Tuned on a live screenshot:**
+  - box threshold 0.3: 11 of 12 district names;
+  - lines too short for the query skipped: up to ~2x faster;
+  - letters and digits only in matching;
+  - a match missing up to 30% at one end counts, flagged as read in part.
+- **Live:** "Southwark" in 4.8 s, "City of Westminster" in 7.3 s.
+- **Caught on the way:** tuning on h264 frames of a recording gave different reads from a live screenshot.
+
 **Next, in order:**
 1. **`retinat_scroll` live** from a fresh session (Python docs, `to: "wait_for"`).
 2. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.

@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from browser_use.browser.capture import capture_screenshot
-from browser_use.eyes import asr, hearing, motion, sight
+from browser_use.eyes import asr, hearing, motion, ocr, sight
 from browser_use.eyes.archive import FrameArchive
 from browser_use.eyes.console import ConsoleLog
 from browser_use.eyes.percept import (
@@ -500,6 +500,46 @@ class Eyes:
 		)
 		return Percept([], text, jpeg, size, tokens, len(text) // 4)
 
+	async def _find_in_pixels(self, text: str, limit: int, vw: float, vh: float) -> Percept:
+		"""find() for text the page's own text does not have: read from the screen's pixels (map labels drawn into tiles,
+		words in an image or canvas, another site's frame). Only what is on screen now; seconds, not milliseconds."""
+		from PIL import Image
+
+		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		shot = await capture_screenshot(cdp.cdp_client, {'format': 'png'}, cdp.session_id)
+		picture = base64.b64decode(shot['data'])
+		with Image.open(io.BytesIO(picture)) as img:
+			scale = img.width / max(1.0, vw)  # picture pixels per CSS px
+		started = time.monotonic()
+		hits = ocr.find(await asyncio.to_thread(ocr.read, picture, text), text)
+		took = time.monotonic() - started
+		if not hits:
+			return Percept(
+				[],
+				f'🔎 "{text}": not found in the page text, the names of controls, or the text on screen (read from the '
+				f'pixels in {took:.1f}s; only what is in view)',
+				None,
+			)
+		lines = [f'🔎 "{text}": {len(hits)} match(es) read from the pixels on screen (OCR, {took:.1f}s; not in the page text)']
+		for i, (hit, whole) in enumerate(hits[:limit], 1):
+			x, y, w, h = (v / scale for v in hit.box)
+			lines.append(
+				f'  {i}. at ({x + w / 2:.0f}, {y + h / 2:.0f}), {w:.0f}x{h:.0f} px, in view, confidence {hit.confidence:.2f}: '
+				f'"{hit.text}"' + ('' if whole else ' (read only in part: look at the crop)') + page_text_note(hit.text)
+			)
+		x, y, w, h = (v / scale for v in hits[0][0].box)
+		cw, ch = max(240.0, w + 160), max(80.0, h + 60)
+		crop = await self.zoom(
+			min(max(0.0, x + w / 2 - cw / 2), max(0.0, vw - cw)),
+			min(max(0.0, y + h / 2 - ch / 2), max(0.0, vh - ch)),
+			cw,
+			ch,
+			max_width=720,
+			max_height=300,
+		)
+		crop.text = '\n'.join(lines) + '\n' + crop.text
+		return crop
+
 	async def scroll(self, screens: float | None = None, to: str | None = None, nth: int = 1) -> Percept:
 		"""Turn the real wheel over the middle of the page: by `screens` viewport heights (negative is up), or until
 		the `nth` match of the text `to` is in view, then say where it is (as find() does), ready to click.
@@ -572,9 +612,11 @@ class Eyes:
 		found = await self.retina.evaluate(f'({_FIND_JS})({json.dumps(text.strip())}, {int(limit) * 4})') or {}
 		matches, vw, vh = found.get('matches') or [], found.get('vw') or 1, found.get('vh') or 1
 		if not matches:
+			if ocr.available():
+				return await self._find_in_pixels(text, limit, float(vw), float(vh))
 			return Percept(
 				[],
-				f'🔎 "{text}": not found in the visible text or the names of controls on the page (text inside images, canvas, iframes and closed shadow roots is not searched)',
+				f'🔎 "{text}": not found in the visible text or the names of controls on the page (text inside images, canvas, iframes and closed shadow roots is not searched; the ocr extra reads it from the screen)',
 				None,
 			)
 		lines = [

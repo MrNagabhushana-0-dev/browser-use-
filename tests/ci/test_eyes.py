@@ -1403,6 +1403,53 @@ async def test_a_scan_sheet_shows_the_whole_page_not_two_frames_of_its_top(eyes,
 	)
 
 
+def _ocr_available() -> bool:
+	from browser_use.eyes import ocr
+
+	return ocr.available()
+
+
+def test_text_read_from_pixels_is_matched_as_a_person_would_read_it():
+	"""Found live on OpenStreetMap: labels came back as "Cityof-Westminster" and "uthwark". Spaces and punctuation are
+	ignored, and a line missing up to 30% of the query at one end counts, said to be read in part, boxed over what was
+	missed."""
+	from browser_use.eyes.ocr import ReadLine, find
+
+	lines = [ReadLine('Cityof-Westminster', 0.97, (840, 655, 180, 18)), ReadLine('uthwark', 0.98, (1090, 579, 70, 14))]
+	[(westminster, whole)] = find(lines, 'City of Westminster')
+	assert whole and westminster.box[0] == 840
+	[(southwark, whole)] = find(lines, 'Southwark')
+	assert not whole and southwark.box[0] < 1090 and southwark.box[2] > 70, southwark.box
+	assert find(lines, 'Lambeth') == []
+	assert find([ReadLine('ark', 0.9, (0, 0, 30, 10))], 'Park') == [], 'too little of it to count'
+
+
+@pytest.mark.skipif(not _ocr_available(), reason='the ocr extra (rapidocr-onnxruntime) is not installed')
+async def test_find_reads_text_drawn_into_a_canvas_from_the_pixels(eyes, session, site):
+	"""Found hands-on on OpenStreetMap: "City of Westminster" was on screen, drawn into the map's tiles, and find said
+	"not found": it searched the page's text and the names of controls only. When those have no match, find now reads
+	the screen's pixels and says that it did."""
+	site.expect_request('/drawn').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#eee"><canvas id="c" width="900" height="400"></canvas><script>'
+		"const g = document.getElementById('c').getContext('2d'); g.fillStyle = '#cfe8c8'; g.fillRect(0, 0, 900, 400);"
+		"g.fillStyle = '#333'; g.font = '28px sans-serif'; g.fillText('Kensington Gardens', 520, 300);"
+		"g.fillText('Hyde Park', 80, 90);</script></body>",
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/drawn'))
+	found = await eyes.find('kensington gardens')
+	import re
+
+	assert 'read from the pixels' in found.text, found.text
+	m = re.search(r'at \((\d+), (\d+)\)', found.text)
+	assert m, found.text
+	x, y = int(m.group(1)), int(m.group(2))
+	# drawn from (520, 300) baseline, ~250 px wide and ~28 px tall
+	assert 560 <= x <= 720 and 270 <= y <= 305, f'its centre on screen, to click: {found.text}'
+	assert found.image, 'a crop around it comes back'
+	assert 'not found' in (await eyes.find('Buckingham Palace')).text
+
+
 async def test_a_scan_spends_frames_left_over_on_what_changes_on_its_own(eyes, session, site):
 	"""Frames are chosen first for how much of the page they show; one screen is shown by one frame. What is left over
 	goes to what changed there on its own: a canvas that turns red, green, then blue is shown in more than one colour."""
