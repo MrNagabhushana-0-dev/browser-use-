@@ -151,6 +151,7 @@ class Request(BaseModel):
 	bytes: int | None = None
 	ms: float | None = None
 	error: str = ''
+	blocked_by: str = ''  # CDP's blockedReason when the browser blocked it: csp, mixed-content, other (an extension)...
 	from_cache: bool = False
 	started: float = 0.0  # CDP monotonic seconds
 
@@ -161,6 +162,21 @@ class Request(BaseModel):
 	@property
 	def api(self) -> bool:
 		return self.type in API_TYPES or 'json' in self.mime
+
+
+# Blocks the page's own rules made: what the page asked for and was refused, worth telling. Anything else blocked
+# ("other", Chrome's subresource filter, DevTools) is the browser side: on MDN, the profile's own ad blocker.
+PAGE_POLICY_BLOCKS = ('csp', 'mixed-content', 'origin', 'content-type', 'corp-', 'coep-', 'coop-')
+
+
+def told_as_page_failure(req: 'Request') -> bool:
+	"""Whether a failed request is the page's failure to tell of: an HTTP error, a network error, or a block by the
+	page's own policy. Not one the page cancelled itself, nor one the browser side (an extension) blocked."""
+	if req.error == 'canceled':
+		return False
+	if req.error == 'blocked':
+		return req.blocked_by.startswith(PAGE_POLICY_BLOCKS)
+	return req.failed
 
 
 class RequestLog(TabListener):
@@ -234,6 +250,7 @@ class RequestLog(TabListener):
 			req.error = (
 				'blocked' if e.get('blockedReason') else ('canceled' if e.get('canceled') else e.get('errorText', 'failed'))
 			)
+			req.blocked_by = str(e.get('blockedReason') or '')
 			req.ms = round((e.get('timestamp', req.started) - req.started) * 1000, 1)
 
 	# -- reading -------------------------------------------------------------------------

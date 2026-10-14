@@ -149,3 +149,36 @@ Turing", then "Ada Lovelace". Two things went unsaid:
 **After** (`wikipedia-search-refused-requests-said.mp4`): typing "Grace Hopper", changes said the suggestion requests
 for "Grace Hop" and "Grace Hopper" were refused (429). Every suggestion request was being refused by then, so the rows
 fix could not be seen live. I did not retry against Wikimedia's limit.
+
+## 05:50: MDN's search box, a web component
+
+**Before** (`mdn-search-web-component-unseen-before.mp4`). MDN's own search filters its index in the page, so it
+was a fair check of last hour's rewritten-rows fix.
+- Typing "flexbox" showed "Flexbox", "Basic concepts of flexbox", "Typical use cases of flexbox"… on screen.
+  Neither `retinat_changes` nor a look reported any of it.
+- The search box is a web component: its rows are inside a shadow root, and the text watcher observed the document,
+  which changes inside a shadow root never reach.
+- find said "Skip to search" was "above the visible area: scroll up about 0.3 screens" on a page at its top. It is a
+  skip link parked above the page until it has keyboard focus; no scrolling reaches it.
+
+**Fixed, test first:**
+- **Open shadow roots are watched too.** The retina cannot see the page's own attachShadow calls from its isolated
+  world, so new roots are looked for on its heartbeat, about once a second. What a component already shows when its
+  root is first found (after the page settled) is said then.
+  - Test: a custom element attaching its root after load, then filling it, is reported.
+- **find says a match above the top of the page cannot be scrolled to**, as a skip link is placed until it has
+  keyboard focus.
+- **Requests the browser side blocked are left out of changes.** On MDN the profile's own ad blocker stopped its ad
+  call and telemetry, and changes said "a request the page made failed: blocked POST /pong/get". Blocks by the
+  page's own policy (CSP, mixed content, CORP/COEP) are still told, and retinat_requests still lists all of them.
+  This one's test was written with the code, not before it.
+
+**After** (`mdn-search-web-component-seen.mp4`):
+- Every suggestion is reported as its row: "CSS / Guides / Flexible box layout Basic concepts of flexbox", "CSS /
+  Reference / Properties flex-wrap CSS property", …, refreshed as the typing went on. That also shows last hour's
+  rows fix live.
+- find: "out of sight above the page: cannot be scrolled to".
+- changes no longer lists the blocked ad call.
+
+**A run of the eyes and Retinat files had one failure I did not keep the log of.** Two reruns with the same code:
+115 of 115, then 115 of 115 with the log kept. It is an intermittent I cannot name.

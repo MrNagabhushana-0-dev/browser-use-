@@ -59,7 +59,7 @@ from browser_use.eyes.percept import (
 	page_text_note,
 	render_strip,
 )
-from browser_use.eyes.requests import RequestLog
+from browser_use.eyes.requests import RequestLog, told_as_page_failure
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
 from browser_use.human.input import HumanInput
 from browser_use.human.touch import HumanTouch
@@ -628,7 +628,11 @@ class Eyes:
 		in_view = None
 		for i, m in enumerate(matches[:limit], 1):
 			cx, cy = m['x'] + m['w'] / 2, m['y'] + m['h'] / 2
-			if cy < 0:
+			if cy < 0 and cy + float(found.get('sy') or 0) < 0:
+				# Above the top of the page itself: parked out of sight on purpose (found on MDN: a skip link, shown
+				# only when it has keyboard focus), so no scrolling reaches it
+				where = 'out of sight above the page: cannot be scrolled to (placed there on purpose, as a skip link is until it has keyboard focus)'
+			elif cy < 0:
 				where = f'above the visible area: scroll up about {(-cy) / vh:.1f} screens'
 			elif cy > vh:
 				where = f'below the visible area: scroll down about {(cy - vh) / vh + 0.5:.1f} screens'
@@ -1190,10 +1194,11 @@ class Eyes:
 		Found on Wikipedia: "Alan Turing" typed into the search box left the suggestions for "Al" on screen, and
 		changes said nothing had changed; the suggestion request had been refused (429), which only the request log
 		showed. Images, scripts and the like are left out (an ad that 404s is not news), and so are requests the page
-		cancelled itself (a typeahead drops the one for the previous keystroke)."""
+		cancelled itself (a typeahead drops the one for the previous keystroke) and ones the browser side blocked (on
+		MDN, the profile's own ad blocker stopped its ad call)."""
 		lines = []
 		for req in self.requests.entries(since=max(0, self.requests.last_seq - 60), only='api', limit=60):
-			if req.seq in self._requests_noted or not req.failed or req.error == 'canceled':
+			if req.seq in self._requests_noted or not told_as_page_failure(req):
 				continue
 			self._requests_noted.add(req.seq)
 			path = urlparse(req.url)
@@ -1384,7 +1389,7 @@ _FIND_JS = """(q, cap) => {
 		const role = el.getAttribute('role') || el.tagName.toLowerCase();
 		out.push({ x: r.left, y: r.top, w: r.width, h: r.height, context: role + ' named "' + name.replace(/\\s+/g, ' ').trim().slice(0, 80) + '"', named: true });
 	}
-	return { matches: out, vw: innerWidth, vh: innerHeight };
+	return { matches: out, vw: innerWidth, vh: innerHeight, sy: scrollY };
 }"""
 
 

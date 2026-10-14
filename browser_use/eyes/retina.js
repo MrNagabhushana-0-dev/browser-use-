@@ -759,18 +759,41 @@ registerProcessor('retina-ear', RetinaEar);
 				reportAll(touched, added);
 			}, 0);
 		});
-		textObserver.observe(document, {
-			childList: true,
-			subtree: true,
-			characterData: true,
-			attributes: true,
-			attributeFilter: REVEALING,
-			attributeOldValue: true,
-		});
+		textObserver.observe(document, TEXT_WATCH);
+		watchShadows(false);
+	};
+	// Changes inside a shadow root never reach an observer on the document (found on MDN: its search box is a web
+	// component, and the suggestions it showed were never reported). Open shadow roots are watched too. The retina
+	// cannot see the page's own attachShadow calls from its isolated world, so new ones are looked for on the
+	// heartbeat; what a component already shows when its root is first found (after the page settled) is said then.
+	const TEXT_WATCH = {
+		childList: true,
+		subtree: true,
+		characterData: true,
+		attributes: true,
+		attributeFilter: REVEALING,
+		attributeOldValue: true,
+	};
+	const shadowsSeen = new WeakSet();
+	const watchShadows = (sayWhatTheyShow, root = document) => {
+		if (!textObserver) return;
+		const found = [];
+		const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+		for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+			const shadow = n.shadowRoot;
+			if (!shadow || shadowsSeen.has(shadow)) continue;
+			shadowsSeen.add(shadow);
+			textObserver.observe(shadow, TEXT_WATCH);
+			found.push(n);
+			found.push(...watchShadows(false, shadow)); // nested components
+		}
+		if (sayWhatTheyShow && found.length && textReady && settled) reportAll(new Set(found), new Set(found));
+		return found;
 	};
 
 	const heartbeat = () => {
 		watchText(); // in case the document element did not exist when the retina started
+		watchShadows(true);
 		const v = R.attended;
 		if (R.ctx && R.ctx.state === 'suspended') R.ctx.resume().catch(() => {});
 		const media = v && !isCanvas(v) ? v : null;

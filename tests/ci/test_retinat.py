@@ -209,6 +209,46 @@ async def test_changes_says_what_a_list_now_says_when_its_rows_are_rewritten_in_
 	assert 'Ada Lovelace Award' in text and 'Byron' in text, text
 
 
+async def test_changes_sees_text_inside_web_components(retinat, site):
+	"""Found hands-on on MDN: its search box is a web component, and the suggestions it showed for "flexbox" were on
+	screen but never reported by changes or a look. The text watcher observed the document, and changes inside a
+	shadow root never reach it. Open shadow roots are now watched too, including ones attached after load."""
+	import asyncio
+
+	site.expect_request('/components').respond_with_data(
+		'<!doctype html><body><search-box></search-box><script>'
+		"setTimeout(() => { const root = document.querySelector('search-box').attachShadow({mode: 'open'});"
+		" root.innerHTML = '<ul><li>Loading</li></ul>';"
+		" setTimeout(() => { root.querySelector('ul').innerHTML = '<li>Basic concepts of flexbox</li>"
+		"<li>Typical use cases of flexbox</li>'; }, 2500); }, 300);</script></body>",
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/components')})
+	await _call(retinat, 'retinat_changes', {})  # what opening it did
+	await asyncio.sleep(3.5)
+	text = _text(await _call(retinat, 'retinat_changes', {}))
+	assert 'Basic concepts of flexbox' in text and 'Typical use cases of flexbox' in text, text
+
+
+def test_requests_our_own_blocker_stopped_are_not_the_pages_failures():
+	"""Found live on MDN: changes said "a request the page made failed: blocked POST /pong/get", its ad call, which the
+	profile's own ad blocker had stopped. Requests the browser side blocked are left out of changes; ones the page's
+	own policy blocked (CSP, mixed content) and HTTP errors are told."""
+	from browser_use.eyes.requests import Request, told_as_page_failure
+
+	def failed(**kw) -> Request:
+		return Request(seq=1, request_id='r', method='GET', url='https://a.example/x', type='Fetch', **kw)
+
+	assert told_as_page_failure(failed(status=429))
+	assert told_as_page_failure(failed(error='net::ERR_CONNECTION_RESET'))
+	assert told_as_page_failure(failed(error='blocked', blocked_by='csp'))
+	assert told_as_page_failure(failed(error='blocked', blocked_by='mixed-content'))
+	assert not told_as_page_failure(failed(error='blocked', blocked_by='other')), 'an extension, such as the ad blocker'
+	assert not told_as_page_failure(failed(error='blocked', blocked_by='subresource-filter'))
+	assert not told_as_page_failure(failed(error='canceled'))
+	assert not told_as_page_failure(failed(status=200))
+
+
 async def test_changes_says_when_a_request_the_page_made_failed(retinat, site):
 	"""Found hands-on on Wikipedia: "Alan Turing" typed into the search box left the suggestions for "Al" on screen,
 	and changes said nothing had changed. True, and no help: the suggestion request had been refused (429), which only
@@ -305,6 +345,20 @@ async def test_find_says_where_text_is_and_zoom_magnifies_small_print(retinat, s
 
 	with Image.open(io.BytesIO(base64.b64decode(images[0].data))) as img:
 		assert img.width >= 3 * 120, f'magnified from a fresh capture, not the 640 px frame: {img.size}'
+
+
+async def test_find_does_not_send_you_scrolling_to_a_link_parked_above_the_page(retinat, site):
+	"""Found hands-on on MDN: find said "Skip to search" was "above the visible area: scroll up about 0.3 screens" on a
+	page already at its top. A skip link is parked out of sight on purpose until it has keyboard focus: no scrolling
+	reaches it."""
+	site.expect_request('/skip').respond_with_data(
+		'<!doctype html><body style="margin:0"><a href="#s" style="position:absolute;top:-300px">Skip to search</a>'
+		'<div style="height:3000px">page</div></body>',
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/skip')})
+	text = _text(await _call(retinat, 'retinat_find', {'text': 'Skip to search'}))
+	assert 'scroll up' not in text and 'cannot be scrolled to' in text, text
 
 
 async def test_find_matches_text_split_across_elements_and_inside_shadow_roots(retinat, site):
