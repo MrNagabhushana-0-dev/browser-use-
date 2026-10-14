@@ -3527,6 +3527,8 @@ labels are drawn into image tiles.
 - **Live:** "Southwark" in 4.8 s, "City of Westminster" in 7.3 s.
 - **Caught on the way:** tuning on h264 frames of a recording gave different reads from a live screenshot.
 
+**Full `tests/ci` on `76ace3b`: 1,724 passed, 30 skipped, 0 failed** (38m32s).
+
 **Next, in order:**
 1. **`retinat_scroll` live** from a fresh session (Python docs, `to: "wait_for"`).
 2. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
