@@ -354,3 +354,28 @@ regions instead of matching a fixed colour.
 
 **Not done:** a steering rule. Next round: record a full run with traffic to tune on, and try the lane-vs-lane mean
 over several depths.
+
+## 11:42: MR Racer, Endless mode, and how little road the camera shows
+
+**Offline first.** On full-resolution frames from the recordings, the dark pixels (windows, tyres) in the lane ahead
+rose 20 → 121 → 196 → 264 over ~3 s before the pickup crash, and 173 → 844 as a car came up on the right.
+At the rules' 240 px that is ~1/16 of the counts; at 480 px ~1/4.
+
+**Live, Endless mode (no countdown), rule v1** (`mr-racer-rule-v1.js`):
+- `screen_width` 480;
+- hold Up;
+- if the centre lane's dark count passes 30, steer 450 ms toward the emptier side.
+
+It **crashed at 0.22 km, score 71** (`mr-racer-endless-boxes-above-the-horizon.mp4`).
+
+**Why: my lane boxes were above the horizon.** Measured on the frame before the crash, the horizon is at y≈113 and
+our car's roof at y≈137.
+- All of the road ahead is a **24 px band**. My boxes (y 88-124) read mostly sky and hills, so their side counts
+  swung with the scenery.
+- The centre count stayed ~0, and the rule never steered.
+- It is a two-way road. An oncoming car crossed that whole band in ~0.7 s (frames 64-67 at 3 fps): too little time
+  at 8 fps and 160 ms per picture.
+
+**The game's camera key (C) gives more road:** the next view has ~48 px from the horizon to the roof. Not played yet.
+
+Highest MR Racer scores so far: **159** (challenge, time ran out), **71** (Endless, crashed).

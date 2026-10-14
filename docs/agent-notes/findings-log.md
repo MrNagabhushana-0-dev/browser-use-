@@ -3638,11 +3638,18 @@ about:blank) holds that profile.
 
 **Full `tests/ci` on `077c38d`: 1,738 passed, 31 skipped, 0 failed** (39m07s), first run.
 
+**11:42 round, MR Racer Endless.**
+- Offline at full resolution, dark pixels in the lane ahead clearly precede a crash by ~3 s.
+- Live at 480 px the rule crashed at 0.22 km, score 71. Its boxes were above the horizon: the default camera leaves
+  a 24 px band of road between the horizon and the car's roof.
+- The game's C camera doubles that band. No library change this round.
+
 **Next, in order:**
 1. **Games, continued:**
    - Temple Run 2: press as the key lights, not after it (the gap after the zipline); turns at corners; read the
      score;
-   - MR Racer: a steering rule (record a run with traffic to tune on; lane-vs-lane means at several depths);
+   - MR Racer: the C camera (~48 px of road ahead), boxes inside the road band (y ~100-148), dark-pixel count per lane
+     at 480 px;
    - a rule for Subway Surfers' Left/Right tutorial step (read the prompt's arrow), then a run with rules only.
 2. **A screen feed of only what the rules read.** Crops of their `in:` regions at full resolution, next to the 240 px
    overview, instead of a whole wider picture (480 px costs 160 ms a picture, 960 px 510 ms).
