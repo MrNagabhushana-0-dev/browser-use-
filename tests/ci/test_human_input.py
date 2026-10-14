@@ -151,6 +151,45 @@ async def test_typing_has_human_cadence(browser_session, recorder_server):
 	assert min(gaps) > 0
 
 
+async def test_a_click_on_a_page_drawing_few_frames_a_second_lands_in_good_time(browser_session, recorder_server):
+	"""Found hands-on on a three.js example (WebGL drawn in software, 1-3 frames a second): a scan never came back. The
+	pointer's glide to the page took 17.7 s at 3 frames a second and 82.8 s at 1: Chrome takes in mouse moves with the
+	page's frames, so each step of the path waited for one. The glide keeps to its planned time now, skipping ahead
+	along the same path when the page is slow, and still ends where it was going."""
+	await _goto(browser_session, recorder_server.url_for('/recorder'))
+	await browser_session.run_page_script(
+		'const busy = () => { const end = performance.now() + 400; while (performance.now() < end) {} requestAnimationFrame(busy); };'
+		' requestAnimationFrame(busy); return true;'
+	)
+	human = HumanInput(browser_session, seed=11)
+	started = asyncio.get_event_loop().time()
+	await human.click_box((300, 220, 160, 60))
+	took = asyncio.get_event_loop().time() - started
+	log = await _log(browser_session)
+	assert log['clicks'] and log['clicks'][0]['trusted'], log['clicks']
+	assert len(log['moves']) >= 2, 'it still moved there, not teleported'
+	assert took < 5.0, f'a click took {took:.1f}s on a page drawing 2.5 frames a second'
+
+
+async def test_a_scroll_on_a_page_drawing_few_frames_a_second_goes_as_far_in_good_time(browser_session, recorder_server):
+	"""The wheel turns in notches, and on a page drawing a few frames a second each notch waited for a frame (~8 s a
+	screen at 1 frame a second). When the page is that slow, what is left of the scroll goes in one turn: as far, sooner."""
+	await _goto(browser_session, recorder_server.url_for('/recorder'))
+	await browser_session.run_page_script(
+		'const busy = () => { const end = performance.now() + 400; while (performance.now() < end) {} requestAnimationFrame(busy); };'
+		' requestAnimationFrame(busy); return true;'
+	)
+	human = HumanInput(browser_session, seed=5)
+	await human.move_to(190, 500, haste=4)  # over the scroll box
+	started = asyncio.get_event_loop().time()
+	await human.wheel(900)
+	took = asyncio.get_event_loop().time() - started
+	log = await _log(browser_session)
+	total = sum(d for d, _ in log['wheels'])
+	assert 800 <= total <= 1000, f'scrolled {total} px of 900: {log["wheels"]}'
+	assert took < 3.0, f'a 900 px scroll took {took:.1f}s on a page drawing 2.5 frames a second'
+
+
 async def test_the_pointer_does_not_teleport_between_clicks(browser_session, recorder_server):
 	"""Position persists, so the second move starts where the first one ended."""
 	await _goto(browser_session, recorder_server.url_for('/recorder'))

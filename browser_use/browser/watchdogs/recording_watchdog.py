@@ -39,6 +39,7 @@ class RecordingWatchdog(BaseWatchdog):
 	# once the last is acknowledged, so the stream runs at the video's frame rate, not at every repaint of a 60 fps page
 	# (each one encoded by the browser and parsed on the event loop: that held the reflexes' input up ~50 ms)
 	_unacked: tuple[int, str | None] | None = PrivateAttr(default=None)
+	_clock: tuple[float, float] | None = PrivateAttr(default=None)  # (when the next frame is due, period), loop time
 	# When the newest frame arrived, and whether the page was captured since: Chrome's screencast drops the repaint
 	# that ends an animation (skipped while frames are in flight; a page that then stands still sends no other), so a
 	# stream gone quiet is topped up with one capture of the page as it is. Found live: a recorded game's video, and
@@ -118,14 +119,20 @@ class RecordingWatchdog(BaseWatchdog):
 		loop = asyncio.get_running_loop()
 		period = 1.0 / max(1, recorder.framerate)
 		due = loop.time()
+		self._clock = (due, period)
 		while True:
-			await asyncio.to_thread(recorder.tick)  # decoding and encoding stay off the event loop
+			# Every frame the clock owes, not one per turn: a turn waits on the page below (the screencast's
+			# acknowledgement, a capture), ~2 s on a page drawing a frame a second (WebGL in software), and ten minutes
+			# there made a 30 s video. At most a minute's worth at once.
+			owed = min(int((loop.time() - due) / period) + 1, 60 * max(1, recorder.framerate))
+			await asyncio.to_thread(recorder.tick, max(1, owed))  # decoding and encoding stay off the event loop
+			due += max(1, owed) * period
+			self._clock = (due, period)
 			if self._unacked is not None:
 				(frame, session_id), self._unacked = self._unacked, None
 				await self._ack(frame, session_id)
 			elif not self._topped_up and time.monotonic() - self._last_frame_at > QUIET_TOP_UP_S:
 				await self._top_up(recorder)
-			due += period
 			await asyncio.sleep(max(0.0, due - loop.time()))
 
 	async def stop_recording(self) -> Path | None:
@@ -142,7 +149,12 @@ class RecordingWatchdog(BaseWatchdog):
 		if self._ticker is not None:
 			self._ticker.cancel()
 			self._ticker = None
-		await asyncio.to_thread(recorder.tick)  # the last picture closes the video
+		owed = 1
+		if self._clock is not None:  # the ticker may have been waiting on the page when it was stopped
+			due, period = self._clock
+			owed = max(1, min(int((asyncio.get_running_loop().time() - due) / period) + 1, int(60 / period)))
+			self._clock = None
+		await asyncio.to_thread(recorder.tick, owed)  # the last picture closes the video
 		self._recorder = None
 		self._current_session_id = None
 		self.latest_frame = None

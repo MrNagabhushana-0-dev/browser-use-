@@ -118,6 +118,30 @@ async def test_a_recording_lasts_as_long_as_it_was_watched_and_ends_on_the_last_
 	assert np.abs(last - (0, 128, 127)).max() < 40, f'last frame is not the teal page: {last}'
 
 
+async def test_a_recording_of_a_page_drawing_few_frames_a_second_lasts_as_long_as_the_session(
+	browser_session: BrowserSession, httpserver, tmp_path: Path
+):
+	"""Found hands-on on a three.js example (WebGL drawn in software, ~1 frame a second): ten minutes recorded made a
+	30 s video. The recorder wrote one frame per turn of its clock, and each turn first waited on the page (the
+	screencast's acknowledgement, or a capture), ~2 s there. It now writes every frame its clock owes, from the latest
+	picture."""
+	httpserver.expect_request('/slow').respond_with_data(
+		'<body><script>let n = 0; const busy = () => { const end = performance.now() + 400; while (performance.now() < end) {}'
+		' document.body.style.background = n++ % 2 ? "#f0f" : "#0ff"; requestAnimationFrame(busy); };'
+		' requestAnimationFrame(busy);</script></body>',
+		content_type='text/html',
+	)
+	watchdog = browser_session._recording_watchdog
+	assert watchdog is not None
+	await browser_session.event_bus.dispatch(NavigateToUrlEvent(url=httpserver.url_for('/slow'), new_tab=False))
+	await asyncio.sleep(1.0)
+	out = await watchdog.start_recording(tmp_path / 'slow.mp4', framerate=10)
+	await asyncio.sleep(5.0)
+	await watchdog.stop_recording()
+	frames = list(iio.mimread(str(out), memtest=False))
+	assert 40 <= len(frames) <= 65, f'{len(frames)} frames for about 5 s at 10 fps'
+
+
 async def test_start_recording_twice_raises(browser_session: BrowserSession, tmp_path: Path):
 	watchdog = browser_session._recording_watchdog
 	assert watchdog is not None

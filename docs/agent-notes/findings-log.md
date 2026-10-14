@@ -3488,6 +3488,19 @@ and all three cuts found, and the recording was the page in 227 of 227 frames.
 
 **Full `tests/ci` on `3492b95`: 1,718 passed, 30 skipped, 0 failed** (36m34s).
 
+**A page drawing a frame a second** (hands-on on a three.js example; WebGL drawn in software here; test first).
+- **The scan never came back:** it timed out at 60 s, even for one screen.
+  - The pointer's glide waited a frame per step (17.7 s at 3 frames a second, 82.8 s at 1). It now keeps to its
+    planned time, skipping ahead along the same path.
+  - The wheel waited a frame per notch. What is left of a scroll now goes in one turn, and a mouse move after it makes
+    sure the page has taken it in.
+  - A scan now reads the page four times instead of eight.
+  - Local stand-in: 23.7 -> 5.0 s at 3 frames a second, over 90 -> 15.8 s at 1. Live: 24.7 s, measured before the
+    reads were combined.
+- **Its recordings were 20 times too short:** ten minutes made 30 s. The recorder's clock wrote one frame per turn,
+  and each turn waited on the page. It now writes every frame owed. Test: 16-17 -> 40-65 frames for 5 s at 10 fps.
+  My first version left the old clock step in and halved the rate; the existing still-page test caught it.
+
 **Next, in order:**
 1. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
    Look at feeding pictures off the main thread (a worker, or a smaller picture of only the box a rule reads).

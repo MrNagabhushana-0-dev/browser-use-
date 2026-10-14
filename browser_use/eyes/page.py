@@ -251,8 +251,9 @@ class PageWatcher:
 		await self.start()
 		assert self.live is not None
 		started = time.monotonic()
-		w, h = await self._eval('[innerWidth, innerHeight]') or [1280, 800]
-		await self._eval('window.scrollTo(0, 0)')
+		# Few reads of the page, each doing what it can: on a page drawing a frame a second (WebGL in software) every
+		# read waits ~2 s for the page, and a one-screen scan took eight of them
+		w, h = await self._eval('window.scrollTo(0, 0), [innerWidth, innerHeight]') or [1280, 800]
 		await asyncio.sleep(0.4)
 		await self.hand.move_to(w * 0.55, h * 0.5)
 		captured: list[PageFrame] = []
@@ -260,25 +261,29 @@ class PageWatcher:
 
 		fixed_steps: list[list[list]] = []
 
-		async def collect() -> None:
+		async def collect() -> tuple[float, bool, int]:
+			"""Take in the frames drawn since the last call; (where the page is scrolled, at its end, its height)."""
 			nonlocal seen
 			frames = self.live.frames if self.live else []
-			y = float(await self._eval('scrollY') or 0)
-			fixed_steps.append(await self._eval(FIXED_JS) or [])
+			state = await self._eval(
+				f'[scrollY, scrollY + innerHeight >= document.documentElement.scrollHeight - 4,'
+				f' document.documentElement.scrollHeight, {FIXED_JS}]'
+			) or [0, True, 0, []]
+			y = float(state[0] or 0)
+			fixed_steps.append(state[3] or [])
 			for f in frames[seen:]:
 				# Where Chrome drew the frame, not where the page is now: frames from mid-scroll were labelled with
 				# where it ended up (found on the Guardian: two frames "6.4 screens down" with different stories)
 				captured.append(PageFrame(time.monotonic() - started, f.scroll_y if f.scroll_y is not None else y, f.data))
 			seen = len(frames)
+			return y, bool(state[1]), int(state[2] or 0)
 
 		screens = 0
 		for _ in range(max_screens):
 			await asyncio.sleep(dwell_s)  # read, and let anything that animates on arrival play
-			await collect()
-			at_end = await self._eval('scrollY + innerHeight >= document.documentElement.scrollHeight - 4')
+			before, at_end, _ = await collect()
 			if at_end:
 				break
-			before = await self._eval('scrollY')
 			await self.hand.wheel(h * 0.8)
 			screens += 1
 			if await self._eval('scrollY') == before:
@@ -286,8 +291,7 @@ class PageWatcher:
 				if await self._eval('scrollY') == before:
 					break
 		await asyncio.sleep(dwell_s)
-		await collect()
-		height = int(await self._eval('document.documentElement.scrollHeight') or 0)
+		_, _, height = await collect()
 		await self._eval('window.scrollTo(0, 0)')
 
 		samples: list[FrameSample] = []

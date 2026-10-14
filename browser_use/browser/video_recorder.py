@@ -132,9 +132,11 @@ class VideoRecorderService:
 		except Exception as e:
 			logger.warning(f'Could not process and add video frame: {e}')
 
-	def tick(self) -> None:
-		"""Write the latest picture as the next video frame (the same one again while the page is still). Safe to run in
-		a worker thread: it decodes the newest frame received, if any, first."""
+	def tick(self, frames: int = 1) -> None:
+		"""Write the latest picture as the next `frames` video frames (the same one again while the page is still, or
+		while the page was too slow to send another). Safe to run in a worker thread: it decodes the newest frame
+		received, if any, first."""
+		assert frames >= 1, 'tick() writes at least one frame'
 		with self._lock:
 			if not self._is_active or not self._writer:
 				return
@@ -144,7 +146,8 @@ class VideoRecorderService:
 			if self._latest is None:
 				return
 			try:
-				self._writer.append_data(self._latest)
+				for _ in range(frames):
+					self._writer.append_data(self._latest)
 			except Exception as e:
 				logger.warning(f'Could not write video frame: {e}')
 
