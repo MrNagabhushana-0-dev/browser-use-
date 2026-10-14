@@ -690,8 +690,7 @@ class RetinatServer(BrowserUseServer):
 				if backstop is not None and backstop.expired():
 					e = RuntimeError(
 						f'{params.name} ran {deadline.spent():.0f}s, past its {deadline.budget_s:.0f}s budget, and was stopped '
-						'before the client would give up on it; it may have scrolled or moved the page: look before '
-						'calling again'
+						'before the client would give up on it'
 					)
 				return effects.failure(params.name, e, read_only=params.name in looking)
 			except Exception as e:
@@ -832,7 +831,7 @@ class RetinatServer(BrowserUseServer):
 		if name == 'retinat_record':
 			return await self._record(str(args['action']), int(args.get('framerate', 8)))
 		if name in ('retinat_reflex', 'retinat_wait'):
-			return await self._reflex(name, args)
+			return await self._reflex(name, args, deadline)
 		eyes = await self._eyes()
 		if name == 'retinat_console':
 			from browser_use.eyes.console import render as render_console
@@ -1005,7 +1004,7 @@ class RetinatServer(BrowserUseServer):
 			raise Refused(str(e)) from e
 		return f'Recording to {out} at {framerate} fps. Call retinat_record with action=stop to finish the file.'
 
-	async def _reflex(self, name: str, args: dict[str, Any]) -> str:
+	async def _reflex(self, name: str, args: dict[str, Any], deadline: Deadline | None = None) -> str:
 		"""Install, clear or report the tab's reflexes, or wait for one to notify."""
 		from browser_use.eyes.reflex import Reflexes
 		from browser_use.mcp.effects import Refused
@@ -1017,11 +1016,15 @@ class RetinatServer(BrowserUseServer):
 		if name == 'retinat_wait':
 			if not reflexes.installed:
 				raise Refused('no reflexes are installed: install rules with retinat_reflex first')
-			event = await reflexes.wait(timeout=float(args.get('timeout', 30)))
+			timeout = float(args.get('timeout', 30))
+			if deadline is not None and deadline.bounded:
+				# Within the call's budget: opening the browser first spends the same time the client counts
+				timeout = max(0.1, min(timeout, deadline.left() - 0.5))
+			event = await reflexes.wait(timeout=timeout)
 			stats = reflexes.stats()
 			done = f'{stats["actions"]} input actions so far, decision to input p50 {stats["latency_ms_p50"]} ms'
 			if event is None:
-				return f'Nothing notified in {float(args.get("timeout", 30)):.0f}s. The reflexes keep running: {done}.'
+				return f'Nothing notified in {timeout:.0f}s. The reflexes keep running: {done}.'
 			at = f', video at {event.media_t:.2f}s' if event.media_t is not None else ''
 			return f'"{event.label}" (rule {event.rule}) fired at page time {event.page_ms / 1000:.2f}s{at}. {done}.'
 		action = str(args.get('action') or 'install')

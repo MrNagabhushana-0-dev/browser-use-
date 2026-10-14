@@ -839,7 +839,12 @@ class Eyes:
 		watcher = self._page_watcher()
 		# A second for the sheet and the text after the scroll
 		inner = deadline.minus(1.0) if deadline is not None else None
-		result = await watcher.scan(max_screens=max_screens, keyframes=keyframes, from_screen=from_screen, deadline=inner)
+		# The archiver keeps out of the way, as for a watch: it pulls pictures through the same page thread
+		self._watching += 1
+		try:
+			result = await watcher.scan(max_screens=max_screens, keyframes=keyframes, from_screen=from_screen, deadline=inner)
+		finally:
+			self._watching -= 1
 		sheet = scan_sheet(result)
 		vh = max(1, result.viewport[1])
 		tall = result.page_height / vh

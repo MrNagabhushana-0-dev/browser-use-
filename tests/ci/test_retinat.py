@@ -845,28 +845,35 @@ def test_every_tool_that_can_run_long_is_under_the_call_budget():
 	assert long and long <= LONG_TOOLS, sorted(long - LONG_TOOLS)
 
 
-async def test_a_tool_that_runs_past_its_budget_is_stopped_and_says_so(tmp_path, monkeypatch, site):
-	"""The last resort behind the tools' own deadlines: a call still running past its budget is stopped before the client
-	gives up on it, and says what happened instead of a bare timeout. Here a wait on a rule that never fires, held to
-	a 1 s budget."""
+async def test_a_call_keeps_to_its_budget_by_itself_or_the_backstop_stops_it(tmp_path, monkeypatch, site):
+	"""A call held to a 1 s budget. A wait ends with the budget by itself (after a cold browser launch a 50 s wait went
+	past the client's 60 s). A tool that does not yet keep to the budget (watch, until it takes a deadline) is stopped
+	half a second past it and says so, instead of the client giving up on it; the next call works."""
 	import time
 
-	from browser_use.retinat.server import LONG_TOOLS
-
 	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
-	server = RetinatServer(call_budget_s=1, backstop_grace_s=0.5, long_tools=LONG_TOOLS | {'retinat_wait'})
+	server = RetinatServer(call_budget_s=1, backstop_grace_s=0.5)
 	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	page = (
+		'<!doctype html><title>Spin</title><body style="margin:0"><canvas id="c" width="400" height="300"></canvas><script>'
+		"const g = document.getElementById('c').getContext('2d'); let t = 0;"
+		'(function f() { t++; g.fillStyle = `hsl(${t % 360},70%,50%)`; g.fillRect(0, 0, 400, 300); requestAnimationFrame(f); })()'
+		'</script></body>'
+	)
 	try:
-		site.expect_request('/quiet').respond_with_data(
-			'<!doctype html><title>Quiet</title><body>quiet', content_type='text/html'
-		)
-		await _call(server, 'retinat_open', {'url': site.url_for('/quiet')})
+		site.expect_request('/spin').respond_with_data(page, content_type='text/html')
+		await _call(server, 'retinat_open', {'url': site.url_for('/spin')})
 		await _call(server, 'retinat_reflex', {'rules': [{'when': 'false', 'notify': 'never'}]})
 		started = time.monotonic()
-		stopped = await _call(server, 'retinat_wait', {'timeout': 10})
+		waited = await _call(server, 'retinat_wait', {'timeout': 10})
+		took = time.monotonic() - started
+		assert not waited.is_error and 'Nothing notified' in _text(waited), _text(waited)
+		assert took < 2, f'the wait took {took:.1f}s with a 1 s budget'
+		started = time.monotonic()
+		stopped = await _call(server, 'retinat_watch', {'seconds': 10})
 		took = time.monotonic() - started
 		assert stopped.is_error and 'past its 1s budget' in _text(stopped), _text(stopped)
-		assert took < 3, f'took {took:.1f}s'
+		assert took < 3, f'the watch took {took:.1f}s'
 		after = await _call(server, 'retinat_look', {})
 		assert not after.is_error, _text(after)
 	finally:

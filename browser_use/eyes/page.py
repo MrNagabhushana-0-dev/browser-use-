@@ -315,9 +315,11 @@ class PageWatcher:
 				# Where Chrome drew the frame, not where the page is now: frames from mid-scroll were labelled with
 				# where it ended up (found on the Guardian: two frames "6.4 screens down" with different stories)
 				take(PageFrame(time.monotonic() - started, f.scroll_y if f.scroll_y is not None else y, f.data))
-			if not captured:
-				# A still page draws nothing new for a scan that has not moved it yet: a picture of it as it is
-				shot = await self.capture()
+			if not any(abs(c.scroll_y - y) <= 2 for c in captured[-8:]):
+				# Nothing drawn from here: a still page that the scan has not moved yet, or a stream that stopped
+				# under the scan (a recording took it over, the explorer stopped its view on this tab). A picture of
+				# it as it is, so what the scan says it saw is what it saw
+				shot = await asyncio.wait_for(self.capture(), max(0.05, dl.clamp(5.0)))
 				if shot:
 					take(PageFrame(time.monotonic() - started, y, shot))
 			return y, bool(state[1]), int(state[2] or 0)
@@ -372,7 +374,7 @@ class PageWatcher:
 		except TimeoutError:
 			stopped = 'time' if not dl.allows(0.5) else 'unresponsive'
 		try:
-			await self._eval("window.scrollTo({top: 0, behavior: 'instant'})", timeout=dl.clamp(2.0))
+			await self._eval("window.scrollTo({top: 0, behavior: 'instant'})", timeout=max(0.5, dl.clamp(2.0)))
 		except TimeoutError:
 			pass
 
