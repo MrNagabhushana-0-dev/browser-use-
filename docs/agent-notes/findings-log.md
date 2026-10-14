@@ -3636,6 +3636,8 @@ about:blank) holds that profile.
 - The reflex speed test failed once in the affected-files run while the racer was still rendering in Retinat's
   browser (p95 515 ms). With the game parked it passed 3 of 3.
 
+**Full `tests/ci` on `077c38d`: 1,738 passed, 31 skipped, 0 failed** (39m07s), first run.
+
 **Next, in order:**
 1. **Games, continued:**
    - Temple Run 2: press as the key lights, not after it (the gap after the zipline); turns at corners; read the
