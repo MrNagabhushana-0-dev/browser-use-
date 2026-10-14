@@ -283,6 +283,62 @@ async def test_find_keeps_to_one_block_in_its_match_and_its_context(retinat, sit
 	assert 'not found' in across or '0 match' in across, f'two paragraphs are not one phrase: {across}'
 
 
+LONG_DOC = (
+	'<!doctype html><style>body{margin:0;font:18px sans-serif} p{height:300px;margin:0;padding:20px}</style><body>'
+	+ ''.join(f'<p>Section {n}</p>' for n in range(1, 40))
+	+ '<h2 id="far">asyncio.wait_for(aw, timeout)</h2>'
+	+ ''.join(f'<p>After {n}</p>' for n in range(1, 10))
+	+ '</body>'
+)
+
+
+async def test_scroll_brings_what_find_found_into_view_and_pages_by_screens(retinat, site):
+	"""Found hands-on on the Python docs: find said `wait_for` was "below the visible area: scroll down about 13.0
+	screens", and nothing in Retinat scrolled a page (only the desktop tools could): 13 PageDown keys, or swipes.
+	retinat_scroll turns the real wheel: by screens, or until a match is in view, then says where it is to click."""
+	import re
+
+	site.expect_request('/long').respond_with_data(LONG_DOC, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/long')})
+	result = await _call(retinat, 'retinat_scroll', {'to': 'wait_for'})
+	text = _text(result)
+	assert not result.is_error, text
+	m = re.search(r'at \((\d+), (\d+)\)[^:]*in view', text)
+	assert m, f'the match is said to be in view, with where to click: {text}'
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	box = await cdp.cdp_client.send.Runtime.evaluate(
+		params={
+			'expression': 'JSON.stringify(document.getElementById("far").getBoundingClientRect().toJSON())',
+			'returnByValue': True,
+		},
+		session_id=cdp.session_id,
+	)
+	import json
+
+	rect = json.loads(box['result']['value'])
+	vh = (
+		await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'innerHeight', 'returnByValue': True}, session_id=cdp.session_id
+		)
+	)['result']['value']
+	assert 0 <= rect['top'] and rect['bottom'] <= vh, f'the heading is on screen: {rect}, viewport {vh}'
+	assert abs(int(m.group(2)) - (rect['top'] + rect['height'] / 2)) <= 6, (text, rect)
+
+	before = (
+		await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'scrollY', 'returnByValue': True}, session_id=cdp.session_id
+		)
+	)['result']['value']
+	paged = _text(await _call(retinat, 'retinat_scroll', {'screens': -2}))
+	after = (
+		await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'scrollY', 'returnByValue': True}, session_id=cdp.session_id
+		)
+	)['result']['value']
+	assert abs((before - after) - 2 * vh) <= 0.25 * vh, (before, after, vh, paged)
+	assert 'up' in paged and 'screens' in paged, paged
+
+
 async def test_click_says_what_it_hit_and_refuses_when_it_is_not_what_was_expected(retinat, site):
 	"""A page moves between a look and a click; saying what is under the point, and refusing a mismatch, keeps an
 	agent from pressing Delete while it believes it pressed Save (after BrowserSkill's hit verification)."""

@@ -500,6 +500,69 @@ class Eyes:
 		)
 		return Percept([], text, jpeg, size, tokens, len(text) // 4)
 
+	async def scroll(self, screens: float | None = None, to: str | None = None, nth: int = 1) -> Percept:
+		"""Turn the real wheel over the middle of the page: by `screens` viewport heights (negative is up), or until
+		the `nth` match of the text `to` is in view, then say where it is (as find() does), ready to click.
+
+		Found on the Python docs: find said a match was "below the visible area: scroll down about 13.0 screens", and
+		nothing here scrolled a page; it took 13 PageDown keys, or swipes."""
+		assert (screens is None) != (to is None), 'scroll by screens, or to a text, not both'
+		assert nth >= 1, 'nth counts from 1'
+		if not self.retina.running:
+			await self.open()
+		vw, vh = await self.retina.evaluate('[innerWidth, innerHeight]') or [1280, 800]
+		await self.hand.move_to(vw / 2, vh / 2, haste=3)  # the wheel turns what is under the pointer
+		start = float(await self.retina.evaluate('scrollY') or 0)
+		if to is not None:
+			assert to.strip(), 'say what to scroll to'
+			for _ in range(3):  # smooth scrolling can fall short of a long way: look again and finish it
+				found = await self.retina.evaluate(f'({_FIND_JS})({json.dumps(to.strip())}, {int(nth) * 4})') or {}
+				matches = found.get('matches') or []
+				if len(matches) < nth:
+					break
+				m = matches[nth - 1]
+				centre = m['y'] + m['h'] / 2
+				if 0.15 * vh <= centre <= 0.85 * vh:
+					break
+				await self.hand.wheel(centre - vh / 2)
+				await self._scroll_settled()
+			result = await self.find(to, limit=max(nth, 3))
+			moved = float(await self.retina.evaluate('scrollY') or 0) - start
+			result.text = f'🖱 scrolled {"down" if moved >= 0 else "up"} {abs(moved) / vh:.1f} screens\n' + result.text
+			return result
+		assert screens is not None
+		await self.hand.wheel(screens * vh)
+		end = await self._scroll_settled()
+		moved = end - start
+		height = float(await self.retina.evaluate('document.documentElement.scrollHeight') or 0)
+		where = f'{end / vh:.1f} screens from the top of {height / vh:.1f}'
+		if abs(moved) < 2:
+			edge = 'the top' if screens < 0 else 'the end'
+			return Percept(
+				[], f'🖱 did not move: at {edge} of the page, or what is under the middle of it scrolls on its own ({where})', None
+			)
+		bottom = end + vh >= height - 4
+		return Percept(
+			[],
+			f'🖱 scrolled {"down" if moved > 0 else "up"} {abs(moved) / vh:.1f} screens: {where}'
+			+ (', at the end of the page' if bottom else '')
+			+ (', at the top' if end <= 0 else ''),
+			None,
+		)
+
+	async def _scroll_settled(self, timeout: float = 3.0) -> float:
+		"""Wait out a smooth scroll: scrollY once it has held still for two reads, or when `timeout` passes."""
+		deadline = time.monotonic() + timeout
+		last, still = None, 0
+		while time.monotonic() < deadline:
+			y = float(await self.retina.evaluate('scrollY') or 0)
+			still = still + 1 if y == last else 0
+			if still >= 2:
+				return y
+			last = y
+			await asyncio.sleep(0.08)
+		return float(last or 0)
+
 	async def find(self, text: str, limit: int = 5) -> Percept:
 		"""Where visible text is on the page: each match's centre in viewport CSS px (to click), whether it is in view
 		or how far to scroll, and a zoomed crop around the first match in view."""

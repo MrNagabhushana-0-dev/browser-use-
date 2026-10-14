@@ -3506,19 +3506,27 @@ play-arena title screen ("the title screen was never dismissed"), the same messa
 The arena clicks through the changed glide, so it was checked: 5 of 5 alone and 5 of 5 with every core busy.
 **Second run on the same commit: 1,721 passed, 30 skipped, 0 failed** (38m02s). It stays an open intermittent.
 
+**Live with the slow-page fixes, and `retinat_scroll`.**
+- **three.js:** a scan took 14.0 s (it had timed out at 60 s). A click took 12.2 s, about five input round trips at
+  the page's ~2 s, which is its frame rate's limit. The recording ran 59.2 s for 68 s of session.
+- **Python docs:** find said its match was 13 screens down, and no Retinat tool scrolled a page. `retinat_scroll`
+  (real wheel; `screens`, or `to` a text with `nth`) is added, test first through the MCP handler on a real browser.
+  Not run live: this session's MCP client lists tools only at its start.
+
 **Next, in order:**
-1. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
+1. **`retinat_scroll` live** from a fresh session (Python docs, `to: "wait_for"`).
+2. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
    Look at feeding pictures off the main thread (a worker, or a smaller picture of only the box a rule reads).
-2. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
-3. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
+3. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+4. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
    the Bunny, 0.926 -> 0.941 on Steel) is nearly free; measure the screencast's CPU first.
-4. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
+5. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
    or CORS WebM/VP9 source.
-5. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
-6. **Intermittents to watch in full runs:** the play-arena title screen (failed again in one of two runs on
+6. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
+7. **Intermittents to watch in full runs:** the play-arena title screen (failed again in one of two runs on
    `89df927`; 10 of 10 alone or under load), the feed test (failed in the `c09d801` run; with every core busy, 2 of 30
    flicks overshot, and 1 of those 2 was not brought back in three flicks), the region-runner test, and the reflex
    speed test.
-7. **Carried over:**
+8. **Carried over:**
    - confine the AI's page script to the page's own world (Round 54);
    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).

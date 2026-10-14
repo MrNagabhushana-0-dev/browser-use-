@@ -63,6 +63,7 @@ ACTING = frozenset(
 		'retinat_tap',
 		'retinat_click',
 		'retinat_swipe',
+		'retinat_scroll',
 		'retinat_type',
 		'retinat_key',
 		'retinat_reflex',
@@ -334,6 +335,21 @@ def _browser_tools() -> list['types.Tool']:
 				'required': ['text'],
 			},
 			annotations=ro,
+		),
+		types.Tool(
+			name='retinat_scroll',
+			description=(
+				'Scroll the page with the real wheel: by `screens` viewport heights (negative is up), or `to` a text '
+				'(the `nth` match, as retinat_find counts them) until it is in view, then say where it is to click.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'screens': {'type': 'number', 'minimum': -50, 'maximum': 50},
+					'to': {'type': 'string'},
+					'nth': {'type': 'integer', 'default': 1, 'minimum': 1, 'maximum': 20},
+				},
+			},
 		),
 		types.Tool(
 			name='retinat_zoom',
@@ -820,6 +836,19 @@ class RetinatServer(BrowserUseServer):
 			return f'{head}{"; " + moved.note if moved.note else ""}. {eyes.now_line()}'
 		if name == 'retinat_find':
 			return self._content(await eyes.find(str(args['text']), limit=int(args.get('limit', 5))))
+		if name == 'retinat_scroll':
+			screens, to = args.get('screens'), str(args.get('to') or '').strip()
+			if (screens is None) == (not to):
+				raise Refused(
+					'Give either screens (how far, negative is up) or to (a text to bring into view), not both or neither.'
+				)
+			return self._content(
+				await act(
+					eyes.scroll(
+						screens=float(screens) if screens is not None else None, to=to or None, nth=int(args.get('nth', 1))
+					)
+				)
+			)
 		if name == 'retinat_zoom':
 			return self._content(await eyes.zoom(float(args['x']), float(args['y']), float(args['width']), float(args['height'])))
 		if name == 'retinat_tap':

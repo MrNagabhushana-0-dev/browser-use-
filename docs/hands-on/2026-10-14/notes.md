@@ -37,3 +37,25 @@ acknowledgement, or a capture, ~2 s here. It now writes every frame its clock ow
 stopping writes what is still owed.
 - Test first: 5 s of a page drawing 2.5 frames a second made 16-17 frames at 10 fps; now 40-65.
 - The two videos above are from before this fix. They are 30 s and 33 s long for ~10 minutes each, so they run fast.
+
+## 02:10: three.js again with the fixes, then the Python docs
+
+**three.js, live with the fixes** (`threejs-scan-and-click-recorded-in-time.mp4`):
+- **The scan** came back in 14.0 s with the scene (it timed out at 60 s yesterday, then took 24.7 s).
+- **A click on the scene** took 12.2 s end to end: about five round trips with the page at ~2 s each. Those are the
+  check of what is under the pointer, the last glide steps, the press and the release. Input that Chrome takes with
+  the page's frames cannot go faster than the page draws.
+- **The recording:** 59.2 s for 68 s of session (it was 30 s for ten minutes). The rest is most likely the wait for
+  the slow page's first picture, which the video cannot show.
+
+**The Python docs** (`python-docs-find-far-below.mp4`). `retinat_find "wait_for"` gave 4 matches, each "below the
+visible area: scroll down about 13.0 screens" (and 13.5, 13.7, 14.6). Nothing in Retinat scrolled a page: only the
+desktop tools could. It took 13 PageDown keys or a run of swipes, each a call.
+
+**Added, test first: `retinat_scroll`.** It turns the real wheel over the middle of the page: by `screens` (negative
+is up), or `to` a text, the `nth` match as find counts them. With `to`, it looks again and finishes the scroll if
+smooth scrolling fell short, then answers as find does, with where the match is now to click.
+- The test is a long page with the heading 39 sections down. The heading ends on screen, its stated centre is within
+  6 px, and `screens: -2` moved 2 screens up.
+- **Not checked live:** this session's MCP client lists tools only when it starts, so the new tool cannot be called
+  from it. The test calls it through the server's MCP handler, on a real browser.
