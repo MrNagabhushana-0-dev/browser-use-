@@ -553,6 +553,14 @@ def _browser_tools() -> list['types.Tool']:
 				'properties': {
 					'action': {'type': 'string', 'enum': ['install', 'clear', 'status'], 'default': 'install'},
 					'rules': {'type': 'array', 'items': {'type': 'object'}, 'maxItems': 50},
+					'screen_width': {
+						'type': 'integer',
+						'default': 240,
+						'minimum': 120,
+						'maximum': 1920,
+						'description': "How wide the picture {from: 'screen'} reads. 240 sees a game's player and "
+						'obstacles; ask for more to read small things (an on-screen key, a score), at a cost each frame.',
+					},
 				},
 			},
 		),
@@ -974,7 +982,7 @@ class RetinatServer(BrowserUseServer):
 		if not rules:
 			raise Refused('give rules to install (or action=clear / status)')
 		try:
-			count = await reflexes.install(rules)
+			count = await reflexes.install(rules, screen_width=int(args.get('screen_width') or 240))
 		except (ValueError, AssertionError) as e:
 			raise Refused(str(e)) from e
 		return f'{count} reflex rule(s) running every frame on this tab. retinat_wait sleeps until one notifies.'

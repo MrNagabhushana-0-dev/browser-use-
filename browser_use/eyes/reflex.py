@@ -40,6 +40,8 @@ _SCRIPT = (Path(__file__).parent / 'reflex.js').read_text()
 # The screen picture fed to the rules for what the page cannot read itself (a cross-origin video or frame): this wide,
 # as PNG so colours are exact
 SCREEN_WIDTH = 240
+# How wide a rule set may ask for its screen picture: the viewport's own width at 1x is the most there is to read
+SCREEN_WIDTH_MAX = 1920
 # A screencast this long without a frame is topped up with one capture, in case it dropped the frame an animation ended on
 SCREEN_QUIET_S = 0.3
 # Captures failing for this long mean the tab or its browser is gone: the feed stops
@@ -136,16 +138,23 @@ class Reflexes:
 		self._screen_fed = 0
 		self._screen_seq = 0
 		self._screen_source: str | None = None  # 'screencast' or 'captures', once the feed has started
+		self._screen_width = SCREEN_WIDTH
 
 	@property
 	def installed(self) -> bool:
 		return self._handler is not None
 
-	async def install(self, rules: list[dict[str, Any] | ReflexRule]) -> int:
-		"""Run these rules on the focused tab from the next frame on, replacing any installed before."""
+	async def install(self, rules: list[dict[str, Any] | ReflexRule], screen_width: int = SCREEN_WIDTH) -> int:
+		"""Run these rules on the focused tab from the next frame on, replacing any installed before.
+
+		`screen_width`: how wide the screen picture is that `{from: 'screen'}` reads. 240 is enough for a game's
+		player and obstacles; a small thing (the ~30 CSS px key Temple Run 2's tutorial lights, 7 pixels at 240) needs
+		more. Each picture is decoded and handed to the page whole, so a wider one costs time on every frame."""
 		checked = [r if isinstance(r, ReflexRule) else ReflexRule.model_validate(r) for r in rules]
 		assert 1 <= len(checked) <= 50, 'between 1 and 50 rules'
+		assert 120 <= screen_width <= SCREEN_WIDTH_MAX, f'screen_width is 120-{SCREEN_WIDTH_MAX} pixels'
 		await self.clear()
+		self._screen_width = int(screen_width)
 		# New rules start clean: an event the old ones raised that nobody waited for is not handed to the next wait,
 		# and the stats are the new rules' own (found live: a wait returned a replaced rule's "30 s up")
 		self.events = asyncio.Queue()
@@ -205,6 +214,7 @@ class Reflexes:
 			out['screen_pictures'] = self._screen_fed
 			out['screen_ms_p50'] = round(statistics.median(self._screen_ms), 1)
 			out['screen_source'] = self._screen_source
+			out['screen_width'] = self._screen_width
 		return out
 
 	async def clear(self) -> None:
@@ -356,7 +366,8 @@ class Reflexes:
 
 			reader = asyncio.create_task(read())
 			try:
-				start = {'format': 'png', 'maxWidth': SCREEN_WIDTH, 'maxHeight': SCREEN_WIDTH * 4, 'everyNthFrame': 1}
+				width = self._screen_width
+				start = {'format': 'png', 'maxWidth': width, 'maxHeight': width * 4, 'everyNthFrame': 1}
 				await ws.send(json.dumps({'id': 1, 'method': 'Page.startScreencast', 'params': start}))
 				shown, span = await self._capture()  # a still page sends no frame until it changes
 				await self._feed(shown, time.time(), span)
@@ -383,7 +394,7 @@ class Reflexes:
 				await asyncio.gather(reader, return_exceptions=True)
 
 	async def _capture(self) -> tuple[bytes, tuple[float, float]]:
-		"""The viewport now, as a PNG SCREEN_WIDTH wide (forces a frame: ~50 ms headless, more on a busy page), and the
+		"""The viewport now, as a PNG as wide as the rules asked for (forces a frame: ~50 ms headless, more on a busy page), and the
 		CSS px it spans: the page's client area, without its scrollbar."""
 		assert self._cdp is not None
 		send = self._cdp.cdp_client.send
@@ -393,7 +404,7 @@ class Reflexes:
 			'y': vp['pageY'],
 			'width': vp['clientWidth'],
 			'height': vp['clientHeight'],
-			'scale': SCREEN_WIDTH / max(1, vp['clientWidth']),
+			'scale': min(1.0, self._screen_width / max(1, vp['clientWidth'])),
 		}
 		shot = await capture_screenshot(self._cdp.cdp_client, {'format': 'png', 'clip': clip}, self._session_id)
 		return base64.b64decode(shot['data']), (float(vp['clientWidth']), float(vp['clientHeight']))

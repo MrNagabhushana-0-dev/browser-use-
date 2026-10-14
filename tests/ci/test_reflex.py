@@ -625,3 +625,34 @@ async def test_rules_read_the_screen_where_it_is_on_a_page_with_a_scrollbar(sess
 	finally:
 		server.clear()
 		server.stop()
+
+
+async def test_rules_can_ask_for_a_sharper_screen_to_read_small_things(session):
+	"""Found playing Temple Run 2 on Poki: the key its tutorial lights on an on-screen pad is ~30 CSS px, ~7 pixels of
+	the 240-wide picture the rules read, and its arrow came to 1-6 of them. A rule set can ask for a wider picture,
+	at its own cost (each picture is decoded and handed over whole)."""
+	server = HTTPServer()
+	server.start()
+	server.expect_request('/dot').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#fff"><div style="position:fixed;left:700px;top:300px;'
+		'width:4px;height:4px;background:#f00"></div></body>',
+		content_type='text/html',
+	)
+	try:
+		await session.navigate_to(server.url_for('/dot'))
+		reflexes = Reflexes(session)
+		rule = {
+			'when': '(r => r && Math.abs(r.x - 702) < 3 && Math.abs(r.y - 302) < 3)'
+			"(see.locate([255, 0, 0], {from: 'screen', in: [690, 290, 24, 24], tol: 60}))",
+			'notify': 'dot',
+		}
+		await reflexes.install([rule])
+		assert await reflexes.wait(timeout=3) is None, 'at the default width the dot is blended away'
+		await reflexes.install([rule], screen_width=960)
+		event = await reflexes.wait(timeout=8)
+		assert event is not None and event.label == 'dot', reflexes.stats()
+		assert reflexes.stats()['screen_width'] == 960
+	finally:
+		await reflexes.clear()
+		server.clear()
+		server.stop()
