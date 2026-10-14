@@ -3624,6 +3624,10 @@ recovered on its own.
   bridge.
 - No score read yet.
 
+**Full `tests/ci` on `aa7ce85`: 1,737 passed, 31 skipped, 0 failed** (38m56s), first run. The new reflex test
+passed. The extra skip is the default-profile test, which skips by design while a running Chrome (Retinat's, on
+about:blank) holds that profile.
+
 **Next, in order:**
 1. **Games, continued:**
    - Temple Run 2: press as the key lights, not after it (the gap after the zipline); turns at corners; read the
