@@ -3574,6 +3574,13 @@ labels are drawn into image tiles.
 **`retinat_scroll` live** (after a restart reconnected the MCP client): on the Python docs, `to: "wait_for"` scrolled 13
 screens in one call (13 PageDown calls before), `nth: 4` reached the fourth match, and `screens: -2` moved 2.0 screens.
 
+**Full `tests/ci` on `bfb2530`: first run red, 1 failed, 1,730 passed, 30 skipped** (39m54s). The failure was the
+asked-late beeps test: "heard 5 distinct sounds", with onsets at 1.5 and 1.6 s, one beep counted twice. That is the
+beep-count intermittent of Round 50 (an audio dropout inside a sound under load); this dropout was likely longer
+than the 1-2 hops that fix covers. It passed 5 of 5 alone, and nothing this round touched audio.
+**Second run on the same commit: 1,731 passed, 30 skipped, 0 failed** (39m08s). The beep-count intermittent stays open.
+(A first full run on `0386900` was cut at 48%, with no failures, by a container restart.)
+
 **Next, in order:**
 1. **From the owner's links:**
    - a HAR export of what the eyes saw on the network (`retinat_requests`);
@@ -3586,7 +3593,8 @@ screens in one call (13 PageDown calls before), `nth: 4` reached the fourth matc
 5. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
    or CORS WebM/VP9 source.
 6. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
-7. **Intermittents to watch in full runs:** the play-arena title screen (failed again in one of two runs on
+7. **Intermittents to watch in full runs:** the beep-count test (failed again on `bfb2530`: a dropout longer than
+   the 1-2 hops the Round 50 fix covers, most likely; keep the hops of a failing run to check), the play-arena title screen (failed again in one of two runs on
    `89df927`; 10 of 10 alone or under load), the feed test (failed in the `c09d801` run; with every core busy, 2 of 30
    flicks overshot, and 1 of those 2 was not brought back in three flicks), the region-runner test, and the reflex
    speed test.
