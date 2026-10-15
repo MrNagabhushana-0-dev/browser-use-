@@ -798,3 +798,83 @@ async def test_no_tool_offers_a_wait_longer_than_a_client_waits_for_a_call():
 		if name in ('timeout', 'seconds', 'max_seconds') and spec.get('maximum', 0) > 50
 	}
 	assert not too_long, too_long
+
+
+@pytest.fixture
+async def retinat_short(tmp_path, monkeypatch):
+	"""A server whose calls have 6 s, so a test of the call budget does not take 50."""
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(call_budget_s=6)
+	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	yield server
+	await server._close_all_sessions()
+
+
+async def test_a_long_scan_through_mcp_answers_within_the_call_budget(retinat_short, site):
+	"""retinat_scan failed twice with "timed out after 60s": the client gave up and the scan's work was lost. A scan
+	now answers within its call's budget with what it saw, and says how to go on."""
+	import re
+	import time
+
+	page = (
+		'<!doctype html><style>body{margin:0} div{height:100vh}</style><body>'
+		+ ''.join(f'<div style="background:hsl({i * 37 % 360},70%,50%)"></div>' for i in range(30))
+		+ '</body>'
+	)
+	site.expect_request('/very-tall').respond_with_data(page, content_type='text/html')
+	await _call(retinat_short, 'retinat_open', {'url': site.url_for('/very-tall')})  # no cold launch in the timing
+	started = time.monotonic()
+	first = await _call(retinat_short, 'retinat_scan', {'max_screens': 80})
+	took = time.monotonic() - started
+	assert took < 8, f'took {took:.1f}s with a 6 s budget'
+	assert not first.is_error and any(isinstance(b, types.ImageContent) for b in first.content), _text(first)
+	resume = re.search(r'call again with from_screen=([\d.]+)', _text(first))
+	assert resume, _text(first)
+	second = await _call(retinat_short, 'retinat_scan', {'from_screen': float(resume[1]), 'max_screens': 80})
+	assert not second.is_error, _text(second)
+
+
+def test_every_tool_that_can_run_long_is_under_the_call_budget():
+	"""A tool taking a count of screens, items, pages or seconds can run long; each is held to the call budget. All the
+	tools, the desktop ones included: the server lists those only where desktop eyes are on."""
+	from browser_use.retinat.server import LONG_TOOLS, _browser_tools, _control_tools, _desktop_tools
+
+	long_params = {'max_screens', 'items', 'max_pages', 'seconds', 'max_seconds'}
+	tools = [*_browser_tools(), *_desktop_tools(), *_control_tools()]
+	long = {t.name for t in tools if long_params & set((t.input_schema.get('properties') or {}))}
+	assert long and long <= LONG_TOOLS, sorted(long - LONG_TOOLS)
+
+
+async def test_a_call_keeps_to_its_budget_by_itself_or_the_backstop_stops_it(tmp_path, monkeypatch, site):
+	"""A call held to a 1 s budget. A wait ends with the budget by itself (after a cold browser launch a 50 s wait went
+	past the client's 60 s). A tool that does not yet keep to the budget (watch, until it takes a deadline) is stopped
+	half a second past it and says so, instead of the client giving up on it; the next call works."""
+	import time
+
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(call_budget_s=1, backstop_grace_s=0.5)
+	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	page = (
+		'<!doctype html><title>Spin</title><body style="margin:0"><canvas id="c" width="400" height="300"></canvas><script>'
+		"const g = document.getElementById('c').getContext('2d'); let t = 0;"
+		'(function f() { t++; g.fillStyle = `hsl(${t % 360},70%,50%)`; g.fillRect(0, 0, 400, 300); requestAnimationFrame(f); })()'
+		'</script></body>'
+	)
+	try:
+		site.expect_request('/spin').respond_with_data(page, content_type='text/html')
+		await _call(server, 'retinat_open', {'url': site.url_for('/spin')})
+		await _call(server, 'retinat_reflex', {'rules': [{'when': 'false', 'notify': 'never'}]})
+		started = time.monotonic()
+		waited = await _call(server, 'retinat_wait', {'timeout': 10})
+		took = time.monotonic() - started
+		assert not waited.is_error and 'Nothing notified' in _text(waited), _text(waited)
+		assert took < 2, f'the wait took {took:.1f}s with a 1 s budget'
+		started = time.monotonic()
+		stopped = await _call(server, 'retinat_watch', {'seconds': 10})
+		took = time.monotonic() - started
+		assert stopped.is_error and 'past its 1s budget' in _text(stopped), _text(stopped)
+		assert took < 3, f'the watch took {took:.1f}s'
+		after = await _call(server, 'retinat_look', {})
+		assert not after.is_error, _text(after)
+	finally:
+		await server._close_all_sessions()

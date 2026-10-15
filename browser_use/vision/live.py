@@ -201,6 +201,11 @@ class LiveView:
 		self._running = True
 		self.logger.debug(f'🎥 Live view started on {cdp.target_id[-4:]}')
 
+	def clock(self) -> float:
+		"""Now, on the clock frames' `at` is on (seconds since this view began): frames after a moment are those with
+		`at` greater than the clock read at that moment."""
+		return time.monotonic() - self._started_at
+
 	def newest(self) -> bytes | None:
 		"""The newest picture of the page. Sharing the recorder's stream, that is the recorder's newest, which also
 		holds the capture it takes when the stream goes quiet (the screencast drops the repaint that ends an

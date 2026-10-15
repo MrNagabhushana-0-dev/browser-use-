@@ -21,7 +21,8 @@ For a native desktop app rather than a web page, a server started with `BROWSER_
 2. **Look before you act:**
    - `retinat_look` shows the current screen.
    - `retinat_scan` shows the whole page scrolled, which suits canvas, WebGL and scroll-driven
-     pages.
+     pages. A page too long for one call (about 50 s) ends with `call again with from_screen=...`:
+     call it so to see the rest.
    - For a video, call `retinat_watch(until='bored')`. It returns keyframes and sound labels, and
      a transcript when the speech extra is installed. It pauses the video afterwards, so nothing
      plays unseen while you think.

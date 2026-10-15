@@ -38,6 +38,7 @@ import base64
 import io
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -61,6 +62,7 @@ from browser_use.eyes.percept import (
 )
 from browser_use.eyes.requests import RequestLog, told_as_page_failure
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
+from browser_use.eyes.views import Deadline, stop_line
 from browser_use.human.input import HumanInput
 from browser_use.human.touch import HumanTouch
 
@@ -825,17 +827,30 @@ class Eyes:
 			self._pages = PageWatcher(self.browser_session, self.hand)
 		return self._pages
 
-	async def scan(self, max_screens: int = 25, keyframes: int = 6) -> Percept:
+	async def scan(
+		self, max_screens: int = 25, keyframes: int = 6, from_screen: float = 0.0, deadline: Deadline | None = None
+	) -> Percept:
 		"""Scroll the whole page like a reader while watching the rendered frames, and return the
-		few that cover everything seen - canvas, WebGL and scroll-driven animation included."""
+		few that cover everything seen - canvas, WebGL and scroll-driven animation included.
+
+		From `from_screen` screens down; with a `deadline`, it stops in time and says where to go on (`resume`)."""
 		from browser_use.eyes.page import scan_sheet
 
 		watcher = self._page_watcher()
-		result = await watcher.scan(max_screens=max_screens, keyframes=keyframes)
+		# A second for the sheet and the text after the scroll
+		inner = deadline.minus(1.0) if deadline is not None else None
+		# The archiver keeps out of the way, as for a watch: it pulls pictures through the same page thread
+		self._watching += 1
+		try:
+			result = await watcher.scan(max_screens=max_screens, keyframes=keyframes, from_screen=from_screen, deadline=inner)
+		finally:
+			self._watching -= 1
 		sheet = scan_sheet(result)
 		vh = max(1, result.viewport[1])
+		tall = result.page_height / vh
+		covered = f'{result.start_y / vh:.1f}-{min(tall, (result.reached_y + vh) / vh):.1f} of {tall:.1f} screens down'
 		lines = [
-			f'👁 scanned {self.retina.state.get("url", "")[:120]}: {result.page_height / vh:.1f} screens tall, '
+			f'👁 scanned {self.retina.state.get("url", "")[:120]}: {tall:.1f} screens tall, {covered}; '
 			f'scrolled {result.screens} times in {result.seconds:.1f}s, {len(result.frames)} frames seen',
 			f'    sheet: {len(result.keyframes)} frames at '
 			+ ', '.join(f'{k.scroll_y / vh:.1f}' for k in result.keyframes)
@@ -849,13 +864,26 @@ class Eyes:
 			)
 		if result.fixed:
 			lines.append('    stays put while the page scrolls (what is under it was not seen): ' + _describe_bands(result.fixed))
+		resume: dict[str, Any] | None = None
+		if result.next_y is not None:
+			resume = {'from_screen': math.floor(result.next_y / vh * 10) / 10, 'keyframes': keyframes}
+			if result.stopped == 'time':
+				resume['max_screens'] = max(1, max_screens - result.screens)
+			why = 'time' if result.stopped == 'time' else f'stopped at max_screens={max_screens}'
+			lines.append('    ' + stop_line(deadline, why, f'{result.screens} screens, {covered}', resume))
+		elif result.stopped == 'stuck':
+			lines.append('    ⏹ the page stopped scrolling (an inner scroller, a scroll lock or an overlay): not further down')
+		elif result.stopped == 'unresponsive':
+			lines.append('    ⏹ the page stopped answering: what was seen up to then is above')
+		elif result.stopped == 'time':
+			lines.append('    ' + stop_line(deadline, 'time', f'{result.screens} screens, {covered}', None))
 		image, size, tokens = (
 			(sheet[0], (sheet[1], sheet[2]), estimate_image_tokens(sheet[1], sheet[2])) if sheet else (None, None, 0)
 		)
 		text = '\n'.join(lines)
 		if size:
 			text += f'\n~{tokens + len(text) // 4} tokens (sheet {size[0]}x{size[1]} ~{tokens}; estimates)'
-		return Percept([], text, image, size, tokens, len(text) // 4)
+		return Percept([], text, image, size, tokens, len(text) // 4, stop_reason=result.stopped, resume=resume)
 
 	async def _hold(self) -> None:
 		try:

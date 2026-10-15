@@ -17,6 +17,7 @@ import io
 import math
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -95,6 +96,8 @@ class Percept:
 	ended_at: float = 0.0
 	stop_reason: str = ''
 	frames: list[tuple[float, bytes]] = field(default_factory=list, repr=False)  # (media t, JPEG), from recall
+	# The arguments that go on from where this stopped, when it stopped before it was done (out of time, a cap)
+	resume: dict[str, Any] | None = None
 
 	@property
 	def tokens(self) -> int:

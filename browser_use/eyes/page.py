@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from browser_use.browser.capture import capture_screenshot
 from browser_use.eyes import sight
 from browser_use.eyes.retina import FrameSample
+from browser_use.eyes.views import Deadline
 from browser_use.vision.live import LiveView
 
 if TYPE_CHECKING:
@@ -28,6 +29,8 @@ if TYPE_CHECKING:
 	from browser_use.human.input import HumanInput
 
 GRID = 16
+# How long one read of the page may take before the scan gives up on it
+EVAL_TIMEOUT_S = 10.0
 
 
 def signature(jpeg: bytes) -> tuple[bytes, tuple[int, int, int], bytes]:
@@ -63,6 +66,12 @@ class PageScan:
 	# Bands of the screen (top, bottom as fractions of its height) that stayed the same while the page scrolled under
 	# them: a sticky header, a banner, a cookie bar. What is under them was not seen.
 	fixed: list[tuple[float, float, str]] = field(default_factory=list)
+	# Why it stopped: 'end' (the bottom), 'stuck' (the page would not scroll on), 'max_screens', 'time' (its deadline)
+	# or 'unresponsive' (a read of the page did not come back)
+	stopped: str = 'end'
+	start_y: float = 0.0  # where it began (CSS px down the page)
+	reached_y: float = 0.0  # the scroll position it last read
+	next_y: float | None = None  # where a scan that goes on should begin, when there is more to see
 
 	@property
 	def cuts(self) -> list[float]:
@@ -194,10 +203,15 @@ class PageWatcher:
 			finally:
 				self.live = None
 
-	async def _eval(self, expression: str):
+	async def _eval(self, expression: str, timeout: float = EVAL_TIMEOUT_S):
+		"""Evaluate in the page; TimeoutError if no answer within `timeout` (a CDP call has no time limit of its own,
+		and a page that has stopped answering would hold the scan, and the call, forever)."""
 		cdp = await self.session.get_or_create_cdp_session(focus=False)
-		r = await cdp.cdp_client.send.Runtime.evaluate(
-			params={'expression': expression, 'returnByValue': True}, session_id=cdp.session_id
+		r = await asyncio.wait_for(
+			cdp.cdp_client.send.Runtime.evaluate(
+				params={'expression': expression, 'returnByValue': True}, session_id=cdp.session_id
+			),
+			max(0.05, timeout),
 		)
 		return (r.get('result') or {}).get('value')
 
@@ -246,58 +260,124 @@ class PageWatcher:
 			await asyncio.sleep(0.05)
 		return self.latest()
 
-	async def scan(self, max_screens: int = 25, dwell_s: float = 0.6, keyframes: int = 6) -> PageScan:
-		"""Scroll top to bottom like a reader, watching; keep the frames that cover what was seen."""
+	async def scan(
+		self,
+		max_screens: int = 25,
+		dwell_s: float = 0.6,
+		keyframes: int = 6,
+		from_screen: float = 0.0,
+		deadline: Deadline | None = None,
+	) -> PageScan:
+		"""Scroll down like a reader from `from_screen` screens down, watching; keep the frames that cover what was seen.
+
+		With a `deadline`, stop in time to return what was seen: the result says why it stopped and where to go on
+		(`next_y`). Without one it scrolls until the end, `max_screens`, or a page that will not scroll."""
+		assert from_screen >= 0, 'from_screen is a number of screens down the page'
+		dl = deadline or Deadline.unbounded()
 		await self.start()
 		assert self.live is not None
+		live = self.live
 		started = time.monotonic()
-		# Few reads of the page, each doing what it can: on a page drawing a frame a second (WebGL in software) every
-		# read waits ~2 s for the page, and a one-screen scan took eight of them
-		w, h = await self._eval('window.scrollTo(0, 0), [innerWidth, innerHeight]') or [1280, 800]
-		await asyncio.sleep(0.4)
-		await self.hand.move_to(w * 0.55, h * 0.5)
+		# Only what is drawn from here on: the stream also holds frames of what the tab showed before (another page,
+		# an earlier look), and a scan of a grey page showed the bands of the page before it
+		last_at = live.clock()
 		captured: list[PageFrame] = []
-		seen = 0
-
+		samples: list[FrameSample] = []
 		fixed_steps: list[list[list]] = []
+		w, h = 1280.0, 800.0
+		start_y = reached_y = 0.0
+		height = 0
+		screens = 0
+		stopped = 'max_screens'
+
+		def take(frame: PageFrame) -> None:
+			# Signatures as the frames come in, so the work after the loop does not grow with the frames seen
+			captured.append(frame)
+			luma, rgb, grid4 = signature(frame.jpeg)
+			samples.append(FrameSample(len(samples) + 1, 1, frame.at, frame.at, luma, rgb, True, grid4))
 
 		async def collect() -> tuple[float, bool, int]:
 			"""Take in the frames drawn since the last call; (where the page is scrolled, at its end, its height)."""
-			nonlocal seen
-			frames = self.live.frames if self.live else []
+			nonlocal last_at
 			state = await self._eval(
 				f'[scrollY, scrollY + innerHeight >= document.documentElement.scrollHeight - 4,'
-				f' document.documentElement.scrollHeight, {FIXED_JS}]'
+				f' document.documentElement.scrollHeight, {FIXED_JS}]',
+				timeout=dl.clamp(EVAL_TIMEOUT_S),
 			) or [0, True, 0, []]
 			y = float(state[0] or 0)
 			fixed_steps.append(state[3] or [])
-			for f in frames[seen:]:
+			fresh = [f for f in live.frames if f.at > last_at]
+			if fresh:
+				last_at = fresh[-1].at
+			for f in fresh:
+				if f.scroll_y is not None and f.scroll_y < start_y - 2:
+					continue  # drawn before the jump to where this scan begins, and acked after it
 				# Where Chrome drew the frame, not where the page is now: frames from mid-scroll were labelled with
 				# where it ended up (found on the Guardian: two frames "6.4 screens down" with different stories)
-				captured.append(PageFrame(time.monotonic() - started, f.scroll_y if f.scroll_y is not None else y, f.data))
-			seen = len(frames)
+				take(PageFrame(time.monotonic() - started, f.scroll_y if f.scroll_y is not None else y, f.data))
+			if not any(abs(c.scroll_y - y) <= 2 for c in captured[-8:]):
+				# Nothing drawn from here: a still page that the scan has not moved yet, or a stream that stopped
+				# under the scan (a recording took it over, the explorer stopped its view on this tab). A picture of
+				# it as it is, so what the scan says it saw is what it saw
+				shot = await asyncio.wait_for(self.capture(), max(0.05, dl.clamp(5.0)))
+				if shot:
+					take(PageFrame(time.monotonic() - started, y, shot))
 			return y, bool(state[1]), int(state[2] or 0)
 
-		screens = 0
-		for _ in range(max_screens):
-			await asyncio.sleep(dwell_s)  # read, and let anything that animates on arrival play
-			before, at_end, _ = await collect()
-			if at_end:
-				break
-			await self.hand.wheel(h * 0.8)
-			screens += 1
-			if await self._eval('scrollY') == before:
-				await asyncio.sleep(0.3)
-				if await self._eval('scrollY') == before:
+		try:
+			# Few reads of the page, each doing what it can: on a page drawing a frame a second (WebGL in software)
+			# every read waits ~2 s for the page, and a one-screen scan took eight of them
+			t = time.monotonic()
+			w, h, start_y = await self._eval(
+				f"window.scrollTo({{top: {from_screen} * innerHeight, behavior: 'instant'}}), [innerWidth, innerHeight, scrollY]",
+				timeout=dl.clamp(EVAL_TIMEOUT_S),
+			) or [1280, 800, 0]
+			w, h, start_y = float(w), float(h), float(start_y)
+			probe = time.monotonic() - t
+			reached_y = start_y
+			# What a step takes, grown to the longest one seen; and what must still fit after the loop
+			step_est = dwell_s + 3 * probe + 0.3
+			tail_est = min(dwell_s, 0.3) + 2 * probe + 0.5
+			if dl.allows(0.4 + tail_est):
+				await asyncio.sleep(0.4)
+				await self.hand.move_to(w * 0.55, h * 0.5)
+			wheeled = False
+			for _ in range(max_screens):
+				if not dl.allows(step_est + tail_est + 0.002 * len(captured)):
+					stopped = 'time'
 					break
-		await asyncio.sleep(dwell_s)
-		_, _, height = await collect()
-		await self._eval('window.scrollTo(0, 0)')
+				t = time.monotonic()
+				await asyncio.sleep(dwell_s)  # read, and let anything that animates on arrival play
+				reached_y, at_end, height = await collect()
+				wheeled = False
+				if at_end:
+					stopped = 'end'
+					break
+				await self.hand.wheel(h * 0.8)
+				wheeled = True
+				screens += 1
+				if await self._eval('scrollY', timeout=dl.clamp(EVAL_TIMEOUT_S)) == reached_y:
+					if not dl.allows(0.3 + probe + tail_est):
+						stopped = 'time'
+						break
+					await asyncio.sleep(0.3)
+					if await self._eval('scrollY', timeout=dl.clamp(EVAL_TIMEOUT_S)) == reached_y:
+						stopped = 'stuck'
+						break
+				step_est = max(step_est, time.monotonic() - t)
+			if wheeled:
+				# What the last turn of the wheel brought into view
+				await asyncio.sleep(dl.clamp(dwell_s, reserve=tail_est))
+				reached_y, at_end, height = await collect()
+				if at_end and stopped == 'max_screens':
+					stopped = 'end'
+		except TimeoutError:
+			stopped = 'time' if not dl.allows(0.5) else 'unresponsive'
+		try:
+			await self._eval("window.scrollTo({top: 0, behavior: 'instant'})", timeout=max(0.5, dl.clamp(2.0)))
+		except TimeoutError:
+			pass
 
-		samples: list[FrameSample] = []
-		for i, frame in enumerate(captured):
-			luma, rgb, grid4 = signature(frame.jpeg)
-			samples.append(FrameSample(i + 1, 1, frame.at, frame.at, luma, rgb, True, grid4))
 		height = max(height, int(h))
 		indices, shown = choose_page_frames(captured, samples, keyframes, float(h), float(height))
 		# Where the picture changed while the page was not being scrolled: things moving on their own.
@@ -307,6 +387,7 @@ class PageWatcher:
 			a, b = captured[i - 1], captured[i]
 			if a.scroll_y == b.scroll_y and deltas[i] > 6 and (not moving or abs(moving[-1] - a.scroll_y) > h * 0.5):
 				moving.append(a.scroll_y)
+		more = stopped in ('time', 'max_screens') and reached_y + h < height - 4
 		return PageScan(
 			fixed=fixed_bands(fixed_steps),
 			frames=captured,
@@ -318,6 +399,10 @@ class PageWatcher:
 			page_height=height,
 			viewport=(int(w), int(h)),
 			moving=moving,
+			stopped=stopped,
+			start_y=start_y,
+			reached_y=reached_y,
+			next_y=reached_y + h * 0.8 if more else None,
 		)
 
 

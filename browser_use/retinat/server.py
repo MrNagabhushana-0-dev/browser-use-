@@ -37,6 +37,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
+from browser_use.eyes.views import CALL_BUDGET_S, Deadline
 from browser_use.mcp.server import MCP_AVAILABLE, TEXT_FAILURES, BrowserUseServer, serve_until_stopped, types
 from browser_use.net import NetworkMode, NetworkRouter
 
@@ -69,6 +70,11 @@ ACTING = frozenset(
 		'retinat_reflex',
 	}
 )
+
+# Tools that can run long (a count of screens, items, pages or seconds): each is held to the call's budget, and a hard
+# stop BACKSTOP_GRACE_S after it if it does not stop by itself (the client's 60 s minus room for the answer)
+LONG_TOOLS = frozenset({'retinat_scan', 'retinat_browse', 'retinat_watch', 'retinat_explore', 'retinat_desktop_watch'})
+BACKSTOP_GRACE_S = 6.0
 
 # What a click at (x, y) lands on: the topmost element there (into open shadow roots), lifted to the control that owns
 # it, described as role plus the text a person would read on it.
@@ -289,12 +295,23 @@ def _browser_tools() -> list['types.Tool']:
 		),
 		types.Tool(
 			name='retinat_scan',
-			description='Scroll the whole page top to bottom like a reader while watching what is drawn, and return the few frames that cover everything seen (one sheet), plus where things animate on their own. Use for canvas/WebGL/scroll-driven pages where the DOM says little.',
+			description=(
+				'Scroll the whole page top to bottom like a reader while watching what is drawn, and return the few '
+				'frames that cover everything seen (one sheet), plus where things animate on their own. Use for '
+				'canvas/WebGL/scroll-driven pages where the DOM says little. Answers within ~50 s (clients stop a call '
+				'at 60 s): a page too long or too slow for one call says "call again with from_screen=..." to go on.'
+			),
 			input_schema={
 				'type': 'object',
 				'properties': {
 					'max_screens': {'type': 'integer', 'default': 25, 'minimum': 1, 'maximum': 80},
 					'keyframes': {'type': 'integer', 'default': 6, 'minimum': 1, 'maximum': 16},
+					'from_screen': {
+						'type': 'number',
+						'default': 0,
+						'minimum': 0,
+						'description': 'Screens down the page to begin at: what an earlier scan said to go on from.',
+					},
 				},
 			},
 		),
@@ -609,7 +626,16 @@ class RetinatServer(BrowserUseServer):
 		session_timeout_minutes: int = 30,
 		network: NetworkRouter | None = None,
 		bridge: 'BridgeRelay | None' = None,
+		call_budget_s: float | None = None,
+		backstop_grace_s: float = BACKSTOP_GRACE_S,
+		long_tools: frozenset[str] = LONG_TOOLS,
 	) -> None:
+		# What one tool call may spend before it answers with what it has: MCP clients drop a call at 60 s
+		self.call_budget_s = float(call_budget_s or os.environ.get('BROWSER_USE_MCP_CALL_BUDGET_S') or CALL_BUDGET_S)
+		assert self.call_budget_s > 0, 'a call budget is some seconds'
+		# The tools held to the budget by a hard stop, and how long after the budget it comes
+		self.backstop_grace_s = backstop_grace_s
+		self.long_tools = long_tools
 		# Agents get `auto` unless told otherwise: direct first, Tor only after a network failure or a
 		# geo-block, never for a bot wall. `--network off` (or RETINAT/BROWSER_USE env) turns it off.
 		super().__init__(
@@ -634,6 +660,10 @@ class RetinatServer(BrowserUseServer):
 		async def call_tool(_context: Any, params: 'types.CallToolRequestParams') -> 'types.CallToolResult':
 			from browser_use.mcp import effects
 
+			# The call's clock starts here: a browser launch or opening the eyes below spends the same time the client is
+			# counting
+			deadline = Deadline.after(self.call_budget_s)
+			backstop: asyncio.Timeout | None = None
 			token = effects.begin()
 			listed = {t.name: t for t in [*_tools(), *self._network_tool_entries('retinat')]}
 			looking = {name for name, t in listed.items() if t.annotations and t.annotations.read_only_hint}
@@ -643,7 +673,11 @@ class RetinatServer(BrowserUseServer):
 			try:
 				if params.name in listed:
 					effects.check_arguments(listed[params.name].input_schema, params.arguments or {})
-				result = await self._call_retinat(params.name, params.arguments or {})
+				# A last resort for a long tool that did not stop in time by itself: it loses what the tool had, so the
+				# tools stop on their deadline first; this only keeps the server from working on after the client left
+				limit = deadline.left() + self.backstop_grace_s if params.name in self.long_tools else None
+				async with asyncio.timeout(limit) as backstop:
+					result = await self._call_retinat(params.name, params.arguments or {}, deadline)
 				if isinstance(result, str) and result.startswith(TEXT_FAILURES):  # shared handlers report checks as text
 					raise effects.refused(result.removeprefix('Error: '))
 				content: list[types.ContentBlock] = (
@@ -652,6 +686,13 @@ class RetinatServer(BrowserUseServer):
 				if before_a_wait and content and isinstance(content[0], types.TextContent):
 					content[0] = types.TextContent(type='text', text=content[0].text + _WAIT_PENDING_NOTE)
 				return types.CallToolResult(content=content)
+			except TimeoutError as e:
+				if backstop is not None and backstop.expired():
+					e = RuntimeError(
+						f'{params.name} ran {deadline.spent():.0f}s, past its {deadline.budget_s:.0f}s budget, and was stopped '
+						'before the client would give up on it'
+					)
+				return effects.failure(params.name, e, read_only=params.name in looking)
 			except Exception as e:
 				# Every input and navigation below goes through effects.act, so a failure says if anything happened.
 				return effects.failure(params.name, e, read_only=params.name in looking)
@@ -740,7 +781,9 @@ class RetinatServer(BrowserUseServer):
 		value = (r.get('result') or {}).get('value')
 		return value if isinstance(value, str) and value else None
 
-	async def _call_retinat(self, name: str, args: dict[str, Any]) -> str | list['types.ContentBlock']:
+	async def _call_retinat(
+		self, name: str, args: dict[str, Any], deadline: Deadline | None = None
+	) -> str | list['types.ContentBlock']:
 		from browser_use.mcp.effects import Refused, act
 
 		if not name.startswith(TOOL_PREFIX):
@@ -788,7 +831,7 @@ class RetinatServer(BrowserUseServer):
 		if name == 'retinat_record':
 			return await self._record(str(args['action']), int(args.get('framerate', 8)))
 		if name in ('retinat_reflex', 'retinat_wait'):
-			return await self._reflex(name, args)
+			return await self._reflex(name, args, deadline)
 		eyes = await self._eyes()
 		if name == 'retinat_console':
 			from browser_use.eyes.console import render as render_console
@@ -827,7 +870,14 @@ class RetinatServer(BrowserUseServer):
 			)
 		if name == 'retinat_scan':
 			return self._content(
-				await act(eyes.scan(max_screens=int(args.get('max_screens', 25)), keyframes=int(args.get('keyframes', 6))))
+				await act(
+					eyes.scan(
+						max_screens=int(args.get('max_screens', 25)),
+						keyframes=int(args.get('keyframes', 6)),
+						from_screen=float(args.get('from_screen') or 0),
+						deadline=deadline,
+					)
+				)
 			)
 		if name == 'retinat_browse':
 			return self._content(
@@ -954,7 +1004,7 @@ class RetinatServer(BrowserUseServer):
 			raise Refused(str(e)) from e
 		return f'Recording to {out} at {framerate} fps. Call retinat_record with action=stop to finish the file.'
 
-	async def _reflex(self, name: str, args: dict[str, Any]) -> str:
+	async def _reflex(self, name: str, args: dict[str, Any], deadline: Deadline | None = None) -> str:
 		"""Install, clear or report the tab's reflexes, or wait for one to notify."""
 		from browser_use.eyes.reflex import Reflexes
 		from browser_use.mcp.effects import Refused
@@ -966,11 +1016,15 @@ class RetinatServer(BrowserUseServer):
 		if name == 'retinat_wait':
 			if not reflexes.installed:
 				raise Refused('no reflexes are installed: install rules with retinat_reflex first')
-			event = await reflexes.wait(timeout=float(args.get('timeout', 30)))
+			timeout = float(args.get('timeout', 30))
+			if deadline is not None and deadline.bounded:
+				# Within the call's budget: opening the browser first spends the same time the client counts
+				timeout = max(0.1, min(timeout, deadline.left() - 0.5))
+			event = await reflexes.wait(timeout=timeout)
 			stats = reflexes.stats()
 			done = f'{stats["actions"]} input actions so far, decision to input p50 {stats["latency_ms_p50"]} ms'
 			if event is None:
-				return f'Nothing notified in {float(args.get("timeout", 30)):.0f}s. The reflexes keep running: {done}.'
+				return f'Nothing notified in {timeout:.0f}s. The reflexes keep running: {done}.'
 			at = f', video at {event.media_t:.2f}s' if event.media_t is not None else ''
 			return f'"{event.label}" (rule {event.rule}) fired at page time {event.page_ms / 1000:.2f}s{at}. {done}.'
 		action = str(args.get('action') or 'install')
