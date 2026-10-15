@@ -98,6 +98,7 @@ logging.disable(logging.CRITICAL)
 from browser_use import ActionModel, Agent
 from browser_use.bridge.policy import NOT_ALLOWED
 from browser_use.browser import BrowserProfile, BrowserSession
+from browser_use.browser.profile import PROXY_CA_LEARNED
 from browser_use.config import get_default_llm, get_default_profile, load_browser_use_config
 from browser_use.filesystem.file_system import FileSystem
 from browser_use.llm.openai.chat import ChatOpenAI
@@ -762,7 +763,7 @@ class BrowserUseServer:
 							'type': 'number',
 							'default': 12,
 							'minimum': 1,
-							'maximum': 90,
+							'maximum': 45,
 							'description': 'Longest to watch.',
 						},
 						'until': {
@@ -796,7 +797,7 @@ class BrowserUseServer:
 							'type': 'number',
 							'default': 12,
 							'minimum': 2,
-							'maximum': 90,
+							'maximum': 45,
 							'description': 'Longest to spend on one item.',
 						},
 						'min_seconds': {'type': 'number', 'default': 3, 'minimum': 0.5, 'maximum': 30},
@@ -1196,9 +1197,16 @@ class BrowserUseServer:
 			return None
 
 		error = await go()
+		note = ''
+		if error is not None and PROXY_CA_LEARNED in str(error) and not self.cdp_url and self.bridge is None:
+			# the proxy's CA was just learned from this refusal (the environment's own CA bundle trusts it): a browser
+			# trusts it from its start, so start one and go again. Not censorship, so no Tor.
+			await self._drop_browser_session()
+			await self._init_browser_session()
+			error = await go()
+			note = " (the browser restarted to trust this network's proxy CA, learned from the refused page)"
 		outcome = classify_navigation(str(error)) if error else await self._page_outcome()
 		self.network.note_outcome(outcome)
-		note = ''
 		if self.network.wants_fallback(outcome) and not self.cdp_url:
 			host = urlparse(url).hostname or url
 			if await self.network.engage(f'{outcome} at {host}'):
@@ -1882,6 +1890,63 @@ def _is_secret_field(attributes: dict[str, str]) -> bool:
 	)
 
 
+async def serve_until_stopped(server: Any) -> None:
+	"""Run an MCP server over stdio until the client leaves or a signal (SIGTERM, SIGHUP, SIGINT) stops it, then close
+	its browsers, bridge and Tor. Without this a stopped server left its Chromium running with no one to close it.
+
+	On a signal the process exits from here once that is done: the stdio transport reads stdin in a worker thread that
+	no cancellation reaches while the client keeps the pipe open, so the server would otherwise close its browser and
+	then hang for good (both found hands-on)."""
+	import signal
+
+	loop = asyncio.get_running_loop()
+	stop = asyncio.Event()
+	for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+		try:
+			loop.add_signal_handler(sig, stop.set)
+		except (NotImplementedError, RuntimeError, ValueError):
+			pass  # Windows, or not the main thread: the client closing stdin still ends run()
+	running = asyncio.create_task(server.run())
+	stopping = asyncio.create_task(stop.wait())
+	try:
+		await asyncio.wait({running, stopping}, return_when=asyncio.FIRST_COMPLETED)
+	finally:
+		stopping.cancel()
+		await _close_everything(server)
+	if stop.is_set():
+		_log_stopped_by_signal()
+		os._exit(0)
+	if not running.cancelled():
+		running.result()
+
+
+async def _close_everything(server: Any) -> None:
+	"""Each part gets its own bounded try, so one that hangs or fails does not keep the rest running."""
+	closers: list[tuple[str, Any]] = [('sessions', server._close_all_sessions)]
+	session = getattr(server, 'browser_session', None)
+	if session is not None:
+		closers.append(('browser', session.kill))
+	for name in ('bridge', 'network'):
+		part = getattr(server, name, None)
+		close = getattr(part, 'stop', None) or getattr(part, 'close', None)
+		if close is not None:
+			closers.append((name, close))
+	for name, close in closers:
+		try:
+			await asyncio.wait_for(close(), timeout=15)
+		except Exception as e:
+			logger.debug(f'closing the {name} on exit: {type(e).__name__}: {e}')
+
+
+def _log_stopped_by_signal() -> None:
+	logger.info('Stopped by a signal; browsers, bridge and Tor closed.')
+	for stream in (sys.stdout, sys.stderr):
+		try:
+			stream.flush()
+		except Exception:
+			pass
+
+
 async def main(session_timeout_minutes: int = 10):
 	if not MCP_AVAILABLE:
 		print('MCP SDK is required. Install with: pip install mcp', file=sys.stderr)
@@ -1903,7 +1968,7 @@ async def main(session_timeout_minutes: int = 10):
 	)
 
 	try:
-		await server.run()
+		await serve_until_stopped(server)
 	finally:
 		duration = time.time() - server._start_time
 		server._telemetry.capture(

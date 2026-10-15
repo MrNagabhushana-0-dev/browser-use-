@@ -52,7 +52,9 @@ def frame_signature(jpeg_bytes: bytes) -> bytes:
 	try:
 		from PIL import Image
 
-		image = Image.open(BytesIO(jpeg_bytes)).convert('RGB').resize((_THUMB, _THUMB), Image.Resampling.BILINEAR)
+		image = Image.open(BytesIO(jpeg_bytes))
+		image.draft('RGB', (_THUMB * 8, _THUMB * 8))  # a JPEG is decoded at 1/8 size: this runs for every frame
+		image = image.convert('RGB').resize((_THUMB, _THUMB), Image.Resampling.BILINEAR)
 	except Exception:
 		return b''
 	return image.tobytes()
@@ -87,6 +89,7 @@ class Frame:
 	at: float  # seconds since the watch began
 	data: bytes = field(repr=False)
 	signature: bytes = field(default=b'', repr=False)
+	scroll_y: float | None = None  # where the page was scrolled when Chrome drew it (CSS px), from the frame itself
 
 	def to_base64(self) -> str:
 		return base64.b64encode(self.data).decode()
@@ -136,6 +139,7 @@ class LiveView:
 		# someone else's (the video recorder's) rather than ours to start and stop.
 		self._incumbent = None
 		self._shared = False
+		self._max_width, self._quality = 640, 60
 		# Bound once. `self._on_frame` builds a fresh bound method on every attribute access,
 		# so `self._on_frame is self._on_frame` is False and an identity check against the
 		# registry would never match — which silently skipped the unregister on stop.
@@ -179,6 +183,11 @@ class LiveView:
 		recorder = getattr(self.browser_session, '_recording_watchdog', None)
 		self._shared = bool(recorder is not None and recorder.is_recording)
 		self.browser_session.cdp_client.register.Page.screencastFrame(self._handler)
+		self._max_width, self._quality = max_width, quality
+		if self._shared and recorder is not None and recorder.latest_frame:
+			# A still page sends nothing more, so a view joining the recorder's stream starts from its newest frame
+			data = base64.b64decode(recorder.latest_frame)
+			self._frames.append(Frame(at=0.0, data=data, signature=frame_signature(data)))
 		if not self._shared:
 			await cdp.cdp_client.send.Page.startScreencast(
 				params={
@@ -191,6 +200,52 @@ class LiveView:
 			)
 		self._running = True
 		self.logger.debug(f'🎥 Live view started on {cdp.target_id[-4:]}')
+
+	def newest(self) -> bytes | None:
+		"""The newest picture of the page. Sharing the recorder's stream, that is the recorder's newest, which also
+		holds the capture it takes when the stream goes quiet (the screencast drops the repaint that ends an
+		animation); otherwise this view's last frame."""
+		recorder = getattr(self.browser_session, '_recording_watchdog', None)
+		if self._shared and recorder is not None and recorder.latest_frame:
+			return base64.b64decode(recorder.latest_frame)
+		frames = self.frames
+		return frames[-1].data if frames else None
+
+	def fit(self, data: bytes) -> bytes:
+		"""A frame as this view asked for it: JPEG, no wider than its max_width. Frames from a stream this view shares
+		(the video recorder's: the whole viewport, as PNG) are shrunk here, when one is used, not as each arrives."""
+		if not self._shared:
+			return data
+		try:
+			from PIL import Image
+
+			with Image.open(BytesIO(data)) as img:
+				if img.format == 'JPEG' and img.width <= self._max_width:
+					return data
+				img = img.convert('RGB')
+				if img.width > self._max_width:
+					img = img.resize(
+						(self._max_width, max(1, round(img.height * self._max_width / img.width))), Image.Resampling.BILINEAR
+					)
+				out = BytesIO()
+				img.save(out, format='JPEG', quality=self._quality)
+				return out.getvalue()
+		except Exception as e:
+			self.logger.debug(f'🎥 Could not fit a shared frame: {type(e).__name__}: {e}')
+			return data
+
+	def _recording(self) -> bool:
+		recorder = getattr(self.browser_session, '_recording_watchdog', None)
+		return bool(recorder is not None and recorder.is_recording)
+
+	def in_step(self) -> bool:
+		"""Whether this view still gets the frames it should: its handler holds the frame slot, and it shares the
+		recorder's stream exactly while a recording runs. A recording started after the view takes the slot and the
+		screencast; one stopped while the view shares it ends the stream. Either way the view starves and every
+		frame it hands out is the last one it got (found live: looks showed a game's start screen mid-game)."""
+		if not self._running:
+			return True
+		return self._frame_handler() is self._handler and self._shared == self._recording()
 
 	@property
 	def _registry(self):
@@ -218,8 +273,8 @@ class LiveView:
 					pass
 		self._incumbent = None
 
-		if self._shared:
-			# The stream was not ours to start, so it is not ours to stop.
+		if self._shared or self._recording():
+			# The stream was not ours to start, or a recording has since taken it over: not ours to stop.
 			self._shared = False
 			return
 		try:
@@ -253,7 +308,15 @@ class LiveView:
 			data = base64.b64decode(event['data'])
 		except Exception:
 			return
-		self._frames.append(Frame(at=time.monotonic() - self._started_at, data=data, signature=frame_signature(data)))
+		scroll_y = (event.get('metadata') or {}).get('scrollOffsetY')
+		self._frames.append(
+			Frame(
+				at=time.monotonic() - self._started_at,
+				data=data,
+				signature=frame_signature(data),
+				scroll_y=float(scroll_y) if isinstance(scroll_y, int | float) else None,
+			)
+		)
 		if self._shared:
 			# The recorder owns this stream and does its own acking; a second ack would ask
 			# Chrome for frames it has already queued.

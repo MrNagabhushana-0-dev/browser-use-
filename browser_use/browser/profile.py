@@ -607,6 +607,109 @@ class ProxySettings(BaseModel):
 MAX_PROXY_CA_CERTS = 4
 
 
+# The words a navigation error carries when the proxy's CA was learned from it (learn_proxy_ca); the MCP servers
+# restart their browser on them and try once more.
+PROXY_CA_LEARNED = "saved as this network's proxy CA"
+_CA_BUNDLE_VARS = ('SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS')
+
+
+def _network_key() -> str:
+	return os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy') or 'direct'
+
+
+def _learned_index() -> Path:
+	return CONFIG.BROWSER_USE_CONFIG_DIR / 'proxy-ca' / 'learned.json'
+
+
+def learned_proxy_ca() -> str | None:
+	"""The proxy CA learn_proxy_ca saved for this network (the HTTPS proxy in use), if any."""
+	import json
+
+	try:
+		path = json.loads(_learned_index().read_text()).get(_network_key())
+	except (OSError, ValueError, AttributeError):
+		return None
+	return path if isinstance(path, str) and Path(path).is_file() else None
+
+
+def learn_proxy_ca(chain: list[bytes]) -> str | None:
+	"""Learn the CA of a proxy that re-signs TLS from the chain Chromium was shown and refused (DER, leaf first).
+
+	curl, Python and Node in such a network trust the proxy's CA through SSL_CERT_FILE and friends; Chromium reads
+	none of them. A certificate is learned only when (1) the environment's own CA bundle holds it, (2) it is a CA, (3)
+	it is not one of the public roots (those Chromium already trusts, or chose to stop trusting), and (4) its key
+	verifiably signed the refused chain. It is saved for this network and returned as its subject; the next browser
+	trusts its key (proxy_ca_pins), with verification on for everything else. Returns None when nothing qualifies.
+	"""
+	import hashlib
+	import json
+	import re
+	import ssl
+
+	from cryptography import x509
+	from cryptography.hazmat.primitives import serialization
+
+	bundles = list(dict.fromkeys(os.environ[v] for v in _CA_BUNDLE_VARS if os.environ.get(v)))
+	if not bundles or not chain:
+		return None
+	try:
+		import certifi
+
+		public = {
+			hashlib.sha256(ssl.PEM_cert_to_DER_cert(block)).digest()
+			for block in re.findall(
+				r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', Path(certifi.where()).read_text(), re.S
+			)
+		}
+	except Exception:
+		public = set()
+	trusted: list[x509.Certificate] = []
+	for bundle in bundles:
+		try:
+			text = Path(bundle).expanduser().read_text()
+		except OSError:
+			continue
+		for block in re.findall(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', text, re.S):
+			try:  # one by one: an odd old root (a negative serial) must not hide the rest of the bundle
+				trusted.append(x509.load_pem_x509_certificate(block.encode()))
+			except Exception:
+				continue
+	try:
+		shown = [x509.load_der_x509_certificate(der) for der in chain]
+	except Exception:
+		return None
+	for cert in reversed(shown):  # the top of the chain first: the proxy's CA, or the certificate it signed
+		for ca in trusted:
+			if ca.subject != cert.issuer:
+				continue
+			der = ca.public_bytes(serialization.Encoding.DER)
+			if hashlib.sha256(der).digest() in public:
+				continue
+			try:
+				if not ca.extensions.get_extension_for_class(x509.BasicConstraints).value.ca:
+					continue
+			except x509.ExtensionNotFound:
+				pass  # an old self-signed root without the extension is still a root
+			try:
+				cert.verify_directly_issued_by(ca)
+			except Exception:
+				continue
+			folder = _learned_index().parent
+			folder.mkdir(parents=True, exist_ok=True)
+			pem = folder / f'{hashlib.sha256(der).hexdigest()[:16]}.pem'
+			pem.write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+			try:
+				index = json.loads(_learned_index().read_text())
+			except (OSError, ValueError):
+				index = {}
+			index[_network_key()] = str(pem)
+			_learned_index().write_text(json.dumps(index, indent=1))
+			subject = ca.subject.rfc4514_string()
+			logger.info(f'Learned the proxy CA {subject} from the environment CA bundle; saved to {pem}')
+			return subject
+	return None
+
+
 def proxy_ca_pins(cert_path: str | Path) -> list[str]:
 	"""SHA-256 SPKI pins for the certificates in a PEM file.
 
@@ -796,10 +899,11 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 
 	# --- Agent-facing page APIs ---
 	proxy_ca_cert: str | None = Field(
-		default_factory=lambda: os.environ.get('BROWSER_USE_PROXY_CA_CERT'),
+		default_factory=lambda: os.environ.get('BROWSER_USE_PROXY_CA_CERT') or learned_proxy_ca(),
 		description='PEM file holding the CA of a TLS-terminating proxy. Chromium has no --cacert, so its '
 		'public key is pinned via --ignore-certificate-errors-spki-list: that one key is accepted and '
-		'verification stays on for everything else. Defaults to $BROWSER_USE_PROXY_CA_CERT.',
+		'verification stays on for everything else. Defaults to $BROWSER_USE_PROXY_CA_CERT, else the CA learned for this '
+		'network from a refused page (learn_proxy_ca).',
 	)
 	synthesize_site_tools: bool = Field(
 		default=True,

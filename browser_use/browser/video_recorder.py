@@ -4,6 +4,7 @@ import base64
 import io
 import logging
 import math
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -53,6 +54,11 @@ class VideoRecorderService:
 		self._writer: Optional['Format.Writer'] = None
 		self._is_active = False
 		self.padded_size = _get_padded_size(self.size)
+		self._latest: 'np.ndarray | None' = None  # the newest picture; tick() writes it at the frame rate
+		# The newest frame as received, not yet decoded: add_frame() runs on the event loop for every repaint, so it
+		# only keeps this; tick() decodes the newest one, at the frame rate, off the loop.
+		self._pending: str | None = None
+		self._lock = threading.Lock()
 
 	def start(self) -> None:
 		"""
@@ -86,15 +92,21 @@ class VideoRecorderService:
 
 	def add_frame(self, frame_data_b64: str) -> None:
 		"""
-		Decodes a base64-encoded PNG frame, resizes it, pads it to be codec-compatible,
-		and appends it to the video.
+		Keeps a base64-encoded frame (JPEG or PNG) as the newest picture. Nothing is decoded or written here: this runs
+		on the event loop for every repaint, where decoding a full-size frame each time held up everything else on it
+		(found live: reflexes went from ~2 ms to ~150 ms while a moving game was recorded). tick() decodes the newest
+		frame and writes it at the frame rate, so a still page is not squeezed into a few frames either.
 
 		Args:
-		    frame_data_b64: A base64-encoded string of the PNG frame data.
+		    frame_data_b64: A base64-encoded string of the frame's image data.
 		"""
 		if not self._is_active or not self._writer:
 			return
+		with self._lock:
+			self._pending = frame_data_b64
 
+	def _decode(self, frame_data_b64: str) -> None:
+		"""Decode a frame, resize and pad it to be codec-compatible, and keep it as the latest picture."""
 		try:
 			frame_bytes = base64.b64decode(frame_data_b64)
 
@@ -116,11 +128,28 @@ class VideoRecorderService:
 					img = new_img
 
 				# 3. Convert to numpy array for imageio
-				img_array = np.array(img)
-
-			self._writer.append_data(img_array)
+				self._latest = np.array(img.convert('RGB'))
 		except Exception as e:
 			logger.warning(f'Could not process and add video frame: {e}')
+
+	def tick(self, frames: int = 1) -> None:
+		"""Write the latest picture as the next `frames` video frames (the same one again while the page is still, or
+		while the page was too slow to send another). Safe to run in a worker thread: it decodes the newest frame
+		received, if any, first."""
+		assert frames >= 1, 'tick() writes at least one frame'
+		with self._lock:
+			if not self._is_active or not self._writer:
+				return
+			pending, self._pending = self._pending, None
+			if pending is not None:
+				self._decode(pending)
+			if self._latest is None:
+				return
+			try:
+				for _ in range(frames):
+					self._writer.append_data(self._latest)
+			except Exception as e:
+				logger.warning(f'Could not write video frame: {e}')
 
 	def stop_and_save(self) -> None:
 		"""
@@ -128,6 +157,10 @@ class VideoRecorderService:
 
 		This method should be called when the recording session is complete.
 		"""
+		with self._lock:  # an in-flight tick() finishes its frame first
+			self._close()
+
+	def _close(self) -> None:
 		if not self._is_active or not self._writer:
 			return
 

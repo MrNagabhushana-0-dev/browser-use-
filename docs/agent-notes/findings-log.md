@@ -3096,3 +3096,581 @@ passed 36/36 inside it. There were 3 stalls, the longest 1.5 s.
 2. The A/B test of sheet vs recall vs journal, with blind agents (open since Round 10).
 3. Measure colour-aware cuts on a real, rights-cleared clip with fast colour motion.
 4. A blind fine-print run where `scan` can't read the DOM text, so `find` alone is measured.
+
+## Round 56 (owner's request, then the unattended loop): reflexes, sight through the compositor, and hands-on use
+
+**Full `tests/ci` runs this round, stated plainly:**
+- **`9a3d6a1`: died part-way** (925 passed, 0 failed). A desktop-control X error exited the process; fixed in
+  `65f798c`.
+- **`65f798c`: red.** It stopped at the first failure, `test_eyes.py::test_browse_watches_each_reel_once...[/feed]`,
+  after 1,027 passed.
+  - The run overlapped a hands-on session.
+  - Alone on HEAD the test passed 18 of 19 runs; on `6eb147c`, 6 of 6. It is load-sensitive, and I have not
+    shown whether today's changes raised its failure rate. It stays open.
+- **`aec0d20`, on a quiet machine: red at one test.** 1,424 passed, 29 skipped, then 1 failed,
+  `test_screenrec.py::test_a_recording_is_finalized_into_a_playable_file`.
+  - The test files from `test_screenrec.py` on, run next on the same commit: 264 passed, 1 skipped.
+  - So all of `tests/ci` ran on `aec0d20`: 1,688 passed, 30 skipped, and that one failure, which passed on the rerun.
+  - Root cause and fix: `409482f` (below). The screen-recorder file passes 6/6 on it, three runs.
+- **Leftovers:** the crashed run had left 4 test browsers and an Xvfb running for 35 minutes. They were killed by PID
+  before the quiet run.
+
+PR #11. The owner asked for a real-time perception stream rather than screenshot tools. Each item here was found by
+driving a real browser through the Retinat MCP tools, or measured that way. Hands-on notes and recordings are in
+`docs/hands-on/2026-10-12/` and `docs/hands-on/2026-10-13/`.
+
+**Built:**
+- **Reflexes** (`e319fab`, `a2d19a5`, `67f13b1`, `a3ff316`): the agent writes rules once; the page evaluates them
+  every animation frame against what it draws and hears, and real input goes out on their edges. The agent sleeps in
+  `retinat_wait` until a rule notifies. `see.locate` and `see.changed` read a canvas, a video or one region (`in`);
+  `see.level` and `see.onset` hear the playing media. New rules start clean.
+- **Compositor sight** (`20f32d0`, `5bac6fd`): a cross-origin video without CORS is watched from the compositor at
+  6 fps. Taint is re-tested for each source, so a player switching quality stays seen.
+- **A TLS-intercepting proxy's CA is learned** from the chain the browser refused (`39d5d1f`). It is learned only if
+  the environment's bundle trusts it, it is a CA, it is not a public root, and its key verifiably signed that chain.
+- **`retinat_record`** and a recorder that keeps time (`d1f027d`). Recording no longer slows anything (`63c2d52`):
+  frames are paced, sent as JPEG and decoded off the event loop.
+- **Shutdown** (`a2d19a5`, `b669d69`): a stopped MCP server closes its browser, bridge and Tor, and a signalled one
+  exits even while its client holds stdin.
+- **What the eyes report**:
+  - the page's own text as it loads is one line (`afea835`..`de9a228`);
+  - ticking readouts are folded (`2885693`, `6eb147c`);
+  - a film is named by its page or its player dialog, not its badges (`c0817da`, `ed8387c`);
+  - `find` matches control names (`a2d19a5`);
+  - a look during a recording costs what a look costs (`2516ff5`).
+
+**Measured, not estimated:**
+- **Reflex decision to input, on the page's clock:**
+  - p50 1.6 ms, p95 2.2 ms in a canvas game (tests);
+  - p50 1.6 ms, p95 2.1 ms live on the T-Rex runner;
+  - while recording, p50 1.8 ms, p95 22 ms in the test (it was 58 / 96 ms before `63c2d52`).
+- **Region reads:** a runner whose player, ground and obstacles share one grey passes 6 obstacles with no hit; the
+  control (nobody at the keys) hits 3 or more.
+- **The Commons film through the compositor:** 24 s, 1 item, 4 correct keyframes, ~870 tokens.
+- **A look:** 640x360, ~332 tokens, with or without a recording (it was 1920x1080 PNG, ~2,724 tokens, during one).
+- **Shutdown:** a SIGTERM'd Retinat server exits in 0.2 s with all 9 of its browser processes. Before `b669d69` it
+  hung indefinitely.
+
+**The stale look, settled later that night** (`docs/hands-on/2026-10-13/notes.md`, "Night"):
+- **Two looks sent in order were stale for real.** One showed a mid-run frame after the rules saw the picture stop.
+  The other showed the dino in mid-air at 49, twice, 30 s apart. Three causes, each with a test that failed first:
+  - the page view starved when a recording took or released the shared screencast (`ecac0a8`);
+  - the recorder lost the repaint that ends an animation; a quiet recording is now topped up with one capture
+    (`5a16efe`);
+  - ~~with rules reading the canvas every frame, the stream's newest frame still showed the animation mid-way~~.
+    **Withdrawn the next morning.** That test's stop rule fired mid-animation: a hue drifting 3.3 degrees a frame
+    never crosses `changed()`'s threshold, so "still for 45 frames" came 0.75 s into a 2 s animation. With a bar
+    sweeping the canvas the test passes 6 of 6 on `5a16efe`. `cfa7e96` (a look captures the page now) stays as a
+    design choice, not a fix.
+- **The other "stale" looks were mine:** sent in the same batch as `retinat_wait`, they ran at the game's start.
+  That covers the start-screen sightings, the "fourth time" and the "still stale after the fix" runs. An hour of
+  capture variants chasing them was dropped unmerged.
+- **The tools now say so:** a seeing tool asked while a `retinat_wait` is pending adds "asked while a retinat_wait
+  was still waiting". The wait's description says to look after it returns.
+- **Live, in strict order** (look, record, rules, wait, look): GAME OVER, and the recording ends on it.
+- The mid-air "freeze" was a stale look: the game had crashed normally.
+- **Full `tests/ci` on `4f31b66`, quiet machine: 1,694 passed, 31 skipped, 0 failed** (36m26s). The feed test
+  passed in it. Alone under four busy loops it passed 8 of 8, so its earlier failures (about 1 in 20) remain
+  unexplained; synthetic CPU load does not reproduce them.
+
+**Mistakes of mine worth not repeating:**
+- `pkill -f` patterns matched my own shell.
+- A test page that changed at 600 ms raced a look that waits 300 ms to settle, and I chased that race as a
+  browser bug for several runs. Give a page's change a margin longer than the look takes.
+- A reflex's p50 over two actions, one of them sent during page load, is noise, not a measurement.
+- A look sent in the same batch as `retinat_wait` runs at once. Check the call log's order before calling a picture
+  stale: I chased the start screen as a bug for an hour when it was simply the screen.
+
+**Later in the round:**
+- **Dissolves and fades are shot changes; a pan is not** (`fc41722`), done twin-comparison style:
+  - a run of small changes whose ends differ like a cut, every frame between them a blend of the two;
+  - rejected when the first frame, shifted up to 3 cells, matches the last (camera motion). At 16x16 a small pan's
+    frames are nearly blends too, and the synthetic pan test failed until that check was added;
+  - a fade through black is split where it is darkest, and a fast fade stepping a cut's worth per frame stays one
+    change.
+- **`find`'s crop of a large match is shrunk to fit 720x300** (`7844340`): ~665 tokens for an 800x450 player before.
+- **`see.track`** (`7844340`): `locate` plus velocity in px/s, so rules need not guess a game's speed.
+- **What a block says is said once** (`aec0d20`): Wikipedia's Appearance panel, built by script after load, was
+  reported once per nesting level. Changed blocks are now reported outermost first.
+- **A screen recording ended early is not empty** (`409482f`):
+  - ffmpeg probes x11grab for ~2 s, keeping what it reads, before it sets up its output. Its first `-progress`
+    report says frame=0 at 2.06 s, then frame=25 at 2.66 s.
+  - A `q` before that writes nothing. The end of a recording now waits for the first report.
+  - The new test fails every time on the old code, with the full run's exact error.
+  - My first attempt (`680e33c`) waited at the start and made every recording ~2 s longer. It was replaced.
+- **A desktop-control X error is no longer fatal** (`65f798c`). The full run on `9a3d6a1` died part-way, after 925
+  passed and 0 failed: a window closed between listing and reading it, Xlib answered BadWindow, and its default
+  error handler exited the process. The MCP server would have died the same way. A process-wide handler now makes
+  such a read fail, as its callers expect. Reproduced in a child process first.
+
+**Research, this round** (sources read through search summaries, not full papers):
+- [VideoGameBench](https://arxiv.org/pdf/2505.18134) (2025): a VLM's response latency is the main reason it fails
+  real-time games. Its authors added a paused "Lite" mode to separate reasoning from reaction.
+- [GameSense](https://preview.aclanthology.org/ingestion-acl-25/2025.acl-long.643.pdf) (ACL 2025): the VLM should
+  not drive reactive actions directly. It writes task-specific modules that do. That is the shape of the reflex rules
+  here.
+- [The Latent Bridge](https://www.emergentmind.com/papers/2606.24470) (2026): about 1.5 s per reasoning VLM step
+  against a 15 Hz control loop.
+- [Reflex](https://huggingface.co/papers/2607.14695) (robotics, 2026): reports 82-110 ms reaction latencies, per a
+  blog summary. The reflexes here decide and deliver input in ~2 ms because the decision is a rule, not a model.
+- **Fades.** [TransNet V2](https://arxiv.org/pdf/2008.04838) is still the reference shot detector. A light,
+  model-free option for gradual transitions is twin-comparison: accumulate frame differences over a window, and
+  call a transition when the sum crosses the cut threshold while no single frame does. That fits the 16x16 luma
+  frames the retina already sends.
+
+**Checked live after the fixes** (`docs/hands-on/2026-10-13/`):
+- **The Commons film:** named "Big Buck Bunny 4K.webm", 1920x1080, 10:34.6. Its title card is its own shot
+  (labelled `cut->`: at 6 fps the dissolve is a few large steps). 5 correct keyframes, ~767 tokens for 30 s.
+- **`find "play video"` on the player:** ~231 tokens (was ~665).
+
+**Rules that read what the page cannot** (`09d103a`, notes in `docs/hands-on/2026-10-13/notes.md`):
+- **The problem:** a reflex reading of a cross-origin video without CORS (Commons) came back empty, so rules on it
+  never fired. A frame from another site (an itch.io game) was out of reach of every reading.
+- **The change:** the compositor's picture of the viewport is fed to the rules, a 240 px PNG about 20 times a second,
+  once a reading asks for it:
+  - a tainted source is read on screen within its box, with no change to the rule;
+  - `{from: 'screen'}` reads everything, frames included;
+  - `changed()` and `track()` go by the picture's own sequence and time.
+- **Measured in tests, six runs:**
+  - on a cross-origin clip, colour and cut fired at media time 1.99-2.04 s (truth 2.0);
+  - a square drawn in a cross-origin frame was clicked 16-51 ms after it was drawn;
+  - both tests fail on the previous code, with no events at all.
+- **Live on the Commons film:** the rule fired (7.2, 9.4, 9.9 s of the film) where before it could not.
+  - Those times were not checked against the film's cuts, and are probably camera motion over my threshold.
+  - A picture took 153 ms live against ~50 ms in tests. Capture time follows the page's rendering load (software
+    compositing): ~50 ms for a simple clip, ~80 ms for a busy 720p pattern, ~150 ms for the 1080p film.
+  - It is not contention with the eyes' compositor loop (~78 ms with and without it).
+
+**The screen as the compositor draws it** (`a30f837`):
+- **Measured first:** on a busy 1080p cross-origin video, forced captures came at ~22 a second, 36 ms each. A
+  screencast came at the video's 30 fps, each frame 1 ms old on arrival (p95 2 ms).
+- **Now:** when the session launched the browser, the rules get a screencast on a DevTools connection of their own.
+  It shares no event slot with the recorder or the eyes. Otherwise the capture loop stays.
+- **What the screencast got wrong, found by running the tests many times:**
+  - **Broken frames.** About half a second into a video's playback, a frame sometimes lacked the video (its box
+    near-black, the page drawn), or was black edge to edge, white page and all. The rules saw a cut that never
+    happened.
+  - **Each fix in turn, counted over plays:**
+
+    | Check | False cuts |
+    |---|---|
+    | none | 3 in 10 |
+    | a 250 ms warm-up | 3 in 10 (the glitch is tied to the video's playback, not the stream's start) |
+    | pure-black frames only | 0 in 20 with the video-only clip, but 4 in 30 with the test's clip (near-black frames slip through) |
+    | screen-wide share changed | 4 in 30 (the video filled 11% of the screen) |
+    | a region replaced almost entirely (9 of 12 cells of any 4x3 block), confirmed with a capture | **0 in 30** |
+  - **A still page sends nothing,** and the repaint ending an animation can be dropped: a stream quiet for 0.3 s is
+    topped up with one capture.
+- **Also fixed on the way:**
+  - the feed outlived its browser and failed every 0.25 s for the rest of the process (test);
+  - taint is now sticky per element;
+  - the scratch canvas a tainted draw spoils is replaced.
+- **Measured, six runs:**
+  - pictures are 9-11 ms old when fed (was ~50);
+  - a square in a cross-origin frame was clicked 34-39 ms after it was drawn (was 16-51);
+  - a cross-origin cut was caught at 2.045-2.072 s (truth 2.0; the confirming capture costs ~50 ms).
+- **Not explained:** the region runner test failed 2 of ~9 times in combined runs in a freshly restarted container,
+  and never alone. CPU throttling did not reproduce it (the page held ~52 fps even at 10x), so the test was left
+  unchanged.
+- **The stale look again:** `test_a_look_after_a_recorded_game_shows_how_it_ended` failed in 4 of 5 combined runs
+  after the container restarted.
+  - It fails the same way on `4f31b66` and `38380ab`, so it is not this work.
+  - The look said "captured from the compositor at this moment", so the capture itself returned a frame from the
+    middle of the animation, a second after it ended.
+  - With the page now reporting its own last frame time in the failure message, it passed 5 runs. Then it failed in
+    the full run on `b840ca2`, and the message settled it: the page drew its last frame at 2013 ms, and the look came
+    before. The test's stop rule ("unchanged for 45 frames") fired mid-animation, because a hue drifting 3.3 degrees
+    a frame never crosses `changed()`'s threshold. The look was right. The test passed only when a slow machine
+    delayed the look past the end. Not the container, and not the library.
+  - Fixed in the test: a bar sweeps the canvas while it animates. 5 of 5 on HEAD, and **6 of 6 on `5a16efe`**. So
+    the "third cause" of the stale look (a stream read by rules going stale) was this test, and is withdrawn.
+
+**Overlapping captures handed back each other's picture** (`b840ca2`, found live on Commons):
+- **What was seen live:** after rules had read the film on screen, a look's keyframe of the film was the whole page,
+  shrunk and tiled, with extra "cuts".
+- **Reproduced** on a white page with a cross-origin red/blue clip, counting the eyes' compositor pictures that showed
+  the page:
+
+  | Rules | Pictures showing the page |
+  |---|---|
+  | off | 0 of 29 |
+  | capture-loop feed | 24 of 30, 20 of 29 |
+  | screencast feed | 4-7 of ~28 |
+  | one shared lock around both capture sites | 0 of 29, 0 of 30 |
+
+  Two plain captures from one session at once did not show it (0 of 20 pairs). So it needs the eyes' capture loop
+  and another capturer together: a test of the real scene was needed.
+- **Fix:** every `Page.captureScreenshot` in the library goes through `browser_use.browser.capture.capture_screenshot`,
+  one lock per CDP client. That covers 11 call sites: the eyes, reflexes, recorder, screenshot watchdog, session,
+  actor and video watcher.
+- **Test:** the eyes watch a cross-origin film while a rule reads it on screen. It failed 2 of 2 before and passes
+  3 of 3.
+- **Live, on the screencast feed:** the Commons film's pictures reached the rules 25 ms old at the median, against
+  153 ms with captures.
+
+**Full `tests/ci` on `b840ca2`: red, 1 failed, 1,697 passed, 31 skipped** (37m43s). The one failure was
+`test_a_look_after_a_recorded_game_shows_how_it_ended`: its own stop rule, fixed in the test (above).
+
+**Full `tests/ci` on `b5069f5`: 1,699 passed, 30 skipped, 0 failed** (36m05s, quiet machine).
+
+**Checked live on Commons after the lock:**
+- A rule read the film while the eyes watched it for 20 s. All 7 keyframes were the film, and the shot list was sane.
+- The title-to-clouds change read `fade->`, not checked against the film's edit list.
+- **Bug fixed** (test first): a watch begun after the film was found unreadable forgot that it was. The compositor
+  line was missing, and its sound read "none captured (no audio track)" instead of unreadable. A percept now takes
+  taint from all the retina said, not only since the watch began.
+
+**Full `tests/ci` on `e138b57`: 1,699 passed, 31 skipped, 0 failed** (37m19s, quiet machine).
+
+**Live on itch.io (a game in a frame from `itch.zone`):**
+- A rule reading the game's frame on screen fired when the game drew its title screen.
+- Pictures were 58-138 ms old against ~10 ms in tests. The second visit was on the screencast with no confirming
+  captures. Chrome's renderer was at 240% CPU drawing the WebGL game without a GPU, Python at 10%.
+- The reflexes' status now reports `screen_source` and `screen_confirmed`, so a slow page can be told from a slow path
+  (test first).
+
+**Full `tests/ci` on `fb23f7c`: red, 1 failed, 1,698 passed, 31 skipped** (36m02s). The failure:
+`test_play_arena.py::test_a_game_behind_a_title_screen_gets_started_and_played` ("the title screen was never
+dismissed"). It passed in the three full runs before it today, and 3 of 3 alone after it.
+- The arena uses none of what changed today: no captures, reflexes or retina taint.
+- It has failed in full runs before, in Round 13, from background work leaked by earlier tests. Today's new background
+  work, the screen feed, only runs in files after this one.
+- Not reproduced since: 3 of 3 alone, and 2 of 2 runs of the eyes, eyesbench and arena files together (81/81 each).
+  Cause unknown; it stays an open intermittent next to the feed and region-runner tests.
+
+**The Guardian's front page:** an ad frame's own retina set the page's URL ("no video playing on
+assets.guim.co.uk/commercial/..."). With site isolation off, the new-document script reaches other sites' frames.
+The retina now runs in the top frame only (test first; eyes 69/69; checked live).
+- **Seen in the scan, not fixed:** frames from mid-scroll are labelled with the end position. The screencast's own
+  scroll offset would fix that. A sticky banner covering ~40% of every frame goes unmentioned.
+
+**Full `tests/ci` on `13e8b2b`: 1,700 passed, 31 skipped, 0 failed** (35m54s; the play-arena test passed).
+
+**Scan labels fixed** (test first). On a page of six solid bands, 18 of 50 scan frames showed another band than
+their label said. Each live frame now keeps Chrome's own `scrollOffsetY`, and the scan labels by it: 0 wrong.
+Eyes, live view, vision, arena and Retinat files: 129 passed, 1 failed (the feed test, the known intermittent; it
+then passed 3 of 3 alone).
+
+**Full `tests/ci` on `3bd1501`: 1,702 passed, 30 skipped, 0 failed** (36m22s).
+
+**The scan names what covers the screen** (test first; live on the Guardian: "the bottom 37% ("...Who guards the
+Guardian?...")").
+- A pixel-based detector (rows that stay the same across frames scrolled apart) also flagged uniform page areas, so
+  it was dropped.
+- The scan now asks the page for fixed or sticky elements across most of the screen's width at each step. Bands seen
+  at half the steps or more are reported, with their text.
+
+**Full `tests/ci` on `1fe0904`: 1,702 passed, 31 skipped, 0 failed** (36m40s).
+
+**The eyes' cuts scored against two whole films** (details and the table: `docs/hands-on/2026-10-13/notes.md`).
+The Wikimedia API and upload.wikimedia.org still answered 429. Each tried once.
+- **The reference.** Blender's mirror has the same edit (634.6 s), CC BY 3.0, plus Tears of Steel (live action) as a
+  second check. Edit lists came from ffmpeg's scene scores, with every candidate checked by eye: the Bunny has 125
+  cuts and 5 fades; Steel has 135 cuts.
+- **Before.** At 6 samples a second, area-averaged (compositor sight), F1 was 0.854 and 0.850, with 34 and 29 false
+  cuts a film: a bird leaving a still shot, a head passing the lens, a whip pan. A cut inside a run of small motion
+  was reported as a fade at the run's middle. Clean cuts right after motion were missed, because the threshold
+  (median + 6 MADs of the last 20 differences) had risen with the motion.
+- **After** (`sight.py`, test first; the Bunny's grids and edit list are committed as a 490 KB test asset). A cut must
+  be a spike, twice the change just before and after it, and must reach 45% of the cells. The rising threshold is
+  gone. No one step may carry more than 60% of a fade. F1 is 0.966 and 0.926 at 6/s, with 2.2 and 2.6 false cuts.
+  Cuts into fast action are missed more: Steel at 10/s misses 13.2 of 135, up from 7.2.
+- **Chosen how.** The spike ratio was chosen on the Bunny alone. The other two choices were judged on both films.
+  Tried and dropped:
+  - a two-sample cut;
+  - splitting fades through a colour (found the title, but more false changes);
+  - a histogram test;
+  - shift compensation.
+- **Live after the change:** 3 of 3 real cuts, none at the bird. The title fade was not found.
+- **Full `tests/ci` on `391c814`: 1,704 passed, 30 skipped, 0 failed** (37m02s).
+- **`until=bored` on films, fixed** (test first). In a simulation over both films (35 s watches every 5 s, sound
+  unreadable), a 2 s quiet window ended 86 of 120 and 33 of 109 watches while more shots were coming, losing ~6
+  shots each; 8 s ended none early. An item longer than any watch (90 s) now gets 8 s. Live: the default watch ran
+  its full 35 s and found the title fade and all three cuts.
+- **"One moving object" across cuts, fixed** (test first). On the film the bouncing-object tracker spliced six
+  shots into one object that "reached the bottom 14 times". It now speaks only for one shot.
+  `6852df3`'s message wrongly says the live watch showed no motion line: that watch ran before this fix and did
+  show one. Checked again after it: no motion line, all three cuts, the full 35 s.
+- **Full `tests/ci` on `d622168`: 1,706 passed, 30 skipped, 0 failed** (36m43s).
+- **Seen, not fixed:**
+  - the header said "watched 78.8s" for a 30 s watch (`watched_s` spans wall time across watches), and "on screen"
+    was stale;
+  - two recording frames showed compositor sight's clipped picture instead of the page.
+
+**video.blender.org (PeerTube, MSE):** its films fail to play in this Chromium build, which has no H.264
+(MEDIA_ERR_SRC_NOT_SUPPORTED; "DEMUXER_ERROR_NO_SUPPORTED_STREAMS"). Two fixes followed, each test first and live.
+- **A video that failed to load is named.** The retina reports `video.error`, and look and watch give its name and
+  the browser's message. They said "(no video was on screen)".
+- **Click coordinates.** A look image is ~640 px wide; the viewport was 1905 px. The tools said clicks take "CSS px,
+  as on the look images", and I missed a link by trusting that. A look now gives the viewport and the factor
+  ("to click, multiply its pixels by 2.98"). The tool descriptions, AI.md, the skill and the agent are corrected.
+  Live: a click at the image position times 2.98 landed on the link.
+
+**Full `tests/ci` on `1d1feea`: 1,709 passed, 30 skipped, 0 failed** (38m07s).
+
+**Checked, and the earlier model was wrong:** the retina's `drawImage` with low smoothing averages in Chrome (1-px
+stripes give mean 126, spread 0). The readable path matches the area rows (F1 0.970 and 0.941 at 10/s), not the
+point rows; a test now keeps it so.
+
+**Times and summaries, from two watches of the Commons film** (each test first, then checked live):
+- **Compositor pictures carry the time the film was at.** They took the page's once-a-second report of media time,
+  run forward by the clock. That runs ahead while a stream stalls ("keyframes at 2.2s 3.9s 3.5s 4.8s", the 3.5 s one
+  showing a later shot). The video's `currentTime` is now read on both sides of each capture.
+- **"watched" counts what was watched.** It counted the hold between two watches ("27.4s" for 10 s).
+- **What an earlier percept saw is said to be there,** not "unknown".
+- **"on screen" is read when the percept is built,** not when the video was found.
+- **Full `tests/ci` on `4f431c4`: 1,711 passed, 30 skipped, 0 failed** (36m55s; the reflex speed test passed).
+
+**Clipped captures showed in the screencast** (test first; live). A `Page.captureScreenshot` with a `clip`, at any
+scale and with any `captureBeyondViewport`, sends its region out as screencast frames: 22-40 of 52-97 frames in the
+test, 15-18% of two Commons recordings. The recorder, the reflexes' screen feed and scans read the screencast.
+`capture_screenshot` now takes a clip inside the viewport at scale 1 or less as a viewport capture cropped in Python.
+Live: 0 of 108 recording frames.
+
+**Full `tests/ci` on `859df30`: 1,713 passed, 30 skipped, 0 failed** (37m14s; a first run was cut short by a
+container restart).
+
+**A video of no known length** (a live stream reports Infinity) gets the film's 8 s before "bored" (test first).
+That is judged from the two films, not measured on live content: YouTube's ISS stream answered this network with
+Google's CAPTCHA page, and CAPTCHAs are out of bounds.
+
+**The reflexes' "broken frames" were their own clipped captures** showing in their screencast. With the check off
+and captures no longer clipping, the screen tests passed 20 runs of 20 (they had failed 3-4 in 10). The check, and
+its capture on every real cut, are removed: a cut is caught 19-27 ms after it happens in the test (45-72 ms before).
+Live on Commons, a cut rule fired at the film's three real cuts (16.43/20.31/27.65 s against 16.30/20.17/27.47 s)
+and nowhere else; this morning it had also fired on the opening.
+**Full `tests/ci` on `c1c0e39`: 1,713 passed, 30 skipped, 0 failed** (37m10s).
+**Full `tests/ci` on `9b90786`: 1,713 passed, 30 skipped, 0 failed** (37m23s).
+
+**Compositor sight takes its pictures from the screencast** (test first; live). The video's box is cut from the
+newest frame of a screencast on its own DevTools connection, labelled with the video's `currentTime` less the frame's
+age; captures remain the fallback. The test's 3 s watch went from 18 captures to none. Live on Commons: the title fade
+and all three cuts found, and the recording was the page in 227 of 227 frames.
+
+**Full `tests/ci` on `c09d801`: 1,712 passed, 30 skipped, 2 failed** (36m57s). Both in `test_eyes.py`:
+- **The stall test, which this change had added, failed: labels went 1.26 s then 1.20 s.** "The video's
+  `currentTime` less the frame's age" supposes the film's clock ran for all of that age; in a stall it stood still,
+  so a frame that arrived late was labelled before a time the film had already reached. With every core busy it
+  failed 3 of 3. The loop now reads the film's clock every tick and labels each picture by interpolating those
+  readings at the moment Chrome stamped the frame (`media_time_at`, with a test of its own). Under the same load: 3 of 3
+  passed. (The first version sliced a `deque` and broke compositor sight altogether; the cross-origin tests caught
+  it before it was committed.)
+- **The feed test:** one flick carried the feed past the next reel and three flicks back did not land. That is the
+  known intermittent. With every core busy: 1 failure in 30 runs (2 overshoots, one recovered on the harder second
+  flick). Not fixed; its numbers are below.
+
+**Full `tests/ci` on `932e83f` (the label fix): 1,715 passed, 30 skipped, 0 failed** (36m41s).
+
+**The live check of the label fix and a cut rule's lag (hands-on, then test first).**
+- **Labels:** live on Commons, the title fade and the three cuts were within 0.1 s of the edit list, and every label
+  went forward.
+- **Lag:** a cut rule said the cuts were 0.10-0.12 s late. Measured with `requestVideoFrameCallback` on a local
+  1080p stand-in:
+  - the video's clock runs 17-29 ms ahead of the screen;
+  - firing came 27-53 ms after the cut's frame reached the screen, at the median, with a tail when the page's main
+    thread is busy at the cut;
+  - not the cause: the screencast's frame rate, the picture format and size, or `callFunctionOn` (measured, no gain,
+    reverted).
+- **Fixed:** an event gives the frame the rule saw. Each picture carries its draw time, and frames are keyed by their
+  presentation time.
+  - On the 1080p film: 30 cuts of 30 on their own frame (they were 50-120 ms late).
+  - Live on Commons: 0-50 ms from the edit list.
+  - The firing itself is no faster; what the event reports is now true.
+
+**Full `tests/ci` on `ca2fcb2`: 1,716 passed, 30 skipped, 0 failed** (36m29s).
+
+**A scan's sheet left strips of the page out** (hands-on on BBC News, then test first).
+- **Before:** a 4.6-screen page got frames 0.0, 0.1, 1.5, 1.9, 2.2 and 3.6 screens down, which "cover 60%". Frames
+  were chosen as for a film, and white pages look alike at 16x16.
+- **Now:** frames are chosen for the page height they add, with frames left over going to what changed on its own.
+  - Test: 64% -> at least 95%, plus a guard test for the leftover rule.
+  - Live: "showing 98% of the page height".
+
+**Full `tests/ci` on `3492b95`: 1,718 passed, 30 skipped, 0 failed** (36m34s).
+
+**A page drawing a frame a second** (hands-on on a three.js example; WebGL drawn in software here; test first).
+- **The scan never came back:** it timed out at 60 s, even for one screen.
+  - The pointer's glide waited a frame per step (17.7 s at 3 frames a second, 82.8 s at 1). It now keeps to its
+    planned time, skipping ahead along the same path.
+  - The wheel waited a frame per notch. What is left of a scroll now goes in one turn, and a mouse move after it makes
+    sure the page has taken it in.
+  - A scan now reads the page four times instead of eight.
+  - Local stand-in: 23.7 -> 5.0 s at 3 frames a second, over 90 -> 15.8 s at 1. Live: 24.7 s, measured before the
+    reads were combined.
+- **Its recordings were 20 times too short:** ten minutes made 30 s. The recorder's clock wrote one frame per turn,
+  and each turn waited on the page. It now writes every frame owed. Test: 16-17 -> 40-65 frames for 5 s at 10 fps.
+  My first version left the old clock step in and halved the rate; the existing still-page test caught it.
+
+**Full `tests/ci` on `89df927`: first run red, 1 failed, 1,720 passed, 30 skipped** (38m18s). The failure was the
+play-arena title screen ("the title screen was never dismissed"), the same message as on `fb23f7c`, before this change.
+The arena clicks through the changed glide, so it was checked: 5 of 5 alone and 5 of 5 with every core busy.
+**Second run on the same commit: 1,721 passed, 30 skipped, 0 failed** (38m02s). It stays an open intermittent.
+
+**Live with the slow-page fixes, and `retinat_scroll`.**
+- **three.js:** a scan took 14.0 s (it had timed out at 60 s). A click took 12.2 s, about five input round trips at
+  the page's ~2 s, which is its frame rate's limit. The recording ran 59.2 s for 68 s of session.
+- **Python docs:** find said its match was 13 screens down, and no Retinat tool scrolled a page. `retinat_scroll`
+  (real wheel; `screens`, or `to` a text with `nth`) is added, test first through the MCP handler on a real browser.
+  Not run live: this session's MCP client lists tools only at its start.
+
+**Full `tests/ci` on `58dad8e`: 1,722 passed, 30 skipped, 0 failed** (37m04s).
+
+**Text that is only pixels** (hands-on on OpenStreetMap). `retinat_find "Westminster"` said "not found": map
+labels are drawn into image tiles.
+- **Added:** find reads the screen with OCR (the `ocr` extra: RapidOCR, PP-OCR on onnxruntime) when the page's text
+  has no match.
+- **Tuned on a live screenshot:**
+  - box threshold 0.3: 11 of 12 district names;
+  - lines too short for the query skipped: up to ~2x faster;
+  - letters and digits only in matching;
+  - a match missing up to 30% at one end counts, flagged as read in part.
+- **Live:** "Southwark" in 4.8 s, "City of Westminster" in 7.3 s.
+- **Caught on the way:** tuning on h264 frames of a recording gave different reads from a live screenshot.
+
+**Full `tests/ci` on `76ace3b`: 1,724 passed, 30 skipped, 0 failed** (38m32s).
+
+**The site explorer took the network's failures for the site's** (hands-on on gnu.org and info.cern.ch; tests first).
+- **gnu.org:** a flaky egress proxy's 502 ("upstream request failed") was reported as "[high] returns 502". The run
+  stopped at the start page: discovery took its links from the error page. Now a gateway error or no answer is tried
+  once more 2 s later, for the first load, every page and every link check. A page that then loads is "failed once,
+  then loaded" (medium); a second failure says it was tried twice and may be the network.
+- **info.cern.ch:** its own http:// links were taken for another site, and checked by a fetch the browser blocks as
+  mixed content ("[high] returns no response" for a page that loads). The same host on a default port is now the same
+  site, and an http link from an https page is checked at its https address, with one low finding for the plain-http
+  links. Live: 2 pages, and one real 404, confirmed with curl.
+
+**Full `tests/ci` on `fb6530d`: 1,726 passed, 30 skipped, 0 failed** (37m22s).
+
+**Wikipedia's search box** (hands-on; tests first).
+- **Failed requests now show in changes.** Changes said "no changes" while the suggestion request had been refused
+  (429), which only the request log showed. A failed fetch or XHR is now a change (once each; images and
+  self-cancelled requests left out), journaled when changes is asked.
+- **Rows rewritten in place are now reported.** The suggestions for "Ada Lovelace" replaced those for "A" in the same
+  rows and were never reported: 8 texts a second, two per row. Changed text is now said as its row, and the budget is
+  per batch of changes.
+- **Live:** the 429s are now said. The rows fix was not seen live, since every suggestion request was refused by then.
+
+**Full `tests/ci` on `8197f1a`: 1,728 passed, 30 skipped, 0 failed** (38m22s).
+
+**Text inside web components** (hands-on on MDN; tests first).
+- **Suggestions inside a shadow root were never reported.** MDN's search suggestions live inside one, and the text
+  watcher observed only the document. Open shadow roots are now found on the retina's heartbeat and watched. Live:
+  every suggestion is reported as its row, which also shows the rewritten-rows fix live.
+- **find:** a skip link parked above the page now "cannot be scrolled to", not "scroll up".
+- **changes:** requests the browser side blocked (the profile's ad blocker) are left out; page-policy blocks are told.
+- **One unnamed intermittent:** one failure in a run of the eyes and Retinat files, log not kept; two reruns were
+  115/115.
+
+**Ideas from the owner's links** (read through their READMEs; cloning untrusted code was refused here):
+- **morluto/rea (MIT):** an MCP server for agents to reverse-engineer software, websites included. Two of its ideas
+  fit the eyes: export what the eyes saw on the network as a HAR file, and trace a UI element back to the script
+  module that drew it through the site's source maps.
+- **HeyPuter/everything (MIT):** open rebuilds of office, creative and engineering web apps with hosted demos. Good
+  canvas-heavy targets for hands-on use.
+- **ImHex:** a GPL hex editor for binaries; it does not fit a browser's eyes, and GPL code cannot come into this
+  MIT project.
+- **Awesome-Hacking:** lists for security work; nothing beyond the REA ideas fits here.
+
+**`retinat_scroll` live** (after a restart reconnected the MCP client): on the Python docs, `to: "wait_for"` scrolled 13
+screens in one call (13 PageDown calls before), `nth: 4` reached the fourth match, and `screens: -2` moved 2.0 screens.
+
+**Full `tests/ci` on `bfb2530`: first run red, 1 failed, 1,730 passed, 30 skipped** (39m54s). The failure was the
+asked-late beeps test: "heard 5 distinct sounds", with onsets at 1.5 and 1.6 s, one beep counted twice. That is the
+beep-count intermittent of Round 50 (an audio dropout inside a sound under load); this dropout was likely longer
+than the 1-2 hops that fix covers. It passed 5 of 5 alone, and nothing this round touched audio.
+**Second run on the same commit: 1,731 passed, 30 skipped, 0 failed** (39m08s). The beep-count intermittent stays open.
+(A first full run on `0386900` was cut at 48%, with no failures, by a container restart.)
+
+**Games, at the owner's ask** (Poki: Subway Surfers, Temple Run 2; details and clips in
+`docs/hands-on/2026-10-14/notes.md`).
+
+Measured on this GPU-less machine (WebGL drawn on the CPU):
+
+| Game, viewport | Frames a second | Age of the rules' pictures (p50) |
+|---|---|---|
+| Subway Surfers, 1905x1080 | 3 | 600 ms |
+| Subway Surfers, 960x540 | 8 | 136 ms (270-330 ms while recording) |
+| Temple Run 2, 960x540 | ~16 | 91 ms |
+
+Subway Surfers:
+- With no input, the run scored 42-43.
+- Pixel rules (ground colour per lane, near and far; red in the runner's column for an overhead barrier) dodged
+  oncoming trains and went through the tutorial's jump and roll steps. That is 206 with rules alone.
+- Best score 323. That run included a stretch with no rules; a hand-done tutorial run reached 318.
+- The tutorial repeats every run and rewinds a step done wrong. Its Left/Right step needs a rule that reads the
+  prompt's arrow (not done).
+
+Temple Run 2: the tutorial lights the key it wants on an on-screen pad. The rule for that missed live, which found
+bug 1 below. No score yet. A car racing game was not started.
+
+Fixed, test first, each found by the games:
+1. **Looks on a page with a scrollbar were ~1% out (~15 px at the far edge).** The crop in `browser/capture.py` took
+   the device scale from a capture that includes the scrollbar. Now it uses `visualViewport` over `cssVisualViewport`.
+2. **Reflex screen pictures now say the CSS size they span.** Screencast frames include the scrollbar; captures do not.
+3. **No tool offers a wait past what a client waits for a call (60 s).** Wait 50 s; watch, browse and eyes 45 s.
+4. **`retinat_requests` and the console say what a limit left out**, and requests filter by URL `pattern`.
+
+**Unexplained:** Retinat's Chrome died once at 08:34 while rendering the game at 1905x1080. There was no log, and it
+recovered on its own.
+
+**Full `tests/ci` on `a5e10a0`: 1,737 passed, 30 skipped, 0 failed** (38m50s), first run.
+
+**09:55 round, Temple Run 2.**
+- Looks line up live after the scrollbar fix.
+- The tutorial pad's lit key is the enlarged one, read by its arrow's yellow, the largest count by 2x.
+- **`screen_width` for a rule set** (built, test first): measured 240 px → 72-117 ms pictures, 480 → 160 ms,
+  960 → 510 ms.
+- At 480 the rules took the runner over the jump and the zipline, and on the third pass past a gap and a broken
+  bridge.
+- No score read yet.
+
+**Full `tests/ci` on `aa7ce85`: 1,737 passed, 31 skipped, 0 failed** (38m56s), first run. The new reflex test
+passed. The extra skip is the default-profile test, which skips by design while a running Chrome (Retinat's, on
+about:blank) holds that profile.
+
+**10:51 round, a car racing game (MR Racer on Poki, ~8 fps).**
+- Throttle only, the run scored 159 (time ran out) and then 40 (a crash into a pickup, which fails the challenge).
+- Under the game's red tint no fixed colour separated road from traffic.
+- **Built: `see.mean({from, in})`** (test first), a region's average colour.
+- Offline, the lane-vs-lane mean rose from ~22 to ~35 as the pickup closed: too weak to steer on yet.
+- The reflex speed test failed once in the affected-files run while the racer was still rendering in Retinat's
+  browser (p95 515 ms). With the game parked it passed 3 of 3.
+
+**Full `tests/ci` on `077c38d`: 1,738 passed, 31 skipped, 0 failed** (39m07s), first run.
+
+**11:42 round, MR Racer Endless.**
+- Offline at full resolution, dark pixels in the lane ahead clearly precede a crash by ~3 s.
+- Live at 480 px the rule crashed at 0.22 km, score 71. Its boxes were above the horizon: the default camera leaves
+  a 24 px band of road between the horizon and the car's roof.
+- The game's C camera doubles that band. No library change this round.
+
+**Next, in order:**
+1. **Games, continued:**
+   - Temple Run 2: press as the key lights, not after it (the gap after the zipline); turns at corners; read the
+     score;
+   - MR Racer: the C camera (~48 px of road ahead), boxes inside the road band (y ~100-148), dark-pixel count per lane
+     at 480 px;
+   - a rule for Subway Surfers' Left/Right tutorial step (read the prompt's arrow), then a run with rules only.
+2. **A screen feed of only what the rules read.** Crops of their `in:` regions at full resolution, next to the 240 px
+   overview, instead of a whole wider picture (480 px costs 160 ms a picture, 960 px 510 ms).
+3. **An overall deadline for scan, browse and explore** under the client's 60 s: return what was done and how to go on.
+4. **From the owner's links:**
+   - a HAR export of what the eyes saw on the network (`retinat_requests`);
+   - hands-on with the Puter app demos (canvas-heavy web apps).
+5. **The rest of a cut rule's latency:** 27-53 ms from screen to firing, with a tail to ~130+ ms when the page is busy.
+   Look at feeding pictures off the main thread (a worker, or a smaller picture of only the box a rule reads).
+6. **Cuts into or out of fast action** (Steel at 10/s misses 13 of 135).
+7. **Compositor sight at 10 fps instead of 6.** Now that it costs no capture, the offline gain (F1 0.966 -> 0.970 on
+   the Bunny, 0.926 -> 0.941 on Steel) is nearly free; measure the screencast's CPU first.
+8. **A readable film live, against its edit list.** PeerTube needs H.264. Find a public, open-licence, same-origin
+   or CORS WebM/VP9 source.
+9. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
+10. **Intermittents to watch in full runs:**
+   - the beep-count test (a dropout longer than the 1-2 hops of the Round 50 fix, most likely);
+   - the play-arena title screen;
+   - the feed test;
+   - the region-runner test;
+   - the reflex speed test.
+11. **Carried over:**
+    - confine the AI's page script to the page's own world (Round 54);
+    - the A/B test of sheet vs recall vs journal with blind agents (Round 10).

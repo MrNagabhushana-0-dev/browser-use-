@@ -37,11 +37,20 @@ from browser_use.eyes.retina import FrameSample
 # Mean absolute luma difference (0-255) between consecutive samples. A hard cut between
 # unrelated shots scores 25-90; camera motion and moving subjects score 2-15.
 CUT_FLOOR = 16.0
-# ...and must also stand out from the recent run of differences by this many MADs, so a
-# shaky handheld clip that differs by 14 every frame does not cut on every frame.
-CUT_MADS = 6.0
-# Differences considered "recent" for that comparison, in samples.
-CUT_WINDOW = 20
+# ...and a cut is a spike: the change into its first frame is at least this many times the change just before it and
+# the one just after. Motion changes the picture for several samples running (a head passing the lens, a whip pan, a
+# shaky handheld shot); a cut changes it once. It replaced a threshold that rose with the recent run of differences,
+# which let motion through as cuts and then missed clean cuts after it.
+CUT_SPIKE = 2.0
+# ...and a cut changes most of the picture: at least this share of its cells (of the 16x16 luma grid, or of the 4x4
+# colour grid) changes by a cut's worth. Something large leaving a still shot within one sample (a bird knocked off its
+# branch, at 6 samples a second) changes only its own part. Real cuts changed 70% of the cells or more nine times in ten.
+#
+# Both were scored against the checked edit lists of two whole films (Big Buck Bunny, tests/ci/assets/big_buck_bunny,
+# and Tears of Steel, live action), sampled at 6 a second as compositor sight samples: changes wrongly called cuts fell
+# from 34 to 2 and from 29 to 3 a film, F1 rose from 0.85 to 0.97 and to 0.93. Cuts into or out of fast action are
+# missed more (16 of Tears of Steel's 135, from 14): the shot beside the cut moves about as much as the cut changes.
+CUT_SPREAD = 0.45
 # Shots shorter than this are merged into the previous one: a flash, not a shot.
 MIN_SHOT_S = 0.25
 # Media time going backwards by more than this is a loop (or a seek back).
@@ -52,6 +61,23 @@ RESTART_S = 1.0
 LOOP_END_S = 0.6
 # Width of the similarity kernel, in grid-distance units.
 SIGMA = 14.0
+# Gradual transitions (dissolves and fades), the twin-comparison way: a run of frames that each differ from the last by
+# at least this (a still shot's noise is ~1)...
+GRADUAL_STEP = 2.0
+# ...over at least this long and at most this long (seconds)...
+GRADUAL_MIN_S = 0.25
+GRADUAL_MAX_S = 3.0
+# ...whose two ends differ by a cut's worth (CUT_FLOOR), and whose every frame is a blend of the two ends to within
+# this (mean luma levels). A pan or a moving subject changes as much, but its frames are not blends of its ends.
+BLEND_RESIDUAL = 4.0
+# ...and in which no one step carries more than this share of the change between its ends. A dissolve spreads its
+# change over its frames; a run of small motion with a cut in it passes the blend test too (the frames before the cut
+# look like one end, the frames after it like the other), and was reported as a fade at the run's middle.
+GRADUAL_STEP_SHARE = 0.6
+# At 16x16 a small pan's frames are nearly blends of its ends too (F(x + t*dx) ~ F(x) + t*dx*F'(x)). So, as detectors
+# compensate for camera motion: if the first frame shifted by up to this many cells matches the last to within half
+# a cut's worth, the camera moved; it was not a dissolve.
+MOTION_SHIFT = 3
 
 # Upper hue bound (degrees) of each colour name, in order around the wheel.
 _HUES = (
@@ -83,6 +109,7 @@ class Shot:
 	colourfulness: float = 0.0
 	hues: list[str] = field(default_factory=list)
 	after_loop: bool = False
+	gradual: bool = False  # opened by a dissolve or a fade, not a cut
 
 	@property
 	def duration(self) -> float:
@@ -216,20 +243,109 @@ def strays(ts: list[float], jump: float) -> set[int]:
 	return out
 
 
+def _moved(first: np.ndarray, last: np.ndarray) -> bool:
+	"""Whether the last 16x16 picture is the first one shifted (the camera or the subject moved)."""
+	a, b = first.reshape(16, 16), last.reshape(16, 16)
+	best = float('inf')
+	for dy in range(-MOTION_SHIFT, MOTION_SHIFT + 1):
+		for dx in range(-MOTION_SHIFT, MOTION_SHIFT + 1):
+			if dx == 0 and dy == 0:
+				continue
+			shifted = a[max(0, -dy) : 16 - max(0, dy), max(0, -dx) : 16 - max(0, dx)]
+			there = b[max(0, dy) : 16 - max(0, -dy), max(0, dx) : 16 - max(0, -dx)]
+			best = min(best, float(np.abs(shifted - there).mean()))
+	return best < CUT_FLOOR / 2
+
+
+def _blends(matrix: np.ndarray, s: int, e: int) -> bool:
+	"""Whether every frame from s to e is a mix of frames s and e, moving from one to the other."""
+	span = matrix[e] - matrix[s]
+	norm = float(np.dot(span, span))
+	if norm <= 0:
+		return False
+	alphas = []
+	for k in range(s + 1, e):
+		alpha = float(np.dot(matrix[k] - matrix[s], span)) / norm
+		if float(np.abs(matrix[k] - (matrix[s] + alpha * span)).mean()) > BLEND_RESIDUAL:
+			return False
+		alphas.append(alpha)
+	return all(b >= a - 0.05 for a, b in zip(alphas, alphas[1:]))
+
+
+def gradual(
+	frames: list[FrameSample], matrix: np.ndarray, d: np.ndarray, start: int, end: int
+) -> list[tuple[int, float, int, int]]:
+	"""Dissolves and fades between frames start and end (exclusive), as (the frame the new shot opens at, strength,
+	the last frame before the change, the last frame of it).
+
+	A run of steady small changes whose ends differ like a cut, every frame between them a blend of the two. A fade
+	through black is two of them: the run is split where it is darkest, when that is far darker than both ends. A fade
+	through another colour (Big Buck Bunny's title fades to plain lilac, then the clouds fade in) is often missed:
+	splitting such runs where they turn found it, but called more changes that were not there on both films scored.
+	"""
+	out: list[tuple[int, float, int, int]] = []
+	i = start + 1
+	while i < end:
+		if d[i] < GRADUAL_STEP:
+			i += 1
+			continue
+		j = i
+		while j + 1 < end and d[j + 1] >= GRADUAL_STEP:
+			j += 1
+		s, e = i - 1, j  # the last frame before the change, the last frame of it
+		pieces = [(s, e)]
+		bright = matrix[s : e + 1].mean(axis=1)
+		dark = s + int(np.argmin(bright))
+		if s < dark < e and bright[dark - s] < 0.5 * min(bright[0], bright[-1]):
+			pieces = [(s, dark), (dark, e)]
+		for a, b in pieces:
+			span_s = frames[b].t - frames[a].t
+			strength = float(np.abs(matrix[b] - matrix[a]).mean())
+			largest_step = float(np.abs(np.diff(matrix[a : b + 1], axis=0)).mean(axis=1).max())
+			if (
+				GRADUAL_MIN_S <= span_s <= GRADUAL_MAX_S
+				and strength >= CUT_FLOOR
+				and largest_step <= GRADUAL_STEP_SHARE * strength
+				and _blends(matrix, a, b)
+				and not _moved(matrix[a], matrix[b])
+			):
+				out.append(((a + b + 1) // 2, strength, a, b))
+		i = j + 1
+	return out
+
+
+def _spread(matrix: np.ndarray, colours: np.ndarray | None, i: int) -> bool:
+	"""Whether the change into frame i reaches most of the picture, as a cut's does (see CUT_SPREAD)."""
+	share = float((np.abs(matrix[i] - matrix[i - 1]) > CUT_FLOOR).mean())
+	if colours is not None:
+		cells = np.abs(colours[i] - colours[i - 1]).reshape(16, 3).mean(axis=1)
+		share = max(share, float((cells > CUT_FLOOR).mean()))
+	return share >= CUT_SPREAD
+
+
+def _spike(d: np.ndarray, i: int, skip: set[int]) -> bool:
+	"""Whether the change into frame i stands out from the changes just before and after it, as a cut's does."""
+	around = [d[j] for j in (i - 1, i + 1) if 1 <= j < len(d) and j not in skip]
+	return not around or d[i] >= CUT_SPIKE * max(around)
+
+
 def read(frames: list[FrameSample], duration: float | None = None) -> Sight:
 	"""Segment one item's frames (in arrival order) into shots."""
 	if frames:
 		drop = strays([f.t for f in frames], LOOP_JUMP_S)
 		frames = [f for i, f in enumerate(frames) if i not in drop]
 	matrix = grids(frames)
-	d = deltas(matrix, colour_grids(frames))
-	starts: list[tuple[int, float, bool]] = [(0, 0.0, False)] if frames else []
+	colours = colour_grids(frames)
+	d = deltas(matrix, colours)
 	loops: list[float] = []
 	rewinds: list[float] = []
+	jumps: list[int] = []  # where media time went back: a loop or a rewind opens a shot of its own
+	restarts: set[int] = set()
 	for i in range(1, len(frames)):
 		if frames[i].t < frames[i - 1].t - LOOP_JUMP_S:
 			if frames[i - 1].t < RESTART_S:
 				# Feeds rewind a video when it scrolls into view; that is a restart, not a loop.
+				restarts.add(i)
 				continue
 			# A loop starts over from the end; anything else going backwards is a rewind (a
 			# seek, or the page restarting it). Without a known duration, assume a loop.
@@ -237,16 +353,24 @@ def read(frames: list[FrameSample], duration: float | None = None) -> Sight:
 				rewinds.append(frames[i - 1].t)
 			else:
 				loops.append(frames[i - 1].t)
+			jumps.append(i)
+
+	# Dissolves and fades, before cuts: no frame differs from the last by a cut's worth, the run of them does. A fast
+	# fade can step by a cut's worth each frame, so the frames inside one are not cuts.
+	bounds = [0, *jumps, len(frames)]
+	fades = [g for a, b in zip(bounds, bounds[1:]) for g in gradual(frames, matrix, d, a, b)]
+	inside = {k for _, _, a, b in fades for k in range(a + 1, b + 1)}
+
+	starts: list[tuple[int, float, bool]] = [(0, 0.0, False)] if frames else []
+	for i in range(1, len(frames)):
+		if i in restarts:
+			continue
+		if i in jumps:
 			starts.append((i, float(d[i]), True))
 			continue
-		recent = d[max(1, i - CUT_WINDOW) : i]
-		if len(recent) >= 3:
-			med = float(np.median(recent))
-			mad = float(np.median(np.abs(recent - med))) + 0.5
-			threshold = max(CUT_FLOOR, med + CUT_MADS * mad)
-		else:
-			threshold = CUT_FLOOR
-		if d[i] >= threshold:
+		if i in inside:
+			continue
+		if d[i] >= CUT_FLOOR and _spike(d, i, {*jumps, *restarts}) and _spread(matrix, colours, i):
 			last_start = starts[-1][0]
 			if frames[i].t - frames[last_start].t < MIN_SHOT_S and last_start != 0 and not starts[-1][2]:
 				# Too soon after the previous cut: keep one cut, at the stronger change.
@@ -255,12 +379,14 @@ def read(frames: list[FrameSample], duration: float | None = None) -> Sight:
 				continue
 			starts.append((i, float(d[i]), False))
 
+	opened = sorted([(i, st, loop, False) for i, st, loop in starts] + [(i, st, False, True) for i, st, _, _ in fades])
+
 	shots: list[Shot] = []
-	for k, (start, strength, after_loop) in enumerate(starts):
-		end = starts[k + 1][0] if k + 1 < len(starts) else len(frames)
+	for k, (start, strength, after_loop, is_gradual) in enumerate(opened):
+		end = opened[k + 1][0] if k + 1 < len(opened) else len(frames)
 		inner = d[start + 1 : end]
 		mean_rgb = np.mean([frames[j].rgb for j in range(start, end)], axis=0)
-		t1 = frames[end].t if end < len(frames) and not starts[k + 1][2] else frames[end - 1].t
+		t1 = frames[end].t if end < len(frames) and not opened[k + 1][2] else frames[end - 1].t
 		shots.append(
 			Shot(
 				start=start,
@@ -272,6 +398,7 @@ def read(frames: list[FrameSample], duration: float | None = None) -> Sight:
 				colour=colour_name(mean_rgb),
 				cut_strength=strength,
 				after_loop=after_loop,
+				gradual=is_gradual,
 				colourfulness=(cf := colourfulness(frames[start:end]))[0],
 				hues=cf[1],
 			)

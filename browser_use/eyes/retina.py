@@ -22,10 +22,12 @@ import json
 import logging
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from browser_use.browser.capture import capture_screenshot
 
 if TYPE_CHECKING:
 	from browser_use.browser.session import BrowserSession
@@ -41,7 +43,32 @@ _SCRIPT = (Path(__file__).parent / 'retina.js').read_text()
 # couple of minutes: far more than one watch needs, and bounded.
 MAX_FRAMES = 1500
 MAX_HOPS = 6000
+# A cross-origin video without CORS cannot be read by the page ("tainted"); its pictures are taken from the
+# compositor instead, at this rate, with sample numbers from here on so they never collide with the page's own.
+COMPOSITOR_FPS = 6.0
+COMPOSITOR_SEQ = 1_000_000_000
+MAX_LOCAL_KEYFRAMES = 400
 MAX_EVENTS = 2000
+
+
+def media_time_at(readings: 'Sequence[tuple[float, float]]', wall: float) -> float | None:
+	"""A film's time at wall-clock `wall` (seconds since the epoch), from readings of its clock as (wall, media time)
+	pairs in the order taken: interpolated between the two around it, so a clock that stood still (a stall) reads flat
+	and one that ran reads its slope. Before the first reading the film is taken to have played at 1x; after the last
+	it is not run on. Between readings that jump (a seek), whichever side is nearer."""
+	readings = list(readings)  # a deque cannot be sliced
+	if not readings:
+		return None
+	first_w, first_t = readings[0]
+	if wall <= first_w:
+		return max(0.0, first_t - (first_w - wall))
+	for (w0, t0), (w1, t1) in zip(readings, readings[1:]):
+		if w0 <= wall <= w1:
+			span = w1 - w0
+			if span <= 0 or t1 < t0 or t1 - t0 > span + 1.0:
+				return t0 if wall - w0 < w1 - wall else t1
+			return t0 + (t1 - t0) * (wall - w0) / span
+	return readings[-1][1]
 
 
 @dataclass(slots=True)
@@ -114,6 +141,12 @@ class Retina:
 		self._listeners: list[Callable[[list[FrameSample], list[AudioHop], list[RetinaEvent]], None]] = []
 		self._arrived = asyncio.Event()
 		self.batches = 0
+		self._compositor: asyncio.Task | None = None
+		self._compositor_vid = 0
+		self._compositor_seq = COMPOSITOR_SEQ
+		self._local_keyframes: dict[int, bytes] = {}
+		self._state_wall = 0.0
+		self._compositor_context: int | None = None
 
 	@property
 	def running(self) -> bool:
@@ -154,6 +187,7 @@ class Retina:
 		return self.state
 
 	async def stop(self) -> None:
+		self._stop_compositor()
 		if not self.running:
 			return
 		try:
@@ -218,14 +252,248 @@ class Retina:
 		"""Like keyframes(), plus why they are all missing when the page did not hand them over in time."""
 		if not seqs:
 			return [], None
+		page_seqs = [s for s in seqs if s < COMPOSITOR_SEQ]
+		got: dict[int, bytes | None] = {s: self._local_keyframes.get(s) for s in seqs if s >= COMPOSITOR_SEQ}
+		why = None
+		if page_seqs:
+			try:
+				urls = await self.evaluate(f'window.__retina.keyframes({json.dumps(page_seqs)})', timeout=self.keyframes_timeout)
+				got.update(zip(page_seqs, [_decode_data_url(u) for u in (urls or [None] * len(page_seqs))]))
+			except TimeoutError:
+				# What was seen and heard is already held; losing the pictures must not lose the watch.
+				why = await self._why_no_answer()
+				logger.warning(f'👁️ keyframes: {why}')
+		return [got.get(s) for s in seqs], why
+
+	# -- a cross-origin video, seen from the compositor -----------------------------------------------------
+
+	def _watch_compositor(self, vid: int) -> None:
+		if not vid or (self._compositor and not self._compositor.done() and self._compositor_vid == vid):
+			return
+		self._stop_compositor()
+		self._compositor_vid = vid
+		self._compositor = asyncio.create_task(self._compositor_loop(vid), name='retina_compositor')
+
+	def _stop_compositor(self) -> None:
+		if self._compositor is not None and not self._compositor.done():
+			self._compositor.cancel()
+		self._compositor = None
+		self._compositor_vid = 0
+
+	async def _compositor_loop(self, vid: int) -> None:
+		"""While a tainted video is attended, sample its rectangle as the compositor draws it: cut from the frames of a
+		screencast of its own, or, if none can be opened, captured."""
 		try:
-			urls = await self.evaluate(f'window.__retina.keyframes({json.dumps(list(seqs))})', timeout=self.keyframes_timeout)
-		except TimeoutError:
-			# What was seen and heard is already held; losing the pictures must not lose the watch.
-			why = await self._why_no_answer()
-			logger.warning(f'👁️ keyframes: {why}')
-			return [None] * len(seqs), why
-		return [_decode_data_url(u) for u in (urls or [None] * len(seqs))], None
+			await self._compositor_by_screencast(vid)
+		except asyncio.CancelledError:
+			raise
+		except Exception as e:
+			logger.debug(f'retina: no screencast for compositor sight, capturing instead: {type(e).__name__}: {e}')
+		await self._compositor_by_capture(vid)
+
+	def _emit_compositor(self, sample: FrameSample | None) -> None:
+		if sample is None:
+			return
+		self.frames.append(sample)
+		for listener in self._listeners:
+			try:
+				listener([sample], [], [])
+			except Exception as e:
+				logger.debug(f'retina listener failed: {type(e).__name__}: {e}')
+		self._arrived.set()
+
+	async def _compositor_by_capture(self, vid: int) -> None:
+		period = 1.0 / COMPOSITOR_FPS
+		while self.running and self.attended.get('vid') == vid:
+			started = time.monotonic()
+			try:
+				self._emit_compositor(await self._compositor_frame(vid))
+			except asyncio.CancelledError:
+				raise
+			except Exception as e:
+				logger.debug(f'retina: compositor frame failed: {type(e).__name__}: {e}')
+			await asyncio.sleep(max(0.0, period - (time.monotonic() - started)))
+
+	async def _compositor_by_screencast(self, vid: int) -> None:
+		"""A screencast of the tab on a DevTools connection of its own (an event has one handler per connection, and the
+		recorder holds the session's), its newest frame cut to the video's box COMPOSITOR_FPS times a second. Each
+		capture of the whole viewport took ~95 ms on a busy page; this takes none. Returns when the video is no longer
+		attended; raises if the screencast cannot be had."""
+		import json as _json
+		from urllib.parse import urlparse
+
+		import websockets
+
+		assert self._cdp is not None
+		where = urlparse(self.browser_session.cdp_url or '')
+		if not (where.hostname and where.port):
+			raise RuntimeError(f'no local DevTools address in {self.browser_session.cdp_url!r}')
+		url = f'ws://{where.hostname}:{where.port}/devtools/page/{self._cdp.target_id}'
+		period = 1.0 / COMPOSITOR_FPS
+		async with await websockets.connect(url, max_size=None, proxy=None, open_timeout=5) as ws:
+			newest: list[tuple[bytes, dict] | None] = [None]
+
+			async def read() -> None:
+				async for raw in ws:
+					msg = _json.loads(raw)
+					if msg.get('method') != 'Page.screencastFrame':
+						continue
+					params = msg['params']
+					await ws.send(
+						_json.dumps({'id': 2, 'method': 'Page.screencastFrameAck', 'params': {'sessionId': params['sessionId']}})
+					)
+					newest[0] = (base64.b64decode(params['data']), params.get('metadata') or {})
+
+			start = {'format': 'jpeg', 'quality': 80, 'maxWidth': 1280, 'maxHeight': 1280, 'everyNthFrame': 1}
+			await ws.send(_json.dumps({'id': 1, 'method': 'Page.startScreencast', 'params': start}))
+			reader = asyncio.create_task(read())
+			clock: deque[tuple[float, float]] = deque(maxlen=64)  # (wall, media time), read each tick
+			try:
+				while self.running and self.attended.get('vid') == vid:
+					started = time.monotonic()
+					if reader.done():
+						reader.result()
+						raise RuntimeError('the screencast connection closed')
+					frame, newest[0] = newest[0], None
+					before = time.time()
+					media_t = await self._media_time(vid)
+					if media_t is not None:
+						clock.append(((before + time.time()) / 2, media_t))
+					if frame is not None:
+						try:
+							self._emit_compositor(await self._compositor_from(vid, *frame, clock))
+						except asyncio.CancelledError:
+							raise
+						except Exception as e:
+							logger.debug(f'retina: compositor frame failed: {type(e).__name__}: {e}')
+					await asyncio.sleep(max(0.0, period - (time.monotonic() - started)))
+			finally:
+				reader.cancel()
+				await asyncio.gather(reader, return_exceptions=True)
+
+	async def _compositor_from(
+		self, vid: int, data: bytes, meta: dict, clock: 'Sequence[tuple[float, float]]' = ()
+	) -> FrameSample | None:
+		"""A sample of the attended video's box, cut from one screencast frame, labelled with the film's time when Chrome
+		drew the frame (its clock as read around then: `clock`)."""
+		import io
+
+		from PIL import Image
+
+		state = self.state if self.state.get('vid') == vid else {}
+		if state.get('paused'):
+			return None
+		rect = self.attended.get('rect') or []
+		if len(rect) != 4 or rect[2] < 8 or rect[3] < 8:
+			return None
+		with Image.open(io.BytesIO(data)) as img:
+			css_w = float(meta.get('deviceWidth') or img.width)
+			css_h = float(meta.get('deviceHeight') or img.height)
+			px = img.width / max(1.0, css_w)
+			left, top = max(0.0, float(rect[0])), max(0.0, float(rect[1]))
+			right, bottom = min(float(rect[0] + rect[2]), css_w), min(float(rect[1] + rect[3]), css_h)
+			if right - left < 8 or bottom - top < 8:
+				return None  # scrolled out of view
+			off = float(meta.get('offsetTop') or 0.0)
+			box = (round(left * px), round((top + off) * px), round(right * px), round((bottom + off) * px))
+			part = img.convert('RGB').crop(box)
+		thumb_width = int(self.options.get('thumbWidth') or 320)
+		if part.width > thumb_width:
+			part = part.resize((thumb_width, max(1, round(part.height * thumb_width / part.width))), Image.Resampling.BOX)
+		luma = part.convert('L').resize((16, 16), Image.Resampling.BOX).tobytes()
+		colours = part.resize((4, 4), Image.Resampling.BOX).tobytes()
+		mean = part.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
+		buf = io.BytesIO()
+		part.save(buf, 'JPEG', quality=70)
+		# Media time: the video's clock at the moment Chrome drew the frame (it stamps it), from readings around then. The
+		# time read now less the frame's age went back in a stall: the clock had stood still for part of that age.
+		drawn = float(meta.get('timestamp') or 0.0)
+		at = media_time_at(clock, drawn) if drawn else (clock[-1][1] if clock else None)
+		if at is not None:
+			t = at
+		else:
+			t = float(state.get('t') or 0.0) + max(0.0, time.monotonic() - self._state_wall) if state else 0.0
+		self._compositor_seq += 1
+		seq = self._compositor_seq
+		self._local_keyframes[seq] = buf.getvalue()
+		while len(self._local_keyframes) > MAX_LOCAL_KEYFRAMES:
+			self._local_keyframes.pop(next(iter(self._local_keyframes)))
+		return FrameSample(seq, vid, t, time.monotonic(), luma, tuple(mean)[:3], True, colours)  # type: ignore[arg-type]
+
+	async def _compositor_frame(self, vid: int) -> FrameSample | None:
+		import io
+
+		from PIL import Image
+
+		state = self.state if self.state.get('vid') == vid else {}
+		if state.get('paused') or self._cdp is None:
+			return None  # the page samples only while it plays; so does this
+		rect = self.attended.get('rect') or []
+		if len(rect) != 4 or rect[2] < 8 or rect[3] < 8:
+			return None
+		send = self._cdp.cdp_client.send
+		metrics = await send.Page.getLayoutMetrics(session_id=self._session_id)
+		vp = metrics['cssLayoutViewport']
+		left, top = max(0.0, float(rect[0])), max(0.0, float(rect[1]))
+		width = min(float(rect[0] + rect[2]), float(vp['clientWidth'])) - left
+		height = min(float(rect[1] + rect[3]), float(vp['clientHeight'])) - top
+		if width < 8 or height < 8:
+			return None  # scrolled out of view
+		thumb_width = float(self.options.get('thumbWidth') or 320)
+		clip = {
+			'x': vp['pageX'] + left,
+			'y': vp['pageY'] + top,
+			'width': width,
+			'height': height,
+			'scale': min(1.0, thumb_width / width),
+		}
+		before = await self._media_time(vid)
+		shot = await capture_screenshot(self._cdp.cdp_client, {'format': 'jpeg', 'quality': 70, 'clip': clip}, self._session_id)
+		after = await self._media_time(vid)
+		jpeg = base64.b64decode(shot['data'])
+		with Image.open(io.BytesIO(jpeg)) as img:
+			rgb_img = img.convert('RGB')
+			luma = rgb_img.convert('L').resize((16, 16), Image.Resampling.BOX).tobytes()
+			colours = rgb_img.resize((4, 4), Image.Resampling.BOX).tobytes()
+			mean = rgb_img.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
+		# Media time: read from the video on both sides of the capture. Failing that, the page's last report of it run
+		# forward to now, which runs ahead while a stream stalls (found on Wikimedia Commons: labels ran a second
+		# ahead, then went back).
+		reads = [r for r in (before, after) if r is not None]
+		if reads:
+			t = sum(reads) / len(reads)
+		else:
+			t = float(state.get('t') or 0.0) + max(0.0, time.monotonic() - self._state_wall) if state else 0.0
+		self._compositor_seq += 1
+		seq = self._compositor_seq
+		self._local_keyframes[seq] = jpeg
+		while len(self._local_keyframes) > MAX_LOCAL_KEYFRAMES:
+			self._local_keyframes.pop(next(iter(self._local_keyframes)))
+		return FrameSample(seq, vid, t, time.monotonic(), luma, tuple(mean)[:3], True, colours)  # type: ignore[arg-type]
+
+	async def _media_time(self, vid: int) -> float | None:
+		"""The attended video's currentTime, read in the retina's world now, or None if it is another item or the read
+		failed. The world's context is kept between reads and found again when it goes (a navigation)."""
+		assert self._cdp is not None
+		try:
+			if self._compositor_context is None:
+				self._compositor_context = await self._context_id()
+			r = await self._cdp.cdp_client.send.Runtime.evaluate(
+				params={
+					'expression': 'window.__retina ? window.__retina.mediaTime() : null',
+					'contextId': self._compositor_context,
+					'returnByValue': True,
+				},
+				session_id=self._session_id,
+			)
+		except Exception:
+			self._compositor_context = None
+			return None
+		if r.get('exceptionDetails'):
+			self._compositor_context = None
+			return None
+		value = (r.get('result') or {}).get('value')
+		return float(value[1]) if isinstance(value, list) and len(value) == 2 and value[0] == vid else None
 
 	async def _why_no_answer(self, probe_s: float = 2.0) -> str:
 		"""After a read timed out: is the renderer answering at all, or only that read stuck?"""
@@ -313,10 +581,15 @@ class Retina:
 				if e.get('url') != self.state.get('url'):
 					self.page_since = now
 				self.state = e
+				self._state_wall = now
 				if not e.get('vid') and self.attended.get('vid'):
 					self.attended = {'vid': 0}  # the page attends to nothing (a new page, or the video left it)
 			elif kind == 'attend':
 				self.attended = e
+				if e.get('vid') != self._compositor_vid:
+					self._stop_compositor()
+			elif kind == 'tainted':
+				self._watch_compositor(int(e.get('vid') or 0))
 		self.frames.extend(frames)
 		self.hops.extend(hops)
 		self.events.extend(events)

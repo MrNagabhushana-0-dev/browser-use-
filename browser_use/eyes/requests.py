@@ -151,6 +151,7 @@ class Request(BaseModel):
 	bytes: int | None = None
 	ms: float | None = None
 	error: str = ''
+	blocked_by: str = ''  # CDP's blockedReason when the browser blocked it: csp, mixed-content, other (an extension)...
 	from_cache: bool = False
 	started: float = 0.0  # CDP monotonic seconds
 
@@ -161,6 +162,21 @@ class Request(BaseModel):
 	@property
 	def api(self) -> bool:
 		return self.type in API_TYPES or 'json' in self.mime
+
+
+# Blocks the page's own rules made: what the page asked for and was refused, worth telling. Anything else blocked
+# ("other", Chrome's subresource filter, DevTools) is the browser side: on MDN, the profile's own ad blocker.
+PAGE_POLICY_BLOCKS = ('csp', 'mixed-content', 'origin', 'content-type', 'corp-', 'coep-', 'coop-')
+
+
+def told_as_page_failure(req: 'Request') -> bool:
+	"""Whether a failed request is the page's failure to tell of: an HTTP error, a network error, or a block by the
+	page's own policy. Not one the page cancelled itself, nor one the browser side (an extension) blocked."""
+	if req.error == 'canceled':
+		return False
+	if req.error == 'blocked':
+		return req.blocked_by.startswith(PAGE_POLICY_BLOCKS)
+	return req.failed
 
 
 class RequestLog(TabListener):
@@ -234,13 +250,24 @@ class RequestLog(TabListener):
 			req.error = (
 				'blocked' if e.get('blockedReason') else ('canceled' if e.get('canceled') else e.get('errorText', 'failed'))
 			)
+			req.blocked_by = str(e.get('blockedReason') or '')
 			req.ms = round((e.get('timestamp', req.started) - req.started) * 1000, 1)
 
 	# -- reading -------------------------------------------------------------------------
 
-	def entries(self, since: int = 0, only: str = 'all', limit: int = 30) -> list[Request]:
+	def entries(self, since: int = 0, only: str = 'all', limit: int = 30, pattern: str = '') -> list[Request]:
+		"""`only`: all, failed or api. `pattern`: a regular expression the URL must match, case-insensitive. The newest
+		`limit` of them (all when 0)."""
 		assert only in ('all', 'failed', 'api'), only
-		picked = [r for r in self._order if r.seq > since and (only == 'all' or getattr(r, only))]
+		try:
+			match = re.compile(pattern, re.I) if pattern else None
+		except re.error as e:
+			raise ValueError(f'pattern is not a regular expression: {e}') from e
+		picked = [
+			r
+			for r in self._order
+			if r.seq > since and (only == 'all' or getattr(r, only)) and (match is None or match.search(r.url))
+		]
 		return picked[-limit:] if limit > 0 else picked
 
 	async def body(self, seq: int, max_chars: int = BODY_CHARS) -> str:
@@ -267,11 +294,12 @@ class RequestLog(TabListener):
 		return f'#{seq} {req.method} {req.url} -> {req.status} {req.mime}{note}:\n{text[:max_chars]}{tail}'
 
 
-def render(requests: list[Request], since: int, last_seq: int, page_url: str = '') -> str:
-	"""Compact lines, one per request, plus where to carry on from."""
+def render(requests: list[Request], since: int, last_seq: int, page_url: str = '', matched: int | None = None) -> str:
+	"""Compact lines, one per request, plus where to carry on from. `matched`: how many there were before a limit kept
+	the newest of them, so that what was left out is said (624 on a games site, 594 of them beacons)."""
 	origin = '{0.scheme}://{0.netloc}'.format(urlsplit(page_url)) if page_url.startswith('http') else ''
 	failed = sum(r.failed for r in requests)
-	head = f'{len(requests)} request{"" if len(requests) == 1 else "s"} after #{since}' + (f', {failed} failed' if failed else '')
+	head = _counted(len(requests), matched, 'request', 'requests', since) + (f', {failed} failed' if failed else '')
 	lines = [head + f'. Next: since={last_seq}.']
 	for r in requests:
 		url = r.url[len(origin) :] or '/' if origin and r.url.startswith(origin) else r.url
@@ -283,3 +311,11 @@ def render(requests: list[Request], since: int, last_seq: int, page_url: str = '
 			f'#{r.seq} {r.method} {outcome} {r.type.lower() or "?"} {url[:160]}{" · " + r.mime if r.mime else ""}{size}{ms}{cache}'
 		)
 	return '\n'.join(lines)
+
+
+def _counted(shown: int, matched: int | None, one: str, many: str, since: int) -> str:
+	"""'3 requests after #0', or, when a limit left some out, 'The newest 30 of 624 requests after #0 (594 earlier not
+	shown: narrow with only= or pattern=)'. Shared with the console's log."""
+	if matched is None or matched <= shown:
+		return f'{shown} {one if shown == 1 else many} after #{since}'
+	return f'The newest {shown} of {matched} {many} after #{since} ({matched - shown} earlier not shown: narrow with only= or pattern=)'

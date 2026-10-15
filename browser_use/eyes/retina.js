@@ -16,6 +16,10 @@
 // Python owns all interpretation; this file only measures.
 (() => {
 	const VERSION = 9;
+	// The top frame only. With site isolation off, frames from other sites share the tab, and the script that installs
+	// the retina in new documents reaches them too: an ad frame's retina then set the page's URL and attention
+	// (found on the Guardian's front page: "no video playing on https://assets.guim.co.uk/commercial/...").
+	if (window !== window.top) return;
 	if (window.__retina && window.__retina.version === VERSION) return;
 	if (window.__retina) window.__retina.stop();
 
@@ -127,6 +131,26 @@
 	const isCanvas = (el) => el instanceof HTMLCanvasElement;
 	const dims = (el) => (isCanvas(el) ? [el.width, el.height] : [el.videoWidth, el.videoHeight]);
 
+	const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+
+	// Text in el a person can see: not text only a screen reader gets (a 1px clipped "sr-only" box, as players use
+	// for "Duration: 10 minutes"), nor hidden text. Stops once it has `max` characters.
+	const shownText = (el, max) => {
+		const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+		const parts = [];
+		let size = 0;
+		for (let n = walker.nextNode(), seen = 0; n && size < max && seen < 400; n = walker.nextNode(), seen++) {
+			const t = clean(n.data);
+			const host = n.parentElement;
+			if (!t || !host || !host.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+			const r = host.getBoundingClientRect();
+			if (r.width <= 1 || r.height <= 1) continue;
+			parts.push(t);
+			size += t.length + 1;
+		}
+		return parts.join(' ').slice(0, max);
+	};
+
 	// Text a person would read next to the video: caption, author, audio credit. Short on
 	// purpose: this is what is on screen, not the page's markup.
 	const nearbyText = (v) => {
@@ -134,10 +158,38 @@
 		for (let i = 0; i < 8 && el; i++) {
 			el = el.parentElement;
 			if (!el) break;
-			const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
-			if (t.length >= 12) return t.slice(0, 400);
+			const t = shownText(el, 400);
+			if (t.length >= 12) return t;
 		}
 		return '';
+	};
+
+	// What the video is called: its own label or figure caption; else, when it is the one sizable video on the page
+	// (a film page, a watch page), the page's heading, which is about it. A feed has several, each named by its
+	// caption instead. Found hands-on: a Commons film was named by its player's badges, "Duration: ... CC".
+	const nameOf = (v) => {
+		const ids = (v.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+		const labelled = clean(ids.map((id) => (document.getElementById(id) || {}).textContent || '').join(' '));
+		const fig = v.closest('figure');
+		const caption = fig && fig.querySelector('figcaption');
+		const own = labelled || clean(v.getAttribute('aria-label')) || clean(v.getAttribute('title')) || clean(caption && caption.innerText);
+		if (own || isCanvas(v)) return own.slice(0, 160);
+		// A player opened in a dialog plays what the dialog is titled
+		const dialog = v.closest('dialog, [role=dialog], [role=alertdialog]');
+		if (dialog) {
+			const by = (dialog.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+			const title = clean(by.map((id) => (document.getElementById(id) || {}).textContent || '').join(' '));
+			const heading = dialog.querySelector('h1, h2, h3');
+			return (title || clean(dialog.getAttribute('aria-label')) || clean(heading && heading.innerText)).slice(0, 160);
+		}
+		const least = opts.minArea * innerWidth * innerHeight;
+		const sizable = Array.prototype.filter.call(document.querySelectorAll('video'), (o) => {
+			const r = o.getBoundingClientRect();
+			return r.width * r.height >= least;
+		});
+		if (sizable.length !== 1 || sizable[0] !== v) return '';
+		const h1 = document.querySelector('h1');
+		return clean((h1 && h1.innerText) || document.title).slice(0, 160);
 	};
 
 	const describe = (v) => isCanvas(v) ? {
@@ -154,6 +206,7 @@
 		muted: true,
 		rect: visible(v).rect,
 		text: nearbyText(v),
+		name: nameOf(v),
 	} : ({
 		vid: v === R.attended ? R.attendedId : 0,
 		kind: 'video',
@@ -169,6 +222,10 @@
 		muted: v.muted || v.volume === 0,
 		rect: visible(v).rect,
 		text: nearbyText(v),
+		name: nameOf(v),
+		// A video that failed to load (a format this browser cannot decode, a dead source): the browser's own code and
+		// words, so the AI is told rather than left to read a player's "Failed to play video" overlay
+		error: v.error ? [v.error.code, clean(v.error.message).slice(0, 160)] : null,
 	});
 
 	// The src attribute first: setting it resets currentTime at once, while currentSrc keeps the old URL until
@@ -181,6 +238,9 @@
 		const v = pick();
 		const src = v ? (isCanvas(v) ? 'canvas' : srcOf(v)) : '';
 		if (v === R.attended && src === R.attendedSrc) return;
+		// Taint belongs to a source, not an element: a player that switches quality gives the same <video> a new
+		// source, which must be tested (and reported) afresh, or the new item is never seen at all.
+		if (v && src !== R.attendedSrc) R.tainted.delete(v);
 		R.attended = v;
 		R.attendedSrc = src;
 		// Coming back to something already watched (scrolling up, correcting an overshoot) is
@@ -192,6 +252,18 @@
 		R.lastThumbGrid = null;
 		R.lastThumbT = -1;
 		R.events.push(Object.assign({ type: 'attend', wt: performance.now() }, v ? describe(v) : { vid: 0 }));
+		if (v && !isCanvas(v) && !v.error) {
+			v.addEventListener('error', () => {
+				if (R.attended === v && R.attendedSrc === src) R.events.push(Object.assign({ type: 'attend', wt: performance.now() }, describe(v)));
+			}, { once: true });
+		}
+		if (v && !isCanvas(v) && v.readyState < 1) {
+			// A player that attends before its metadata (Video.js, a quality switch) is described again once it is in:
+			// its size and length, which the first description could not know
+			v.addEventListener('loadedmetadata', () => {
+				if (R.attended === v && R.attendedSrc === src) R.events.push(Object.assign({ type: 'attend', wt: performance.now() }, describe(v)));
+			}, { once: true });
+		}
 		if (v && isCanvas(v)) {
 			stopHearing(); // a canvas has no sound of its own
 			startCanvasSight(v);
@@ -574,21 +646,91 @@ registerProcessor('retina-ear', RetinaEar);
 		const [a, b] = [luminance(fg), luminance(bg)].sort((x, y) => y - x);
 		return (a + 0.05) / (b + 0.05);
 	};
-	const reportText = (el) => {
-		if (!el || el.nodeType !== 1 || !el.isConnected || el.closest('video, script, style, noscript')) return;
-		if (!isShown(el)) return;
+	// Report what a changed element says. Returns the text when it was said (now, or within the last second), so a
+	// block inside it need not be said again.
+	const reportText = (el, added = false) => {
+		if (!el || el.nodeType !== 1 || !el.isConnected || el.closest('video, script, style, noscript')) return null;
+		if (!isShown(el)) return null;
 		const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
-		if (!text || text.length > 240) return;
+		if (!text || text.length > 240) return null;
+		const now = performance.now();
+		if (now - (lastText.get(text) || -1e9) < 1000) return text;
+		lastText.set(text, now);
+		const faint = contrast(el) < 1.5;
+		R.events.push(
+			Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}, stillLoading(now, added, el, text) ? { loading: true } : {})
+		);
+		return text;
+	};
+	const depth = (el) => {
+		let n = 0;
+		for (let p = el; p; p = p.parentElement) n++;
+		return n;
+	};
+	// The outermost changed blocks first; a block whose words an enclosing block just said is not said again
+	// (found on Wikipedia: its Appearance panel came back once per nesting level).
+	// A changed piece of a row is said as its row: a list item, an option, a table row or a link that holds it, when
+	// that is short enough to be one thing (found on Wikipedia: a suggestion's title and its description were said
+	// apart, so a list of seven cost fourteen texts).
+	const ROW = 'li, tr, [role=option], [role=row], [role=listitem], [role=menuitem], a';
+	const rowOf = (el) => {
+		const row = el && el.nodeType === 1 && el.closest ? el.closest(ROW) : null;
+		return row && (row.innerText || '').replace(/\s+/g, ' ').trim().length <= 240 ? row : el;
+	};
+	// The budget is per batch of changes, not per text: a ticker repainting every frame makes many batches a second,
+	// a list whose rows are rewritten together (a search box's suggestions) makes one. The cap was 8 texts a second
+	// and cut that list off after its fourth row.
+	const reportAll = (touched, added) => {
 		const now = performance.now();
 		const sec = Math.floor(now / 1000);
 		if (textBudget.second !== sec) textBudget = { second: sec, n: 0 };
 		if (++textBudget.n > 8) return; // a ticker repainting every frame is not news
-		if (now - (lastText.get(text) || -1e9) < 1000) return;
-		lastText.set(text, now);
-		const faint = contrast(el) < 1.5;
-		R.events.push(Object.assign({ type: 'text', wt: now, text, vid: R.attendedId, doc: DOC }, faint ? { faint: true } : {}));
+		const said = [];
+		const rows = new Set([...touched].map(rowOf));
+		const order = [...rows].filter((el) => el && el.nodeType === 1).sort((a, b) => depth(a) - depth(b)).slice(0, 60);
+		let n = 0;
+		for (const el of order) {
+			if (n >= 20) break;
+			const own = (el.innerText || '').replace(/\s+/g, ' ').trim();
+			if (said.some(([outer, text]) => outer !== el && outer.contains(el) && text.includes(own))) continue;
+			const text = reportText(el, added.has(el));
+			if (text) {
+				said.push([el, text]);
+				n++;
+			}
+		}
 	};
 	let textReady = false; // false while the page is still being parsed: its own content has not "appeared"
+	// The page is still filling itself in until its load event (and a moment after): text that arrives then is the
+	// page's own content rendered by script, not something that appeared on a page already there.
+	// After the load event, scripts often keep rendering the page's content for a while (MediaWiki did, 0.7 s on):
+	// the page counts as filling in until 800 ms pass with no new element added. A value changing inside an existing
+	// element (a ticker, a clock, a carousel's class) never keeps that window open.
+	let loadedAt = document.readyState === 'complete' ? -1e9 : null;
+	let lastFill = loadedAt === null ? null : -1e9;
+	let settled = loadedAt !== null;
+	addEventListener('load', () => (loadedAt = lastFill = performance.now()), { once: true });
+	// Only content-like text fills a page in after its load: a new block of some length in the page's flow. Short
+	// text, and anything positioned over the page or in a live region (a toast, an alert, a status line), is news
+	// however soon it comes.
+	const overlay = (el) => {
+		for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+			if (/^(alert|status|log|alertdialog)$/.test(n.getAttribute('role') || '') || n.hasAttribute('aria-live')) return true;
+			if (/^(fixed|absolute|sticky)$/.test(getComputedStyle(n).position)) return true;
+		}
+		return false;
+	};
+	const stillLoading = (now, added, el, text) => {
+		if (loadedAt === null) return true;
+		if (settled) return false;
+		if (now - lastFill > 800) {
+			settled = true;
+			return false;
+		}
+		if (!added || text.length < 40 || overlay(el)) return false;
+		lastFill = now;
+		return true;
+	};
 	const watchText = () => {
 		if (textObserver) return;
 		// Observe the document node itself: it exists from the first instant, before <html> and <body> (the retina
@@ -599,31 +741,59 @@ registerProcessor('retina-ear', RetinaEar);
 		textObserver = new MutationObserver((mutations) => {
 			if (!textReady) return;
 			const touched = new Set();
+			const added = new Set();
 			const restyled = [];
 			for (const m of mutations) {
 				if (m.type === 'characterData') touched.add(m.target.parentElement);
 				else if (m.type === 'attributes') restyled.push(m);
-				for (const n of m.addedNodes) touched.add(n.nodeType === 1 ? n : n.parentElement);
+				for (const n of m.addedNodes) {
+					const el = n.nodeType === 1 ? n : n.parentElement;
+					touched.add(el);
+					if (n.nodeType === 1) added.add(el);
+				}
 			}
 			// Read styles just after the mutation settles. Not requestAnimationFrame: it never fires in a hidden or
 			// background tab, which is exactly where an agent's page often is.
 			setTimeout(() => {
 				for (const m of restyled) if (revealed(m)) touched.add(m.target);
-				touched.forEach(reportText);
+				reportAll(touched, added);
 			}, 0);
 		});
-		textObserver.observe(document, {
-			childList: true,
-			subtree: true,
-			characterData: true,
-			attributes: true,
-			attributeFilter: REVEALING,
-			attributeOldValue: true,
-		});
+		textObserver.observe(document, TEXT_WATCH);
+		watchShadows(false);
+	};
+	// Changes inside a shadow root never reach an observer on the document (found on MDN: its search box is a web
+	// component, and the suggestions it showed were never reported). Open shadow roots are watched too. The retina
+	// cannot see the page's own attachShadow calls from its isolated world, so new ones are looked for on the
+	// heartbeat; what a component already shows when its root is first found (after the page settled) is said then.
+	const TEXT_WATCH = {
+		childList: true,
+		subtree: true,
+		characterData: true,
+		attributes: true,
+		attributeFilter: REVEALING,
+		attributeOldValue: true,
+	};
+	const shadowsSeen = new WeakSet();
+	const watchShadows = (sayWhatTheyShow, root = document) => {
+		if (!textObserver) return;
+		const found = [];
+		const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+		for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+			const shadow = n.shadowRoot;
+			if (!shadow || shadowsSeen.has(shadow)) continue;
+			shadowsSeen.add(shadow);
+			textObserver.observe(shadow, TEXT_WATCH);
+			found.push(n);
+			found.push(...watchShadows(false, shadow)); // nested components
+		}
+		if (sayWhatTheyShow && found.length && textReady && settled) reportAll(new Set(found), new Set(found));
+		return found;
 	};
 
 	const heartbeat = () => {
 		watchText(); // in case the document element did not exist when the retina started
+		watchShadows(true);
 		const v = R.attended;
 		if (R.ctx && R.ctx.state === 'suspended') R.ctx.resume().catch(() => {});
 		const media = v && !isCanvas(v) ? v : null;
@@ -698,6 +868,14 @@ registerProcessor('retina-ear', RetinaEar);
 			tainted: v ? R.tainted.has(v) : false,
 			thumbs: R.thumbs.size,
 		};
+	};
+
+	// The attended video's media time now: compositor sight reads it on both sides of each capture, so a picture is
+	// labelled with where the film was, not where it would be had it played on since the last report (a stalled stream
+	// stays "playing" with its clock stopped).
+	R.mediaTime = () => {
+		const v = R.attended;
+		return v && !isCanvas(v) ? [R.attendedId, v.currentTime] : null;
 	};
 
 	// Keyframes by sequence number, as data URLs. Missing ones (evicted) come back null.

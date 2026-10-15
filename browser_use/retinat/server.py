@@ -14,6 +14,9 @@ turn at a time:
 - `retinat_explore`: a whole site crawled and checked, with a bug report and a page sheet.
 - `retinat_now`: one line on what is on screen and audible right now.
 - `retinat_console`: what the page logged and threw, masked like the requests.
+- `retinat_record`: a video of what the browser showed, started and stopped by the agent.
+- `retinat_reflex` / `retinat_wait`: rules the page runs every frame, firing real input in milliseconds; the agent
+  sleeps until one notifies.
 - `retinat_requests`: what the page fetched (status, type, size, time, failures), and one response body,
   with tokens, passwords and keys masked.
 
@@ -34,7 +37,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from browser_use.mcp.server import MCP_AVAILABLE, TEXT_FAILURES, BrowserUseServer, types
+from browser_use.mcp.server import MCP_AVAILABLE, TEXT_FAILURES, BrowserUseServer, serve_until_stopped, types
 from browser_use.net import NetworkMode, NetworkRouter
 
 if TYPE_CHECKING:
@@ -42,6 +45,12 @@ if TYPE_CHECKING:
 	from browser_use.desktop.service import DesktopControl
 
 TOOL_PREFIX = 'retinat_'
+# Said on what a seeing tool returns when it was asked while a retinat_wait was pending: a client may send both at
+# once, and the answer is then from before what the wait is for (found live: read as a stale picture for an hour)
+_WAIT_PENDING_NOTE = (
+	'\n⏳ asked while a retinat_wait was still waiting: this is from before what that wait is for. '
+	'Ask again after the wait returns.'
+)
 # Tools that send input, navigate, scroll or play: refused up front while the person holds the wheel.
 ACTING = frozenset(
 	{
@@ -54,8 +63,10 @@ ACTING = frozenset(
 		'retinat_tap',
 		'retinat_click',
 		'retinat_swipe',
+		'retinat_scroll',
 		'retinat_type',
 		'retinat_key',
+		'retinat_reflex',
 	}
 )
 
@@ -233,7 +244,7 @@ def _desktop_tools() -> list['types.Tool']:
 			),
 			input_schema={
 				'type': 'object',
-				'properties': {'seconds': {'type': 'number', 'default': 8, 'minimum': 1, 'maximum': 60}},
+				'properties': {'seconds': {'type': 'number', 'default': 8, 'minimum': 1, 'maximum': 45}},
 			},
 			annotations=ro,
 		),
@@ -269,7 +280,7 @@ def _browser_tools() -> list['types.Tool']:
 			input_schema={
 				'type': 'object',
 				'properties': {
-					'seconds': {'type': 'number', 'default': 12, 'minimum': 1, 'maximum': 90},
+					'seconds': {'type': 'number', 'default': 12, 'minimum': 1, 'maximum': 45},
 					'until': {'type': 'string', 'enum': ['bored', 'event', 'time', 'item'], 'default': 'bored'},
 					'detail': _DETAIL,
 					'hold': {'type': 'boolean', 'default': True, 'description': 'Pause when done so nothing plays unseen.'},
@@ -294,7 +305,7 @@ def _browser_tools() -> list['types.Tool']:
 				'type': 'object',
 				'properties': {
 					'items': {'type': 'integer', 'default': 5, 'minimum': 1, 'maximum': 30},
-					'max_seconds': {'type': 'number', 'default': 12, 'minimum': 2, 'maximum': 90},
+					'max_seconds': {'type': 'number', 'default': 12, 'minimum': 2, 'maximum': 45},
 					'min_seconds': {'type': 'number', 'default': 3, 'minimum': 0.5, 'maximum': 30},
 					'detail': _DETAIL,
 				},
@@ -313,7 +324,9 @@ def _browser_tools() -> list['types.Tool']:
 			description=(
 				'Find visible text on the page: where each match is (its centre in viewport CSS px, ready for '
 				'retinat_click/tap), whether it is in view or how far to scroll, and a magnified crop around the first '
-				'match in view. Cheaper than a look when you know what you are after.'
+				'match in view. Text the page does not have as text (map labels, words in images, canvas or other '
+				"sites' frames) is read from the screen's pixels when the ocr extra is installed: slower, on screen only. "
+				'Cheaper than a look when you know what you are after.'
 			),
 			input_schema={
 				'type': 'object',
@@ -326,9 +339,24 @@ def _browser_tools() -> list['types.Tool']:
 			annotations=ro,
 		),
 		types.Tool(
+			name='retinat_scroll',
+			description=(
+				'Scroll the page with the real wheel: by `screens` viewport heights (negative is up), or `to` a text '
+				'(the `nth` match, as retinat_find counts them) until it is in view, then say where it is to click.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'screens': {'type': 'number', 'minimum': -50, 'maximum': 50},
+					'to': {'type': 'string'},
+					'nth': {'type': 'integer', 'default': 1, 'minimum': 1, 'maximum': 20},
+				},
+			},
+		),
+		types.Tool(
 			name='retinat_zoom',
 			description=(
-				'A region of the viewport (CSS px, as on the look images) captured fresh at up to 4x: small print and '
+				'A region of the viewport (CSS px: the pixels of a look image times the factor its text gives) captured fresh at up to 4x: small print and '
 				'fine detail redrawn at that size, not upscaled from the look frame.'
 			),
 			input_schema={
@@ -345,7 +373,7 @@ def _browser_tools() -> list['types.Tool']:
 		),
 		types.Tool(
 			name='retinat_tap',
-			description='Tap at viewport coordinates (CSS px, as on the look/scan images) with a real touch event.',
+			description='Tap at viewport coordinates (CSS px: the pixels of a look image times the factor its text gives) with a real touch event.',
 			input_schema={
 				'type': 'object',
 				'properties': {'x': {'type': 'number'}, 'y': {'type': 'number'}},
@@ -355,7 +383,8 @@ def _browser_tools() -> list['types.Tool']:
 		types.Tool(
 			name='retinat_click',
 			description=(
-				'Move the mouse along a human path to viewport coordinates and click (for desktop pages). Says what '
+				'Move the mouse along a human path to viewport coordinates (CSS px, as retinat_find gives them, or the pixels of a look '
+				'image times the factor its text gives) and click (for desktop pages). Says what '
 				'was under the pointer. Pass expect (text you believe is on the target, like "Save") and the click is '
 				'refused if the thing there does not say it: pages move between a look and a click.'
 			),
@@ -447,7 +476,8 @@ def _browser_tools() -> list['types.Tool']:
 			name='retinat_requests',
 			description=(
 				'What the page fetched since it opened: one line per request (method, status or failure, type, path, '
-				'size, time), newest last, plus a cursor. only="failed" for errors, "api" for fetch/XHR/JSON. '
+				'size, time), newest last, plus a cursor; it says how many a limit left out. only="failed" for errors, '
+				'"api" for fetch/XHR/JSON; pattern is a regular expression on the URL. '
 				'body=<#n> returns that response body. Passwords, tokens, keys and card numbers are masked by name and '
 				'by shape. It only listens: nothing is intercepted or changed.'
 			),
@@ -456,6 +486,7 @@ def _browser_tools() -> list['types.Tool']:
 				'properties': {
 					'since': {'type': 'integer', 'default': 0, 'description': 'Only requests after this #n (the cursor).'},
 					'only': {'type': 'string', 'enum': ['all', 'failed', 'api'], 'default': 'all'},
+					'pattern': {'type': 'string', 'description': 'A regular expression the URL must match.'},
 					'limit': {'type': 'integer', 'default': 30, 'minimum': 1, 'maximum': 200},
 					'body': {'type': 'integer', 'description': 'Return the response body of request #n instead.'},
 					'max_chars': {'type': 'integer', 'default': 3000, 'minimum': 200, 'maximum': 20000},
@@ -478,6 +509,73 @@ def _browser_tools() -> list['types.Tool']:
 					'pattern': {'type': 'string', 'description': 'A regular expression the text must match.'},
 					'limit': {'type': 'integer', 'default': 30, 'minimum': 1, 'maximum': 200},
 				},
+			},
+			annotations=ro,
+		),
+		types.Tool(
+			name='retinat_record',
+			description=(
+				'Record what the browser shows to a video file, for the person to review what you did (a screen '
+				'recording of the session). action=start begins; action=stop finishes the file and returns its path. '
+				'Files go to $BROWSER_USE_RECORD_VIDEO_DIR, else ~/.config/browseruse/recordings. It changes nothing on the page.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'action': {'type': 'string', 'enum': ['start', 'stop']},
+					'framerate': {'type': 'integer', 'default': 8, 'minimum': 1, 'maximum': 30},
+				},
+				'required': ['action'],
+			},
+			annotations=ro,
+		),
+		types.Tool(
+			name='retinat_reflex',
+			description=(
+				'Reflexes: rules the page runs every animation frame against what it draws, firing real key or mouse '
+				'input within a few milliseconds. Use them for anything faster than your own turns (a game, a live '
+				'control, waiting for a button): write the rules once, then retinat_wait for what you asked to be told. '
+				'A rule: {"when": <JS expression over see>, then one of "hold": key (held while true), "key": key '
+				'(tapped as it becomes true), "click": <expression giving [x, y]>, "notify": label (wakes retinat_wait)}. '
+				'see.locate([r,g,b], {tol, from, in}) finds a colour on the largest canvas (from: "video", "screen" '
+				'(all on screen as the compositor draws it, frames from other sites too) or a CSS selector; a video '
+				'the page may not read is read on screen; in: [x, y, w, h] viewport px to look only there, e.g. '
+				'just ahead of a runner) -> {x, y, n} '
+				'viewport px; see.track([r,g,b], {...}) -> the same plus vx, vy in px per second; '
+				'see.changed({from, in}) -> share of the picture changed since the last frame; '
+				'see.mean({from, in}) -> average colour {r, g, b, n} of a region (for what has no fixed colour); '
+				'see.level() -> loudness dB of the playing media; see.onset(jumpDb) -> true as a sound starts; '
+				'see.el(css) -> {x, y, w, h, cx, cy}; see.text(css); see.t; see.frame; see.memory. '
+				'action=install replaces the rules; clear stops them and lets go of held keys; status gives counts and '
+				'decision-to-input latency.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'action': {'type': 'string', 'enum': ['install', 'clear', 'status'], 'default': 'install'},
+					'rules': {'type': 'array', 'items': {'type': 'object'}, 'maxItems': 50},
+					'screen_width': {
+						'type': 'integer',
+						'default': 240,
+						'minimum': 120,
+						'maximum': 1920,
+						'description': "How wide the picture {from: 'screen'} reads. 240 sees a game's player and "
+						'obstacles; ask for more to read small things (an on-screen key, a score), at a cost each frame.',
+					},
+				},
+			},
+		),
+		types.Tool(
+			name='retinat_wait',
+			description=(
+				'Sleep until a reflex rule with "notify" fires (or timeout), then say which, when, and what the '
+				'reflexes did meanwhile. Costs nothing while waiting: no images, no polling. Look after it returns, '
+				'not alongside it: a look sent with it runs at once. Up to 50 s (clients stop a call at 60 s): to '
+				'wait longer, call it again.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {'timeout': {'type': 'number', 'default': 30, 'minimum': 0.1, 'maximum': 50}},
 			},
 			annotations=ro,
 		),
@@ -525,6 +623,7 @@ class RetinatServer(BrowserUseServer):
 		self.bridge = bridge
 		self.cdp_url = bridge.cdp_url if bridge else cdp_url
 		self._control: 'DesktopControl | None' = None  # computer use, made on first use
+		self._waits = 0  # retinat_wait calls in progress
 		self.server = Server('retinat', version=get_browser_use_version())
 		self._setup_retinat_handlers()
 
@@ -537,6 +636,10 @@ class RetinatServer(BrowserUseServer):
 
 			token = effects.begin()
 			listed = {t.name: t for t in [*_tools(), *self._network_tool_entries('retinat')]}
+			looking = {name for name, t in listed.items() if t.annotations and t.annotations.read_only_hint}
+			waiting = params.name == 'retinat_wait'
+			before_a_wait = self._waits > 0 and params.name in looking and not waiting
+			self._waits += waiting
 			try:
 				if params.name in listed:
 					effects.check_arguments(listed[params.name].input_schema, params.arguments or {})
@@ -546,12 +649,14 @@ class RetinatServer(BrowserUseServer):
 				content: list[types.ContentBlock] = (
 					result if isinstance(result, list) else [types.TextContent(type='text', text=result)]
 				)
+				if before_a_wait and content and isinstance(content[0], types.TextContent):
+					content[0] = types.TextContent(type='text', text=content[0].text + _WAIT_PENDING_NOTE)
 				return types.CallToolResult(content=content)
 			except Exception as e:
 				# Every input and navigation below goes through effects.act, so a failure says if anything happened.
-				looking = {name for name, t in listed.items() if t.annotations and t.annotations.read_only_hint}
 				return effects.failure(params.name, e, read_only=params.name in looking)
 			finally:
+				self._waits -= waiting
 				effects.end(token)
 
 		async def empty_resources(_context: Any, _params: 'types.PaginatedRequestParams') -> 'types.ListResourcesResult':
@@ -680,6 +785,10 @@ class RetinatServer(BrowserUseServer):
 			if sheet:
 				blocks.append(types.ImageContent(type='image', data=base64.b64encode(sheet).decode(), mime_type='image/jpeg'))
 			return blocks
+		if name == 'retinat_record':
+			return await self._record(str(args['action']), int(args.get('framerate', 8)))
+		if name in ('retinat_reflex', 'retinat_wait'):
+			return await self._reflex(name, args)
 		eyes = await self._eyes()
 		if name == 'retinat_console':
 			from browser_use.eyes.console import render as render_console
@@ -687,12 +796,10 @@ class RetinatServer(BrowserUseServer):
 			log = eyes.console
 			since = int(args.get('since', 0))
 			picked = log.entries(
-				since=since,
-				level=str(args.get('level', 'all')),
-				pattern=str(args.get('pattern') or ''),
-				limit=int(args.get('limit', 30)),
+				since=since, level=str(args.get('level', 'all')), pattern=str(args.get('pattern') or ''), limit=0
 			)
-			return render_console(picked, since, log.last_seq)
+			limit = max(1, int(args.get('limit', 30)))
+			return render_console(picked[-limit:], since, log.last_seq, matched=len(picked))
 		if name == 'retinat_requests':
 			from browser_use.eyes.requests import render
 
@@ -700,8 +807,10 @@ class RetinatServer(BrowserUseServer):
 			if args.get('body') is not None:
 				return await log.body(int(args['body']), max_chars=int(args.get('max_chars', 3000)))
 			since = int(args.get('since', 0))
-			picked = log.entries(since=since, only=str(args.get('only', 'all')), limit=int(args.get('limit', 30)))
-			return render(picked, since, log.last_seq, await self.browser_session.get_current_page_url())
+			picked = log.entries(since=since, only=str(args.get('only', 'all')), pattern=str(args.get('pattern') or ''), limit=0)
+			limit = max(1, int(args.get('limit', 30)))
+			url = await self.browser_session.get_current_page_url()
+			return render(picked[-limit:], since, log.last_seq, url, matched=len(picked))
 		detail = args.get('detail', 'glance')
 		if name == 'retinat_look':
 			return self._content(await eyes.look(detail=detail if detail != 'glance' else 'look'))
@@ -741,6 +850,19 @@ class RetinatServer(BrowserUseServer):
 			return f'{head}{"; " + moved.note if moved.note else ""}. {eyes.now_line()}'
 		if name == 'retinat_find':
 			return self._content(await eyes.find(str(args['text']), limit=int(args.get('limit', 5))))
+		if name == 'retinat_scroll':
+			screens, to = args.get('screens'), str(args.get('to') or '').strip()
+			if (screens is None) == (not to):
+				raise Refused(
+					'Give either screens (how far, negative is up) or to (a text to bring into view), not both or neither.'
+				)
+			return self._content(
+				await act(
+					eyes.scroll(
+						screens=float(screens) if screens is not None else None, to=to or None, nth=int(args.get('nth', 1))
+					)
+				)
+			)
 		if name == 'retinat_zoom':
 			return self._content(await eyes.zoom(float(args['x']), float(args['y']), float(args['width']), float(args['height'])))
 		if name == 'retinat_tap':
@@ -795,6 +917,7 @@ class RetinatServer(BrowserUseServer):
 
 			await eyes.retina.wait_for_data(1.2)  # let the latest batch land in the journal
 			eyes.note_sounds()  # the count of discrete sounds, even if no pause was seen to trigger it
+			eyes.note_requests()  # a fetch refused after the page settled: no batch came along to journal it
 			assert eyes.now_path is not None, 'the eyes keep no journal (now_path=False)'
 			lines = hook.new_entries(eyes.now_path, limit=int(args.get('limit', 20)), reader='retinat')
 			return 'Changes since last asked:\n' + '\n'.join(lines) if lines else 'No changes since last asked.'
@@ -802,6 +925,68 @@ class RetinatServer(BrowserUseServer):
 			await eyes.retina.wait_for_data(1.0)
 			return eyes.now_line()
 		raise Refused(f'Unknown tool: {name}')
+
+	async def _record(self, action: str, framerate: int) -> str:
+		"""Start or finish a screencast video of the browser. The session's own recording only closes its file when the
+		browser stops, which an MCP server's browser never does while the agent works."""
+		import time
+		from pathlib import Path
+
+		from browser_use.config import CONFIG
+		from browser_use.mcp.effects import Refused
+
+		assert action in ('start', 'stop'), action
+		assert self.browser_session is not None
+		recorder = self.browser_session._recording_watchdog
+		if recorder is None:
+			raise Refused('this browser session has no recorder')
+		if action == 'stop':
+			saved = await recorder.stop_recording()
+			if saved is None:
+				raise Refused('no recording is running: start one with action=start')
+			size = Path(saved).stat().st_size if Path(saved).exists() else 0
+			return f'Saved the recording: {saved} ({size / 1e6:.1f} MB).'
+		folder = Path(os.environ.get('BROWSER_USE_RECORD_VIDEO_DIR') or CONFIG.BROWSER_USE_CONFIG_DIR / 'recordings').expanduser()
+		folder.mkdir(parents=True, exist_ok=True)
+		try:
+			out = await recorder.start_recording(folder / f'retinat-{time.strftime("%Y%m%d-%H%M%S")}.mp4', framerate=framerate)
+		except RuntimeError as e:  # one already running, or no viewport yet
+			raise Refused(str(e)) from e
+		return f'Recording to {out} at {framerate} fps. Call retinat_record with action=stop to finish the file.'
+
+	async def _reflex(self, name: str, args: dict[str, Any]) -> str:
+		"""Install, clear or report the tab's reflexes, or wait for one to notify."""
+		from browser_use.eyes.reflex import Reflexes
+		from browser_use.mcp.effects import Refused
+
+		assert self.browser_session is not None
+		reflexes = getattr(self, '_reflexes', None)
+		if reflexes is None or reflexes.session is not self.browser_session:
+			reflexes = self._reflexes = Reflexes(self.browser_session)
+		if name == 'retinat_wait':
+			if not reflexes.installed:
+				raise Refused('no reflexes are installed: install rules with retinat_reflex first')
+			event = await reflexes.wait(timeout=float(args.get('timeout', 30)))
+			stats = reflexes.stats()
+			done = f'{stats["actions"]} input actions so far, decision to input p50 {stats["latency_ms_p50"]} ms'
+			if event is None:
+				return f'Nothing notified in {float(args.get("timeout", 30)):.0f}s. The reflexes keep running: {done}.'
+			at = f', video at {event.media_t:.2f}s' if event.media_t is not None else ''
+			return f'"{event.label}" (rule {event.rule}) fired at page time {event.page_ms / 1000:.2f}s{at}. {done}.'
+		action = str(args.get('action') or 'install')
+		if action == 'clear':
+			await reflexes.clear()
+			return 'Reflexes stopped; held keys released.'
+		if action == 'status':
+			return json.dumps(reflexes.stats())
+		rules = args.get('rules') or []
+		if not rules:
+			raise Refused('give rules to install (or action=clear / status)')
+		try:
+			count = await reflexes.install(rules, screen_width=int(args.get('screen_width') or 240))
+		except (ValueError, AssertionError) as e:
+			raise Refused(str(e)) from e
+		return f'{count} reflex rule(s) running every frame on this tab. retinat_wait sleeps until one notifies.'
 
 	async def _close_all_sessions(self) -> str:
 		if self._control is not None:
@@ -887,11 +1072,7 @@ async def main(cdp_url: str | None = None, network: NetworkRouter | None = None,
 		bridge = await BridgeRelay(port=bridge_port).start()
 		print(f'Retinat bridge on {bridge.cdp_url}; load the extension from {EXTENSION_DIR} and share a tab.', file=sys.stderr)
 	server = RetinatServer(cdp_url=cdp_url, network=network, bridge=bridge)
-	try:
-		await server.run()
-	finally:
-		if bridge:
-			await bridge.stop()
+	await serve_until_stopped(server)  # closes the bridge and Tor with the browsers
 
 
 def cli() -> None:

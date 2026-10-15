@@ -199,7 +199,8 @@ continuous stream on disk rather than in your context.
 | Tap, swipe, click, type, press a key | `retinat_tap`, `retinat_swipe`, `retinat_click`, `retinat_type`, `retinat_key` | text only |
 | Find a moment by what it looked like, across everything archived ("a slide full of code") | `retinat_search` with `query` | 1 strip of up to 8 frames; first use downloads a ~300 MB open model |
 | Read small print or fine detail in part of the screen | `retinat_zoom` with the region in viewport px | 1 crop, redrawn at up to 4x (about 70-400 tokens) |
-| Find text on the page: where to click it, or how far to scroll to it | `retinat_find` with the text | a line per match plus a magnified crop of the first in view |
+| Find text on the page: where to click it, or how far to scroll to it | `retinat_find` with the text | a line per match plus a magnified crop of the first in view; text drawn into images, maps or canvas is read from the screen's pixels with the `ocr` extra (seconds, on screen only) |
+| Scroll the page: by screens, or until some text is in view | `retinat_scroll` with `screens` (negative is up) or `to` | a line, or find's answer once the text is in view |
 | Look again at one moment of a video you already watched (by media time) | `retinat_recall` with `t0`, `t1` | 1 strip of up to 8 frames (about 300-900 tokens) |
 | Know what's playing without an image | `retinat_now` | about 30 tokens |
 | What appeared, played or flashed since you last asked (toasts, sounds, cuts), for clients without the hook | `retinat_changes` | text only, a line per change |
@@ -209,10 +210,73 @@ continuous stream on disk rather than in your context.
 
 Token figures are estimates. Images are costed at about one token per 28×28 px patch.
 
-Coordinates for `retinat_tap` and `retinat_click` are viewport CSS pixels. Read them off the
-`retinat_look` image, or take them from browser-use's `browser_get_state`. `retinat_click` says what it landed on
+Coordinates for `retinat_tap` and `retinat_click` are viewport CSS pixels. A look image is smaller than the page:
+its text says by how much ("frame 640x363 of the 1920x1089 CSS px viewport: to click, multiply its pixels by 3.00"),
+so multiply what you read off it. `retinat_find` gives CSS pixels directly, as does browser-use's `browser_get_state`. `retinat_click` says what it landed on
 (`Clicked (160, 120) on button "Save".`). Give it `expect` with text the target carries, and it refuses a click that
 would land on something else. Pages shift between a look and a click, and Delete sits next to Save.
+
+## Reflexes: faster than your turns
+
+You think in seconds; a game, a live control or a button that appears needs an answer within a frame. Don't poll
+with looks. Write rules once with `retinat_reflex`. The page runs them every animation frame against what it draws,
+and real key or mouse input goes out within a few milliseconds. Then `retinat_wait` sleeps until a rule you marked
+`notify` fires, at no cost in images while it waits.
+
+```json
+{"rules": [
+  {"when": "see.locate([255,0,0]) && see.locate([255,0,0]).x < see.locate([0,0,255]).x - 12", "hold": "ArrowLeft"},
+  {"when": "see.text('#status') === 'GAME OVER'", "notify": "game over"}
+]}
+```
+
+- **What a rule sees:**
+  - `see.locate([r,g,b], {tol, in})`: where a colour is on the largest canvas, as `{x, y, n}` in viewport px.
+    `in: [x, y, w, h]` looks only in that region, for games whose player, ground and obstacles share one colour
+    (the T-Rex runner): "is something grey just ahead of me" is `see.locate(grey, {in: ahead})`.
+  - `from`: the largest canvas by default, else `'video'`, a CSS selector, or `'screen'`: everything on screen as
+    the compositor draws it, frames from other sites included (a game embedded from another origin, as on itch.io).
+    The screen comes to the rules as the compositor draws it (a screencast on its own DevTools connection): a
+    picture is ~10 ms old when they get it. In tests, a square drawn in a frame from another origin was clicked 34-39 ms after it was
+    drawn. A cut in a cross-origin 1080p film was caught 27-53 ms after its first frame reached the screen (median
+    of 10 cuts a run, measured with `requestVideoFrameCallback`; single cuts up to ~130 ms when the page is busy at
+    the cut). An event's "video at" is the frame the rule saw, not the video's clock when it fired: that clock runs
+    ~20-30 ms ahead of the screen. On that film, 30 cuts of 30 were placed on their own frame; live on Wikimedia
+    Commons, 0-50 ms from the edit list (it had said 0.10-0.12 s late). A same-page canvas, read directly, is still
+    faster (~2 ms). A browser this session did not launch (remote, or the person's own through the bridge) is
+    captured instead, ~50 ms a picture or more on a busy page. A video the page may not read (another origin without
+    CORS, as on Wikimedia Commons) is read on screen automatically, within its box.
+  - `see.changed({in})`: the share of the picture, or of that region, that changed since the last frame.
+  - `see.mean({in})`: the average colour `{r, g, b, n}` of a region. Use it for what has no fixed colour. In MR Racer on
+    Poki the road's colour shifts with the game's tint and light, so a rule compares regions with each other instead
+    of with a fixed colour.
+  - `see.track([r,g,b], {in})`: `locate` plus `vx`, `vy` in px per second, so a rule can act on where a thing will
+    be: `see.track(red).x + see.track(red).vx * 0.2` is where it will be in 200 ms.
+  - `see.el(css)`: `{x, y, w, h, cx, cy}`.
+  - `see.text(css)`.
+  - `see.t`, `see.frame` and `see.memory`.
+- **What a rule does:**
+  - `hold` holds a key while the condition is true;
+  - `key` taps a key as it becomes true;
+  - `click` clicks an expression's `[x, y]`;
+  - `notify` wakes `retinat_wait`, and only after the same rule's input has gone out.
+- **Measured:** in a canvas game it kept a paddle under a moving ball in 211 of 211 frames, from one install call.
+  A decision reached the page as a real key event in 1.6 ms (p50) and 2.2 ms (p95). Add up to one frame, 16.7 ms
+  at 60 Hz, to see the change.
+- **The page can't forge input:** the rules run in an isolated world, and the page's own script cannot reach their
+  input channel.
+- `action=status` gives counts and latency, and, when rules read the screen, how many pictures they got, how old a
+  picture was when they read it (`screen_ms_p50`), where the pictures came from (`screen_source`: screencast or
+  captures). On a page drawn without a GPU (a WebGL game)
+  the pictures are slower because the browser is: Subway Surfers on Poki drew 3 frames a second at 1905x1080, with
+  pictures 600 ms old, and 8 a second, 136 ms, with the profile's `viewport` set to 960x540 in the browser-use config. `action=clear` stops the rules and releases held keys.
+- **`screen_width`** (install): how wide the screen picture is, 240 by default. That sees a game's player and
+  obstacles, but a 30 px on-screen key is 7 of its pixels. Ask for 480 to read small things. Every picture is decoded
+  and handed over whole, so it costs: on Temple Run 2, 480 gave pictures 160 ms old (72-117 at 240), and 960 gave
+  510 ms.
+- **Look after `retinat_wait` returns, not alongside it.** A client may send both at once, and the look then runs
+  straight away, before what you are waiting for. Such a look says so ("asked while a retinat_wait was still
+  waiting").
 
 ## Hard rules
 
@@ -284,9 +348,12 @@ Corporate proxies and agent sandboxes present their own CA. If every page fails 
 `ERR_CERT_AUTHORITY_INVALID`, set `BROWSER_USE_PROXY_CA_CERT=/path/to/proxy-ca.pem`. Only that
 key is trusted, and verification stays on for everything else.
 
-The navigation error names this setting when it detects such an environment. There is no
-automatic detection: telling private CAs from public ones automatically was tried, and it
-wrongly trusted public CAs.
+Usually nothing needs setting. When a page fails that way, the browser reads the chain it was shown and
+learns the CA that signed it, but only if the environment's own CA bundle (`SSL_CERT_FILE` and friends) already
+trusts it, it is not a public root, and its key verifiably signed that chain. Diffing bundles was tried first and
+would have trusted public CAs, so it is not used. The CA is saved for this network, and later browsers trust it from
+the start. Retinat and `browser-use --mcp` restart their browser and retry once, so the first `retinat_open` works.
+If no CA in the bundle signed the chain, the error names the setting.
 
 ## Choosing the route: direct, or Tor with an exit country
 

@@ -28,6 +28,8 @@ _FINALIZE_TIMEOUT = 15.0
 _DISPLAY_START_TIMEOUT = 10.0
 # Long enough for ffmpeg to reject an unreachable display, which it does immediately.
 _STARTUP_GRACE = 0.4
+# How long the end of a recording waits for ffmpeg to have set up its output (its first progress report)
+_READY_TIMEOUT = 15.0
 
 
 class RecorderUnavailable(RuntimeError):
@@ -122,6 +124,8 @@ async def record_display(display: str, output: Path | str, width: int, height: i
 		'-y',
 		'-loglevel',
 		'error',
+		'-progress',
+		'pipe:1',  # reported once ffmpeg's output is set up: the recording may end only after that
 		'-f',
 		'x11grab',
 		# The X server's own cursor never moves for synthetic CDP input, so grabbing it would
@@ -146,20 +150,28 @@ async def record_display(display: str, output: Path | str, width: int, height: i
 		'+faststart',
 		str(output),
 		stdin=asyncio.subprocess.PIPE,
-		stdout=asyncio.subprocess.DEVNULL,
+		stdout=asyncio.subprocess.PIPE,
 		stderr=asyncio.subprocess.PIPE,
 		env={**os.environ, 'DISPLAY': display},
 	)
+	# ffmpeg reports progress only once its output is set up (it first probes the input for ~2 s, keeping what it
+	# reads). A 'q' sent before then ends it with nothing written: a short recording under load came back empty
+	# (found in a full test run). So the end of a recording waits for that first report; the start does not.
+	ready = asyncio.Event()
+	follow = asyncio.create_task(_follow_progress(process, ready))
 	await asyncio.sleep(_STARTUP_GRACE)
 	if process.returncode is not None:
+		follow.cancel()
 		raise RecordingFailed(f'ffmpeg exited at start-up with code {process.returncode}: {await _stderr_tail(process)}')
 	try:
 		yield output
 	except BaseException:
 		# Whatever is unwinding is the more important error; still stop ffmpeg cleanly.
-		await _finalize(process)
+		await _finalize(process, ready)
+		follow.cancel()
 		raise
-	await _finalize(process)
+	await _finalize(process, ready)
+	follow.cancel()
 	if process.returncode != 0 or not output.exists() or output.stat().st_size == 0:
 		raise RecordingFailed(f'ffmpeg finished with code {process.returncode} and no usable file: {await _stderr_tail(process)}')
 
@@ -174,9 +186,23 @@ async def _stderr_tail(process: 'asyncio.subprocess.Process', limit: int = 400) 
 	return data.decode(errors='replace').strip()[-limit:]
 
 
-async def _finalize(process: 'asyncio.subprocess.Process') -> None:
+async def _follow_progress(process: 'asyncio.subprocess.Process', ready: asyncio.Event) -> None:
+	"""Read ffmpeg's -progress lines (keeping its stdout drained) and set `ready` at the first: its output is set up."""
+	assert process.stdout is not None
+	while await process.stdout.readline():
+		ready.set()
+
+
+async def _finalize(process: 'asyncio.subprocess.Process', ready: asyncio.Event | None = None) -> None:
 	if process.returncode is not None:
 		return
+	if ready is not None and not ready.is_set():
+		waits = [asyncio.create_task(ready.wait()), asyncio.create_task(process.wait())]
+		await asyncio.wait(waits, timeout=_READY_TIMEOUT, return_when=asyncio.FIRST_COMPLETED)
+		for wait in waits:
+			wait.cancel()
+		if process.returncode is not None:
+			return
 	try:
 		assert process.stdin is not None
 		process.stdin.write(b'q')

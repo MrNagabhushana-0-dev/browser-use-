@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from browser_use import logger
 from browser_use.actor.utils import get_key_info
+from browser_use.browser.capture import capture_screenshot
 from browser_use.dom.serializer.serializer import DOMTreeSerializer
 from browser_use.dom.service import DomService
 from browser_use.llm.messages import SystemMessage, UserMessage
@@ -206,7 +207,7 @@ class Page:
 		if quality is not None and format.lower() == 'jpeg':
 			params['quality'] = quality
 
-		result = await self._client.send.Page.captureScreenshot(params, session_id=session_id)
+		result = await capture_screenshot(self._client, params, session_id)
 
 		return result['data']
 

@@ -39,6 +39,8 @@ MouseButton = Literal['left', 'right', 'middle']
 # A wheel notch in Chrome. Real wheels move in notches, not smooth pixel deltas, and some
 # feeds (Shorts, Reels) count notches to decide whether you flicked or nudged.
 WHEEL_NOTCH_PX = 100.0
+# An input event the page took longer than this to take in: it is drawing few frames a second
+SLOW_INPUT_S = 0.15
 
 
 # What a real keyboard sends for the keys an agent actually presses: DOM code, virtual key
@@ -132,11 +134,21 @@ class HumanInput:
 		total_ms = move_duration_ms(((x - self.x) ** 2 + (y - self.y) ** 2) ** 0.5, self.rng) / haste
 		per_step = (total_ms / max(1, len(path))) / 1000.0
 
-		for px, py in path:
-			await self._mouse(cdp, 'mouseMoved', px, py)
+		# Each step is where the glide is by the clock when it is sent, not the next point in the list. Chrome takes
+		# in mouse moves with the page's frames, so on a page drawing a few frames a second (WebGL drawn in software)
+		# every step waited for one: 17.7 s to cross the screen at 3 frames a second, 82.8 s at 1. On such a page the
+		# glide skips ahead along the same path and still ends where it was going.
+		started = time.monotonic()
+		i = 0
+		while i < len(path):
+			await self._mouse(cdp, 'mouseMoved', *path[i])
+			if i == len(path) - 1:
+				break
 			# The sleep is the point: without it every move lands in the same millisecond
 			# and the page sees a teleport with extra steps.
 			await asyncio.sleep(per_step)
+			due = int((time.monotonic() - started) * 1000 / max(1.0, total_ms) * (len(path) - 1))
+			i = min(len(path) - 1, max(i + 1, due))
 		self.x, self.y = x, y
 
 	async def click(
@@ -182,15 +194,24 @@ class HumanInput:
 		notches = max(1, int(abs(delta_y) / WHEEL_NOTCH_PX) or 1)
 		step_y = delta_y / notches
 		step_x = delta_x / notches
-		for _ in range(notches):
-			await self._mouse(
-				cdp,
-				'mouseWheel',
-				self.x,
-				self.y,
-				deltaX=step_x * self.rng.uniform(0.9, 1.1),
-				deltaY=step_y * self.rng.uniform(0.9, 1.1),
-			)
+		left_y, left_x = delta_y, delta_x
+		for n in range(notches):
+			last = n == notches - 1
+			dy = left_y if last else step_y * self.rng.uniform(0.9, 1.1)
+			dx = left_x if last else step_x * self.rng.uniform(0.9, 1.1)
+			sent = time.monotonic()
+			await self._mouse(cdp, 'mouseWheel', self.x, self.y, deltaX=dx, deltaY=dy)
+			left_y, left_x = left_y - dy, left_x - dx
+			if last:
+				break
+			if time.monotonic() - sent > SLOW_INPUT_S:
+				# The page takes input with its frames and is drawing few of them (each notch waited ~0.4-1 s on
+				# WebGL drawn in software): what is left goes in one turn, as far in all
+				await self._mouse(cdp, 'mouseWheel', self.x, self.y, deltaX=left_x, deltaY=left_y)
+				# Chrome answers a wheel event before the page has taken it in, and here the last turn is most of the
+				# scroll: a mouse move is answered after, and input is taken in order, so the scroll has landed by then
+				await self._mouse(cdp, 'mouseMoved', self.x, self.y)
+				break
 			await asyncio.sleep(self.rng.uniform(0.02, 0.06))
 
 	# -- keyboard --------------------------------------------------------------------

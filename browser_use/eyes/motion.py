@@ -6,8 +6,8 @@ luma samples (about 10 a second). What changed since the previous sample, weight
 object, and its centroid is tracked. A turning point is recorded when the object has come back by more
 than HYSTERESIS cells from its extreme, so jitter is not a bounce.
 
-It only speaks when the scene fits: a still background and one compact moving thing (at most
-MAX_MOVING_FRACTION of the grid differs in a typical frame). A camera pan or ordinary footage changes
+It only speaks when the scene fits: one shot, a still background and one compact moving thing (at
+most MAX_MOVING_FRACTION of the grid differs in a typical frame). A camera pan or ordinary footage changes
 most of the grid and gets no motion line rather than a wrong one.
 """
 
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from browser_use.eyes.retina import FrameSample
-from browser_use.eyes.sight import LOOP_JUMP_S, strays
+from browser_use.eyes.sight import LOOP_JUMP_S, read, strays
 
 GRID = 16
 DIFF_FLOOR = 12  # luma levels: below this a cell matches the background
@@ -89,6 +89,10 @@ def track(frames: list[FrameSample]) -> Motion | None:
 	drop = strays([f.t for f in frames], LOOP_JUMP_S)
 	frames = sorted((f for i, f in enumerate(frames) if i not in drop and len(f.luma) == GRID * GRID), key=lambda f: f.t)
 	if len(frames) < 8:
+		return None
+	# One background: across a cut or a fade, what moves in the next shot is something else (found on a film, where
+	# a bird, a stream and clouds in six shots became "one moving object" that reached the bottom 14 times)
+	if any(not shot.after_loop for shot in read(frames).shots[1:]):
 		return None
 	lum = np.stack([np.frombuffer(f.luma, dtype=np.uint8).reshape(GRID, GRID).astype(np.float32) for f in frames])
 	diff = np.abs(np.diff(lum, axis=0))

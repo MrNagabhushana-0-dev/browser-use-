@@ -65,6 +65,7 @@ class ItemPercept:
 	keyframes: list[Keyframe] = field(default_factory=list)
 	coverage: float = 0.0
 	watched_s: float = 0.0
+	earlier: bool = False  # an earlier percept reported this item (what came before this one was seen there)
 	muted: bool | None = None
 	tainted: bool = False
 	motion: motion_mod.Motion | None = None
@@ -143,7 +144,8 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	size = f'{info.get("w")}x{info.get("h")}' if info.get('w') else 'size unknown'
 	duration = info.get('duration')
 	label = {'canvas': 'canvas', 'desktop': 'screen'}.get(info.get('kind', ''), 'video')
-	head = f'[{item.index}] {label} {size}'
+	name = (info.get('name') or '').strip()
+	head = f'[{item.index}] {label}' + (f' "{name[:80]}"' if name else '') + f' {size}'
 	if duration:
 		head += f', {_fmt(duration)} long'
 	head += f', watched {item.watched_s:.1f}s'
@@ -152,15 +154,21 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 		head += f', covering {_fmt(t0)}-{_fmt(t1)}'
 	if item.sight.loops:
 		head += f', looped {len(item.sight.loops)}x (seen in full)'
-	lines.append(head)
+	lines.append(head + (page_text_note(name) if name else ''))
 	if (item.frames or item.hops) and t0 > 1.0:
-		# what played before t0 was not held: silence or stillness in this percept says nothing about it
-		lines.append(f'    the first {_fmt(t0)} was not held: sound and pictures before it are unknown, not absent')
+		if item.earlier:
+			lines.append(f'    before {_fmt(t0)}: in an earlier percept, not repeated here')
+		else:
+			# what played before t0 was not held: silence or stillness in this percept says nothing about it
+			lines.append(f'    the first {_fmt(t0)} was not held: sound and pictures before it are unknown, not absent')
 	text = (info.get('text') or '').strip()
 	if text:
 		lines.append(f'    on screen: "{text[:240]}"' + page_text_note(text))
 	if item.tainted:
-		lines.append('    picture: unreadable (cross-origin video without CORS); only sound and on-screen text are known')
+		lines.append(
+			'    picture: from the compositor, as drawn on the page (a cross-origin video without CORS, which the page '
+			'cannot read); its sound cannot be read'
+		)
 
 	# Pair each shot with the sound under it. After a loop the shots repeat; say so once.
 	shots = []
@@ -177,7 +185,7 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 			if _overlap(s.t0, s.t1, shot.t0, shot.t1) >= min(0.3, 0.25 * max(shot.duration, 0.01))
 		]
 		sound = ', '.join(dict.fromkeys(hearing_mod.describe_segment(s) for s in sounds)) or '-'
-		opener = 'cut->' if k else 'start'
+		opener = ('fade->' if shot.gradual else 'cut->') if k else 'start'
 		lines.append(f'    {_fmt(shot.t0):>6}-{_fmt(shot.t1):<6} {opener:6} {sight_mod.describe_shot(shot):24} | {sound}')
 	if len(shots) > 12:
 		lines.append(f'    ... {len(shots) - 12} more shots')
@@ -191,6 +199,8 @@ def describe_item(item: ItemPercept, transcript_chars: int = 600) -> str:
 	h = item.hearing
 	if info.get('kind') in ('canvas', 'desktop') and not h.heard:
 		pass  # a canvas has no sound of its own: nothing to say
+	elif item.tainted and not h.heard:
+		pass  # said on the picture line: the sound of a cross-origin video without CORS cannot be read, not absent
 	elif not h.heard:
 		lines.append('    sound: none captured (no audio track, or it had not started)')
 	else:
@@ -354,9 +364,11 @@ def render_sheet(items: list[ItemPercept], detail: str = 'glance', max_width: in
 	return buf.getvalue(), width, height
 
 
-def assemble(items: list[ItemPercept], header: str, detail: str = 'glance', footer: str = '') -> Percept:
+def assemble(
+	items: list[ItemPercept], header: str, detail: str = 'glance', footer: str = '', empty: str = '(no video was on screen)'
+) -> Percept:
 	"""Text + sheet + token accounting for a list of items."""
-	body = '\n'.join(describe_item(i) for i in items) if items else '    (no video was on screen)'
+	body = '\n'.join(describe_item(i) for i in items) if items else f'    {empty}'
 	sheet = render_sheet(items, detail)
 	image, size, image_tokens = None, None, 0
 	if sheet:

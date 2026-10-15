@@ -357,6 +357,162 @@ async def test_cuts_and_sounds_are_found_where_they_are(eyes, session, site):
 	assert len(clicks) >= 4, f'5 clicks in the beats section, onsets there: {clicks}'
 
 
+@pytest.fixture(scope='module')
+def elsewhere(media):
+	"""A second origin serving the same media with no CORS headers, as the CDNs behind most players do."""
+	server = HTTPServer()
+	server.start()
+	for name, data in media.items():
+		_serve(server, f'/{name}', data)
+	yield server
+	server.clear()
+	if server.is_running():
+		server.stop()
+
+
+async def test_a_cross_origin_video_is_watched_from_the_compositor(eyes, session, site, elsewhere):
+	"""Found hands-on on Wikimedia Commons: its player streams from another origin without CORS, so the page cannot
+	read the video's pixels, and the watch said "no video was on screen" while the film played. The pictures now come
+	from the compositor, as drawn on the page; the sound stays unreadable, and the percept says so."""
+	site.expect_request('/cross').respond_with_data(
+		PLAYER.format(src=elsewhere.url_for('/calib.webm'), attrs='autoplay', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/cross'))
+	p = await eyes.watch(seconds=4 * SECTION + 1.0, until='time')
+
+	assert len(p.items) == 1, p.text
+	item = p.items[0]
+	assert item.tainted and 'compositor' in p.text, p.text
+	cuts = item.sight.cuts
+	assert len(cuts) == 3, f'expected cuts at 2.5/5/7.5, got {cuts}'
+	for got, want in zip(cuts, (SECTION, 2 * SECTION, 3 * SECTION)):
+		assert _near(got, want, 0.4), f'cut at {got:.2f}s, expected {want}s'
+	assert p.image is not None, 'keyframes, taken from the compositor'
+	assert 'sound cannot be read' in p.text and 'none captured' not in p.text, 'unreadable is not absent: ' + p.text
+
+
+async def test_a_cross_origin_video_watched_later_is_still_said_to_be_cross_origin(eyes, session, site, elsewhere):
+	"""Found hands-on on Wikimedia Commons: the film was found unreadable when it started, and a watch begun some
+	seconds later forgot it: no "from the compositor" line, and its sound "none captured (no audio track)" rather
+	than unreadable. The retina says a video is unreadable once; a percept must know it whenever it is built."""
+	site.expect_request('/cross-later').respond_with_data(
+		PLAYER.format(src=elsewhere.url_for('/calib.webm'), attrs='autoplay loop', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/cross-later'))
+	await asyncio.sleep(2.0)  # it plays, and is found unreadable, before anyone watches
+	p = await eyes.watch(seconds=2.0, until='time')
+
+	assert len(p.items) == 1, p.text
+	assert p.items[0].tainted and 'from the compositor' in p.text, p.text
+	assert 'sound cannot be read' in p.text and 'none captured' not in p.text, 'unreadable is not absent: ' + p.text
+
+
+async def test_compositor_sight_takes_its_pictures_from_the_screencast(eyes, session, site, elsewhere):
+	"""Compositor sight captured the video's box six times a second. Captures no longer clip (they showed in the
+	screencast), and a capture of the whole viewport costs ~95 ms on a busy page against ~32 ms clipped. Chrome's
+	screencast already sends the page as drawn: the box is cut from its frames, with no capture."""
+	from browser_use.browser import capture
+
+	site.expect_request('/cross-cast').respond_with_data(
+		PLAYER.format(src=elsewhere.url_for('/calib.webm'), attrs='autoplay muted', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/cross-cast'))
+	await asyncio.sleep(1.0)
+	before = capture.captures_taken
+	p = await eyes.watch(seconds=3.0, until='time')
+	taken = capture.captures_taken - before
+	assert p.items and p.items[0].tainted and len(p.items[0].frames) >= 12, p.text
+	assert taken <= 2, f'{taken} captures for {len(p.items[0].frames)} pictures'
+	assert len(p.items[0].sight.cuts) >= 1, p.text  # the calibration clip cuts from red to the test pattern at 2.5 s
+
+
+async def test_compositor_pictures_carry_the_time_the_film_was_at(eyes, session, site, elsewhere, tmp_path):
+	"""Found on Wikimedia Commons: keyframes of a cross-origin film listed "at 2.2s 3.9s 3.5s 4.8s", and the one at
+	3.5 s showed clouds that come in after 4.2 s. A compositor picture was labelled with the page's last report of
+	media time (once a second) run forward by the wall clock, so while the stream stalled to buffer the labels ran
+	ahead, then went back. A stall leaves a film "playing" with its clock stopped; here a playback rate of 0 for a
+	second does the same."""
+	film = tmp_path / 'rgb.webm'
+	_run(
+		*['-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=2', '-f', 'lavfi', '-i', 'color=c=lime:s=320x180:r=30:d=2'],
+		*['-f', 'lavfi', '-i', 'color=c=blue:s=320x180:r=30:d=2'],
+		*['-filter_complex', '[0][1][2]concat=n=3:v=1:a=0,format=yuv420p[v]', '-map', '[v]'],
+		*['-c:v', 'libvpx-vp9', '-b:v', '100k', '-deadline', 'realtime', '-cpu-used', '8', str(film)],
+	)
+	_serve(elsewhere, '/rgb.webm', film.read_bytes())
+	stall = (
+		"<script>const v = document.querySelector('video'); let stalled = false;"
+		"v.addEventListener('timeupdate', () => { if (!stalled && v.currentTime > 1.2) { stalled = true;"
+		' v.playbackRate = 0; setTimeout(() => { v.playbackRate = 1; }, 1500); } });</script>'
+	)
+	site.expect_request('/stalls').respond_with_data(
+		PLAYER.format(src=elsewhere.url_for('/rgb.webm'), attrs='autoplay muted', extra=stall), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/stalls'))
+	p = await eyes.watch(seconds=7.5, until='time')
+	assert p.items and p.items[0].tainted, p.text
+	wrong = []
+	for f in p.items[0].frames:
+		r, g, b = f.rgb
+		colour = 'red' if r > max(g, b) + 60 else 'green' if g > max(r, b) + 60 else 'blue' if b > max(r, g) + 60 else ''
+		expected = 'red' if f.t < 2 else 'green' if f.t < 4 else 'blue'
+		near_a_change = min(abs(f.t - 2), abs(f.t - 4)) < 0.25
+		if colour and colour != expected and not near_a_change:
+			wrong.append((round(f.t, 2), colour))
+	assert not wrong, f'pictures labelled with a time the film was not at: {wrong}'
+	ts = [f.t for f in p.items[0].frames]
+	assert all(b >= a - 0.05 for a, b in zip(ts, ts[1:])), f'labels went backwards: {ts}'
+
+
+def test_a_picture_is_labelled_with_the_time_the_film_was_at_when_drawn():
+	"""Found in a full tests/ci run: under load, compositor labels went 1.26 s then 1.20 s. A picture was labelled with the
+	film's time read now, less the picture's age, which supposes the film's clock ran all that while; in a stall it
+	stood still. The film's time at the moment a picture was drawn comes from readings of its clock on either side."""
+	from collections import deque
+
+	from browser_use.eyes.retina import media_time_at
+
+	playing_then_stalled = [(100.0, 1.0), (100.2, 1.2), (100.4, 1.25), (100.6, 1.25), (100.8, 1.25)]
+	assert media_time_at(playing_then_stalled, 100.1) == pytest.approx(1.1)
+	assert media_time_at(playing_then_stalled, 100.7) == pytest.approx(1.25)  # not 1.25 less its age
+	assert media_time_at(playing_then_stalled, 99.9) == pytest.approx(0.9)  # before the first reading: run back
+	assert media_time_at(playing_then_stalled, 101.0) == pytest.approx(1.25)  # after the last: not run on
+	seeked_back = [(100.0, 30.0), (100.2, 2.0)]
+	assert media_time_at(seeked_back, 100.05) == pytest.approx(30.0)
+	assert media_time_at(seeked_back, 100.15) == pytest.approx(2.0)
+	assert media_time_at([], 100.0) is None
+	assert media_time_at(deque(playing_then_stalled), 100.7) == pytest.approx(1.25)  # as the compositor keeps them
+
+
+async def test_the_eyes_keep_to_the_page_not_the_frames_inside_it(eyes, session, site, elsewhere):
+	"""Found hands-on on the Guardian's front page: a look said "no video playing on
+	https://assets.guim.co.uk/commercial/tpc-test/v2/index.html", an advertising frame inside the page. The retina ran
+	in every frame the tab holds (site isolation is off), and whichever frame spoke last set the page's URL and what it
+	attended."""
+	elsewhere.expect_request('/ad').respond_with_data(
+		'<!doctype html><body>ad<script>setInterval(() => document.body.append("."), 100)</script></body>',
+		content_type='text/html',
+	)
+	# the frame comes a second after the page, as ads do, so it is a new document once the eyes are open
+	extra = (
+		'<script>setTimeout(() => { const f = document.createElement("iframe");'
+		f' f.src = "{elsewhere.url_for("/ad")}"; f.width = 300; f.height = 100;'
+		' f.style = "position:fixed;top:0;left:0"; document.body.append(f); }, 1000)</script>'
+	)
+	site.expect_request('/framed').respond_with_data(
+		PLAYER.format(src=site.url_for('/calib.webm'), attrs='autoplay loop', extra=extra), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/framed'))
+	await asyncio.sleep(1.5)
+	urls, attended = set(), set()
+	for _ in range(15):
+		await asyncio.sleep(0.2)
+		urls.add(eyes.retina.state.get('url', ''))
+		attended.add(eyes.retina.attended.get('vid', 0))
+	assert urls == {site.url_for('/framed')}, urls
+	assert 0 not in attended, f'the video was dropped from attention: {attended}'
+
+
 async def test_a_muted_video_is_still_heard_and_said_to_be_muted(eyes, session, site):
 	# captureStream taps the audio before volume and mute: the agent can listen without
 	# making a sound, and must not report a muted reel as silent.
@@ -554,6 +710,122 @@ async def test_watch_until_bored_stops_on_a_still_picture(eyes, session, site):
 	assert p.ended_at - p.started_at < 8.0
 
 
+async def test_watch_until_bored_waits_longer_on_a_film_than_on_a_reel(eyes, session, site, tmp_path):
+	"""Found on Wikimedia Commons: a 35 s watch of a 10-minute film stopped at 6.7 s, "nothing new for 2s", on a slow
+	pan over clouds; the next cut came 10 s later. Two calm seconds say little about a film. On two whole films a 2 s
+	window ended most watches while more shots were coming; an item longer than any watch now gets 8 s."""
+	film = tmp_path / 'film.webm'
+	_run(
+		*['-f', 'lavfi', '-i', 'color=c=red:s=160x90:r=10:d=7', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=10:d=113'],
+		*['-filter_complex', '[0][1]concat=n=2:v=1:a=0,format=yuv420p[v]', '-map', '[v]'],
+		*['-c:v', 'libvpx-vp9', '-b:v', '50k', '-deadline', 'realtime', '-cpu-used', '8', str(film)],
+	)
+	_serve(site, '/film.webm', film.read_bytes())
+	site.expect_request('/film').respond_with_data(
+		PLAYER.format(src='/film.webm', attrs='autoplay muted', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/film'))
+	p = await eyes.watch(seconds=12.0, until='bored', min_seconds=1.0)
+	assert p.ended_at - p.started_at > 8.0, f'stopped on the calm opening of a 2-minute film: {p.stop_reason}'
+	assert p.items and any(abs(c - 7.0) < 0.5 for c in p.items[-1].sight.cuts), p.text
+
+
+async def test_watch_until_bored_waits_longer_on_a_live_stream_too(eyes, session, site, tmp_path):
+	"""A live stream has no length (the page says Infinity), and got a reel's 2 s. Live broadcasts are edited like films;
+	tried on YouTube's ISS stream, which this network is not served (a CAPTCHA page), so this is a stream the page
+	plays through Media Source Extensions with its duration set to Infinity, as live players do."""
+	film = tmp_path / 'live.webm'
+	_run(
+		*['-f', 'lavfi', '-i', 'color=c=red:s=160x90:r=10:d=7', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=10:d=23'],
+		*['-filter_complex', '[0][1]concat=n=2:v=1:a=0,format=yuv420p[v]', '-map', '[v]'],
+		*['-c:v', 'libvpx-vp9', '-b:v', '50k', '-deadline', 'realtime', '-cpu-used', '8', str(film)],
+	)
+	_serve(site, '/live.webm', film.read_bytes())
+	live = """<!doctype html><body style="margin:0;background:#000"><video autoplay muted playsinline
+style="height:100vh;display:block;margin:auto"></video><script>
+const v = document.querySelector('video'); const ms = new MediaSource(); v.src = URL.createObjectURL(ms);
+ms.addEventListener('sourceopen', async () => {
+  const sb = ms.addSourceBuffer('video/webm; codecs="vp9"');
+  sb.appendBuffer(await (await fetch('/live.webm')).arrayBuffer());
+  await new Promise(r => sb.addEventListener('updateend', r, {once: true}));
+  ms.duration = Infinity;
+  v.play().catch(() => {});
+});</script></body>"""
+	site.expect_request('/live').respond_with_data(live, content_type='text/html')
+	await _open(eyes, session, site.url_for('/live'))
+	await asyncio.sleep(0.5)
+	assert eyes.retina.attended.get('kind') == 'video' and not eyes.retina.attended.get('duration'), eyes.retina.attended
+	p = await eyes.watch(seconds=12.0, until='bored', min_seconds=1.0)
+	assert p.ended_at - p.started_at > 8.0, f'stopped on the calm opening of a live stream: {p.stop_reason}'
+	assert p.items and any(abs(c - 7.0) < 0.6 for c in p.items[-1].sight.cuts), p.text
+
+
+async def test_clipped_captures_do_not_show_in_the_screencast(session, site):
+	"""Seen in a Retinat recording of the Commons film: two frames showed a small picture on white, then the film
+	filling the frame, instead of the page. Compositor sight captures a video's box (a clip, scaled down) while the
+	recorder takes the screencast. Here the page is red on the left and blue on the right, and the right half is
+	captured clipped and scaled while the screencast runs."""
+	from PIL import Image
+
+	from browser_use.browser.capture import capture_screenshot
+	from browser_use.vision.live import LiveView
+
+	site.expect_request('/halves').respond_with_data(
+		'<!doctype html><body style="margin:0"><div style="position:fixed;left:0;top:0;width:50vw;height:100vh;'
+		'background:#f00"></div><div style="position:fixed;right:0;top:0;width:50vw;height:100vh;background:#00f"></div>'
+		'<div id="m" style="position:fixed;left:45vw;top:10px;width:10vw;height:20px;background:#0f0"></div>'
+		'<script>let k = 0; setInterval(() => { document.getElementById("m").style.top = (10 + (k++ % 40)) + "px" }, 30)'
+		'</script></body>',
+		content_type='text/html',
+	)
+	await session.navigate_to(site.url_for('/halves'))
+	cdp = await session.get_or_create_cdp_session(focus=False)
+	vp = (await cdp.cdp_client.send.Page.getLayoutMetrics(session_id=cdp.session_id))['cssLayoutViewport']
+	w, h = vp['clientWidth'], vp['clientHeight']
+	live = LiveView(session)
+	await live.start(max_width=640)
+	try:
+		await asyncio.sleep(0.5)
+		for _ in range(25):
+			clip = {'x': w / 2, 'y': 0, 'width': w / 2, 'height': h, 'scale': 0.3}
+			await capture_screenshot(cdp.cdp_client, {'format': 'jpeg', 'quality': 70, 'clip': clip}, cdp.session_id)
+			await asyncio.sleep(0.04)
+		await asyncio.sleep(0.3)
+		frames = list(live.frames)
+	finally:
+		await live.stop()
+	odd = []
+	for i, f in enumerate(frames):
+		img = Image.open(io.BytesIO(f.data)).convert('RGB')
+		left = img.getpixel((img.width // 5, img.height * 3 // 4))
+		right = img.getpixel((img.width * 4 // 5, img.height * 3 // 4))
+		if not (left[0] > 150 and left[2] < 100 and right[2] > 150 and right[0] < 100):  # type: ignore[index]
+			odd.append((i, img.size, left, right))
+	assert len(frames) > 10, len(frames)
+	assert not odd, f'{len(odd)} of {len(frames)} screencast frames were not the page: {odd[:5]}'
+
+
+async def test_a_second_watch_says_what_it_watched_not_what_came_before(eyes, session, site):
+	"""Found on Wikimedia Commons, a second watch of the film said: "watched 27.4s" for 10 s (the span ran from the
+	first watch's last picture, through the hold between them); "the first 5.1s was not held: ... unknown" (the first
+	watch had seen it); and "on screen: 0:00 / -:- Loaded 3.46%" at 0:14 (read when the video was found)."""
+	caption = (
+		'<div id="c" style="position:fixed;bottom:0;left:0;color:#fff;font:20px sans-serif">Caption one is showing</div>'
+		'<script>setTimeout(() => { document.getElementById("c").textContent = "Caption two replaced it"; }, 2000)</script>'
+	)
+	site.expect_request('/captioned').respond_with_data(
+		PLAYER.format(src='/calib.webm', attrs='autoplay muted', extra=caption), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/captioned'))
+	await eyes.watch(seconds=1.5, until='time', hold=True)
+	await asyncio.sleep(2.5)  # held: nothing plays, and the caption changes
+	second = await eyes.watch(seconds=1.5, until='time')
+	item = second.items[0]
+	assert item.watched_s < 2.5, f'watched {item.watched_s:.1f}s in a 1.5 s watch: {second.text}'
+	assert 'was not held' not in second.text and 'earlier percept' in second.text, second.text
+	assert 'Caption two replaced it' in second.text and 'Caption one' not in second.text, second.text
+
+
 async def test_hold_pauses_the_video_and_the_next_watch_resumes_it(eyes, session, site):
 	await _open(eyes, session, site.url_for('/calib'))
 	await eyes.watch(seconds=1.5, hold=True)
@@ -563,6 +835,101 @@ async def test_hold_pauses_the_video_and_the_next_watch_resumes_it(eyes, session
 	assert _near((await eyes.retina.page_state())['attended']['t'], t_held, 0.05), 'nothing plays unseen while held'
 	await eyes.watch(seconds=1.0)
 	assert (await eyes.retina.page_state())['attended']['paused'] is False
+
+
+async def test_a_video_that_failed_to_load_is_said_to_have_failed(eyes, session, site):
+	"""Found on video.blender.org: the film's player showed "Failed to play video" (MEDIA_ERR_SRC_NOT_SUPPORTED: H.264,
+	which this Chromium build cannot decode), and the eyes said "(no video was on screen)". A failed video is now named
+	with the browser's own error."""
+	site.expect_request('/broken.mp4').respond_with_data(b'not a video at all ' * 64, content_type='video/mp4')
+	site.expect_request('/broken').respond_with_data(
+		PLAYER.format(src='/broken.mp4', attrs='autoplay muted', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/broken'))
+	await asyncio.sleep(1.0)
+	seen = await eyes.look()
+	assert 'failed to load' in seen.text and 'MEDIA_ERR_SRC_NOT_SUPPORTED' in seen.text, seen.text
+	watched = await eyes.watch(seconds=1.5)
+	assert 'MEDIA_ERR_SRC_NOT_SUPPORTED' in watched.text and 'no video was on screen' not in watched.text, watched.text
+
+
+async def test_a_look_says_how_its_image_maps_to_click_coordinates(eyes, session, site):
+	"""Found on video.blender.org: a link seen at (275, 143) in a look's 640x363 image was clicked there and missed. The
+	page was 1920x1089 CSS px, three times the image, and the tools said clicks take "CSS px, as on the look images".
+	A look now says the viewport's size and the factor from its image's pixels to click coordinates."""
+	site.expect_request('/target').respond_with_data(
+		'<!doctype html><body style="margin:0"><div id="t" style="position:absolute;left:600px;top:300px;width:120px;'
+		'height:60px;background:#e00"></div></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/target'))
+	seen = await eyes.look()
+	import re
+
+	match = re.search(
+		r'frame (\d+)x(\d+) of the (\d+)x(\d+) CSS px viewport: to click, multiply its pixels by ([\d.]+)', seen.text
+	)
+	assert match, seen.text
+	image_w, image_h, view_w, view_h, factor = (float(g) for g in match.groups())
+	assert seen.image_size == (int(image_w), int(image_h))
+	assert abs(factor - view_w / image_w) < 0.01, (factor, view_w, image_w)
+	# The red box, found in the image, lands on the box when scaled by the factor
+	from PIL import Image
+
+	assert seen.image is not None
+	img = Image.open(io.BytesIO(seen.image)).convert('RGB')
+	reds = [(x, y) for y in range(img.height) for x in range(img.width) if (p := img.getpixel((x, y)))[0] > 180 and p[1] < 80]  # type: ignore[index]
+	cx, cy = sum(x for x, _ in reds) / len(reds), sum(y for _, y in reds) / len(reds)
+	assert abs(cx * factor - 660) < 12 and abs(cy * factor - 330) < 12, (cx * factor, cy * factor)
+
+
+async def test_a_look_maps_to_click_coordinates_on_a_page_with_a_scrollbar(eyes, session, site):
+	"""Found on Poki: "Temple Run 2" was at (329, 400) by retinat_find and at (322, 394) by a look's pixels times its
+	factor, 1.45 = 945/650. The look image showed the page's scrollbar: it spanned more than the 945 px client width
+	the factor was taken from, so clicks from a look drifted toward the top-left, ~15 px at the far edge, and reflex
+	regions taken from looks missed what they were aimed at."""
+	import re
+
+	from PIL import Image
+
+	site.expect_request('/tall-target').respond_with_data(
+		'<!doctype html><body style="margin:0;height:4000px"><div style="position:fixed;right:40px;bottom:40px;'
+		'width:60px;height:40px;background:#e00"></div></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/tall-target'))
+	seen = await eyes.look()
+	match = re.search(r'of the (\d+)x(\d+) CSS px viewport: to click, multiply its pixels by ([\d.]+)', seen.text)
+	assert match and seen.image is not None, seen.text
+	view_w, view_h, factor = (float(g) for g in match.groups())
+	img = Image.open(io.BytesIO(seen.image)).convert('RGB')
+	reds = [(x, y) for y in range(img.height) for x in range(img.width) if (p := img.getpixel((x, y)))[0] > 180 and p[1] < 80]  # type: ignore[index]
+	cx, cy = sum(x for x, _ in reds) / len(reds), sum(y for _, y in reds) / len(reds)
+	want = (view_w - 70, view_h - 60)
+	assert abs(cx * factor - want[0]) < 4 and abs(cy * factor - want[1]) < 4, ((cx * factor, cy * factor), want)
+
+
+async def test_the_retina_averages_a_video_into_its_grid_rather_than_picking_pixels(eyes, session, site, tmp_path):
+	"""Shot detection scored better on area-averaged grids than on point-sampled ones (on two films' edit lists, most
+	on live action: F1 0.941 against 0.921 at 10 a second). The retina draws videos with low smoothing, which I took
+	for picking pixels; this checked it in Chrome, and it averages (1-px stripes come out grey). Kept so that stays."""
+	stripes = tmp_path / 'stripes.webm'
+	_run(
+		*['-f', 'lavfi', '-i', "nullsrc=s=640x360:r=10:d=3,geq=lum='if(mod(X,2),235,16)':cb=128:cr=128"],
+		*['-c:v', 'libvpx-vp9', '-lossless', '1', '-deadline', 'realtime', '-cpu-used', '8', str(stripes)],
+	)
+	_serve(site, '/stripes.webm', stripes.read_bytes())
+	site.expect_request('/stripes').respond_with_data(
+		PLAYER.format(src='/stripes.webm', attrs='autoplay muted loop', extra=''), content_type='text/html'
+	)
+	await _open(eyes, session, site.url_for('/stripes'))
+	await eyes.watch(seconds=1.5, until='time')
+	frames = [f for f in eyes.retina.frames if f.vid == eyes.retina.attended.get('vid')]
+	assert frames, 'the retina sampled the video'
+	import numpy as np
+
+	grid = np.frombuffer(frames[-1].luma, dtype=np.uint8).astype(np.float32)
+	assert grid.std() < 20 and 90 < grid.mean() < 160, f'mean {grid.mean():.0f}, spread {grid.std():.0f}: {grid[:16]}'
 
 
 async def test_no_video_is_said_plainly(eyes, session, site):
@@ -719,6 +1086,27 @@ def _ball_frame(seq: int, t: float, row: int) -> FrameSample:
 		for x in (7, 8):
 			luma[y * 16 + x] = 230
 	return FrameSample(seq, 1, t, float(seq), bytes(luma), (20, 20, 20), True)
+
+
+def test_things_moving_in_different_shots_are_not_one_moving_object():
+	"""Found on the Commons film: "motion: one moving object; reached the bottom 14 times ... came to rest at the
+	bottom", across six shots of clouds, a stream, a bird and a burrow. The tracker skipped the samples where a cut
+	changed the picture and carried on with whatever moved in the next shot. A ball falling in one shot and another
+	rising after a cut is not a bounce."""
+	from browser_use.eyes import motion
+
+	def frame(seq: int, t: float, row: int, background: int, ball: int) -> FrameSample:
+		luma = bytearray([background]) * 256
+		for y in (row, row + 1):
+			for x in (7, 8):
+				luma[y * 16 + x] = ball
+		return FrameSample(seq, 1, t, float(seq), bytes(luma), (background, background, background), True)
+
+	falls = [frame(i + 1, 0.05 * i, round(2 + 11 * 0.05 * i), 20, 230) for i in range(21)]
+	rises = [frame(i + 22, 1.05 + 0.05 * i, round(13 - 11 * 0.05 * (i + 1)), 200, 30) for i in range(20)]
+	assert len(sight.read(falls + rises).cuts) == 1, 'two shots'
+	assert motion.track(falls + rises) is None, motion.track(falls + rises)
+	assert motion.track(falls) is not None, 'one shot with one thing moving is still tracked'
 
 
 def test_one_stray_sample_does_not_add_a_turn_to_the_motion_or_widen_what_was_covered():
@@ -981,6 +1369,155 @@ async def test_scan_covers_the_whole_page_and_notices_what_moves_on_its_own(eyes
 	)
 
 
+BANDS_PAGE = (
+	'<!doctype html><style>body{margin:0} div{height:100vh}</style><body>'
+	+ ''.join(f'<div style="background:{c}"></div>' for c in ('#f00', '#0f0', '#00f', '#ff0', '#0ff', '#f0f'))
+	+ '</body>'
+)
+BAND_COLOURS = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)]
+
+
+async def test_a_scan_labels_each_frame_with_where_it_was_scrolled(eyes, session, site):
+	"""Found hands-on on the Guardian's front page: two frames of a scan were both "6.4 screens down" with different
+	stories in them. Frames taken while the page was still scrolling were labelled with where it ended up. Each frame
+	now carries the scroll offset Chrome drew it at."""
+	site.expect_request('/bands').respond_with_data(BANDS_PAGE, content_type='text/html')
+	await _open(eyes, session, site.url_for('/bands'))
+	scan = await eyes._page_watcher().scan(max_screens=6, dwell_s=0.4, keyframes=4)
+	vh = scan.viewport[1]
+	assert vh > 0 and len(scan.frames) > 6, (scan.viewport, len(scan.frames))
+	wrong = []
+	for frame in scan.frames:
+		centre = frame.scroll_y + vh / 2
+		if abs(centre / vh - round(centre / vh)) < 0.05:
+			continue  # a band boundary runs through the middle: no single colour to expect
+		expected = BAND_COLOURS[min(5, int(centre // vh))]
+		with Image.open(io.BytesIO(frame.jpeg)) as img:
+			got = img.convert('RGB').getpixel((img.width // 2, img.height // 2))
+		if sum(abs(a - b) for a, b in zip(got, expected)) > 90:
+			wrong.append((round(frame.scroll_y / vh, 2), got))
+	assert not wrong, f'{len(wrong)} of {len(scan.frames)} frames show another band than their label says: {wrong[:5]}'
+
+
+LOOKALIKE_PAGE = (
+	'<!doctype html><style>body{margin:0;font:28px serif} section{height:100vh;padding:40px;box-sizing:border-box}'
+	' p{height:14px;background:#ccc;margin:18px 0;width:70%}</style><body>'
+	+ ''.join(f'<section><h2>Story {n}</h2>' + '<p></p>' * 12 + '</section>' for n in range(1, 6))
+	+ '</body>'
+)
+
+
+async def test_a_scan_sheet_shows_the_whole_page_not_two_frames_of_its_top(eyes, session, site):
+	"""Found hands-on on BBC News: a scan of a 4.6-screen front page chose frames 0.0, 0.1, 1.5, 1.9, 2.2 and 3.6
+	screens down. Two were nearly the same picture, and 1.1-1.5 and 3.2-3.6 screens down were on no frame. Frames
+	were chosen as for a film, by how alike they look, and white pages of headlines all look alike at 16x16. A scan
+	knows where each frame was scrolled, so it chooses them to show the most of the page."""
+	site.expect_request('/lookalike').respond_with_data(LOOKALIKE_PAGE, content_type='text/html')
+	await _open(eyes, session, site.url_for('/lookalike'))
+	scan = await eyes._page_watcher().scan(max_screens=8, dwell_s=0.4, keyframes=5)
+	vh, height = scan.viewport[1], scan.page_height
+	assert height >= 4.9 * vh, (height, vh)
+	tops = sorted(k.scroll_y for k in scan.keyframes)
+	shown = 0.0
+	reach = 0.0
+	for y in tops:
+		shown += max(0.0, min(y + vh, height) - max(y, reach))
+		reach = max(reach, y + vh)
+	assert shown >= 0.95 * height, f'keyframes at {[round(y / vh, 2) for y in tops]} screens show {shown / height:.0%}'
+	assert all(b - a >= 0.5 * vh for a, b in zip(tops, tops[1:])), (
+		f'two keyframes nearly alike: {[round(y / vh, 2) for y in tops]}'
+	)
+
+
+def _ocr_available() -> bool:
+	from browser_use.eyes import ocr
+
+	return ocr.available()
+
+
+def test_text_read_from_pixels_is_matched_as_a_person_would_read_it():
+	"""Found live on OpenStreetMap: labels came back as "Cityof-Westminster" and "uthwark". Spaces and punctuation are
+	ignored, and a line missing up to 30% of the query at one end counts, said to be read in part, boxed over what was
+	missed."""
+	from browser_use.eyes.ocr import ReadLine, find
+
+	lines = [ReadLine('Cityof-Westminster', 0.97, (840, 655, 180, 18)), ReadLine('uthwark', 0.98, (1090, 579, 70, 14))]
+	[(westminster, whole)] = find(lines, 'City of Westminster')
+	assert whole and westminster.box[0] == 840
+	[(southwark, whole)] = find(lines, 'Southwark')
+	assert not whole and southwark.box[0] < 1090 and southwark.box[2] > 70, southwark.box
+	assert find(lines, 'Lambeth') == []
+	assert find([ReadLine('ark', 0.9, (0, 0, 30, 10))], 'Park') == [], 'too little of it to count'
+
+
+@pytest.mark.skipif(not _ocr_available(), reason='the ocr extra (rapidocr-onnxruntime) is not installed')
+async def test_find_reads_text_drawn_into_a_canvas_from_the_pixels(eyes, session, site):
+	"""Found hands-on on OpenStreetMap: "City of Westminster" was on screen, drawn into the map's tiles, and find said
+	"not found": it searched the page's text and the names of controls only. When those have no match, find now reads
+	the screen's pixels and says that it did."""
+	site.expect_request('/drawn').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#eee"><canvas id="c" width="900" height="400"></canvas><script>'
+		"const g = document.getElementById('c').getContext('2d'); g.fillStyle = '#cfe8c8'; g.fillRect(0, 0, 900, 400);"
+		"g.fillStyle = '#333'; g.font = '28px sans-serif'; g.fillText('Kensington Gardens', 520, 300);"
+		"g.fillText('Hyde Park', 80, 90);</script></body>",
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/drawn'))
+	found = await eyes.find('kensington gardens')
+	import re
+
+	assert 'read from the pixels' in found.text, found.text
+	m = re.search(r'at \((\d+), (\d+)\)', found.text)
+	assert m, found.text
+	x, y = int(m.group(1)), int(m.group(2))
+	# drawn from (520, 300) baseline, ~250 px wide and ~28 px tall
+	assert 560 <= x <= 720 and 270 <= y <= 305, f'its centre on screen, to click: {found.text}'
+	assert found.image, 'a crop around it comes back'
+	assert 'not found' in (await eyes.find('Buckingham Palace')).text
+
+
+async def test_a_scan_spends_frames_left_over_on_what_changes_on_its_own(eyes, session, site):
+	"""Frames are chosen first for how much of the page they show; one screen is shown by one frame. What is left over
+	goes to what changed there on its own: a canvas that turns red, green, then blue is shown in more than one colour."""
+	site.expect_request('/one-screen').respond_with_data(
+		'<!doctype html><body style="margin:0"><canvas id="c" style="width:100vw;height:100vh"></canvas><script>'
+		"const c = document.getElementById('c').getContext('2d'); let n = 0;"
+		"const paint = () => { c.fillStyle = ['#f00', '#0f0', '#00f'][n++ % 3]; c.fillRect(0, 0, 300, 150); };"
+		'paint(); setInterval(paint, 400);</script></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/one-screen'))
+	scan = await eyes._page_watcher().scan(max_screens=3, dwell_s=1.2, keyframes=3)
+	colours = set()
+	for k in scan.keyframes:
+		with Image.open(io.BytesIO(k.jpeg)) as img:
+			r, g, b = img.convert('RGB').resize((1, 1)).getpixel((0, 0))  # type: ignore[misc]
+		colours.add('red' if r > max(g, b) + 60 else 'green' if g > max(r, b) + 60 else 'blue' if b > max(r, g) + 60 else '?')
+	assert len(scan.keyframes) >= 2 and len(colours - {'?'}) >= 2, (len(scan.keyframes), colours)
+
+
+async def test_a_scan_says_what_stays_on_screen_while_the_page_scrolls(eyes, session, site):
+	"""Found hands-on on the Guardian's front page: from the second screen on, a "Who pays for the journalism" banner
+	covered the bottom ~40% of every frame of a scan, and the scan did not say so: what was under it went unseen without
+	a word. A band of the screen that stays the same while the page scrolls under it is now named."""
+	banner = (
+		'<div style="position:fixed;left:0;right:0;bottom:0;height:40vh;background:#fff;'
+		'border-top:6px solid #000;font:40px sans-serif">Support us</div>'
+	)
+	site.expect_request('/banner').respond_with_data(BANDS_PAGE.replace('</body>', banner + '</body>'), content_type='text/html')
+	await _open(eyes, session, site.url_for('/banner'))
+	p = await eyes.scan(max_screens=5, keyframes=3)
+	line = next((ln for ln in p.text.splitlines() if 'stays put' in ln), '')
+	assert 'bottom' in line, p.text
+	share = int(line.split('bottom ')[1].split('%')[0])
+	assert 30 <= share <= 50, line
+
+	site.expect_request('/no-banner').respond_with_data(BANDS_PAGE, content_type='text/html')
+	await _open(eyes, session, site.url_for('/no-banner'))
+	q = await eyes.scan(max_screens=5, keyframes=3)
+	assert 'stays put' not in q.text, q.text
+
+
 # -- recall: the model pulls frames by time instead of only receiving a pushed sheet -------------
 
 
@@ -1176,3 +1713,456 @@ def test_colours_are_named_by_hue_as_people_name_them():
 	}
 	got = {rgb: sight.colour_name(rgb) for rgb in named}
 	assert got == named, {rgb: (got[rgb], want) for rgb, want in named.items() if got[rgb] != want}
+
+
+def test_a_ticking_readout_is_one_line_but_keeps_its_peak_and_a_short_sequence_stays_whole():
+	"""Hands-on on Wikimedia Commons: the player's clock came back as "text that appeared" once per second, crowding
+	out what actually appeared. A long-ticking readout is now one line, first value to last, plus the values at its
+	extremes: a dashboard figure that peaks for one tick must keep that peak (eyesbench's ticker). A short sequence
+	(a carousel's five slides) is content, and every value of it stays."""
+	from browser_use.eyes.retina import RetinaEvent
+	from browser_use.eyes.service import _text_lines
+
+	events = [RetinaEvent('state', 0.0, {'doc': 'd1'})]
+	events += [RetinaEvent('text', 10.0 + s, {'text': f'0:{s:02d}', 'doc': 'd1'}) for s in range(1, 13)]
+	load = [41, 43, 42, 44, 97, 45, 43, 42, 44, 41, 43, 42]
+	events += [RetinaEvent('text', 10.1 + i / 4, {'text': f'CPU {v}%', 'doc': 'd1'}) for i, v in enumerate(load)]
+	events += [
+		RetinaEvent('text', 13.0 + i / 2, {'text': f'Code QX-{c}', 'doc': 'd1'})
+		for i, c in enumerate([4711, 8302, 5519, 6604, 7120])
+	]
+	events += [RetinaEvent('text', 12.0, {'text': 'Saved #4242', 'doc': 'd1'})]
+	text = _text_lines(events, since=0.0, page_since=9.0)
+	assert '"0:01"' in text and '"0:12"' in text and '0:05' not in text, 'a clock: its first and last values'
+	assert '"CPU 97%"' in text, f'the one-tick peak survives: {text}'
+	assert all(f'QX-{c}' in text for c in (4711, 8302, 5519, 6604, 7120)), f'every slide of a short sequence: {text}'
+	assert '"Saved #4242"' in text, text
+
+
+async def test_a_look_at_a_page_with_a_paused_video_shows_the_page(eyes, session, site):
+	"""Hands-on on Wikimedia Commons: a look at the file page, its player not started, came back with no picture at
+	all; it went the watch route for the paused <video> and nothing played. A paused video is part of the page."""
+	site.expect_request('/paused').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#f5f0e0"><h1>A film page</h1>'
+		'<video src="/calib.webm" preload="metadata" style="width:480px;height:270px"></video></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/paused'))
+	p = await eyes.look()
+	assert p.image is not None, p.text
+	assert 'no video playing' in p.text, p.text
+
+
+async def test_find_finds_an_icon_only_control_by_its_name(eyes, session, site):
+	"""Hands-on on Wikimedia Commons: find "Play" missed the player's play button, an icon whose name ("Play video")
+	lives in aria-label. Names count as well as visible text, and the match says it is a name."""
+	site.expect_request('/icons').respond_with_data(
+		'<!doctype html><body style="margin:0;font:16px sans-serif"><p>Some text about playing.</p>'
+		'<button aria-label="Play video" style="position:absolute;left:300px;top:200px;width:64px;height:64px">'
+		'<svg width="24" height="24"><polygon points="4,2 22,12 4,22" fill="#000"/></svg></button>'
+		'<img alt="Company logo" style="position:absolute;left:40px;top:300px;width:80px;height:40px;background:#ccc"></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/icons'))
+	p = await eyes.find('play video')
+	assert 'button named "Play video"' in p.text and '(332, 232)' in p.text, p.text
+	logo = await eyes.find('logo')
+	assert 'img named "Company logo"' in logo.text, logo.text
+	words = await eyes.find('playing')
+	assert 'Some text about playing' in words.text and 'named' not in words.text, 'visible text still matches as text'
+
+
+async def test_a_player_built_on_click_from_another_origin_is_watched(eyes, session, site, elsewhere):
+	"""Wikimedia Commons, as found hands-on: an empty placeholder <video> on the page; a click builds a dialog with a
+	new <video> streaming from another origin without CORS, sized once its metadata is in, and switched to a higher
+	quality a moment later (as Video.js does). Each source is a new item; the eyes saw none, because taint was kept per
+	element and the second source was never reported. Every item must be seen, through the compositor."""
+	page = (
+		'<!doctype html><body style="margin:0;background:#fff;font:16px sans-serif">'
+		'<video id="poster" style="width:400px;height:225px;background:#333"></video>'
+		'<button id="play" style="position:absolute;left:160px;top:90px;width:80px;height:44px">Play</button>'
+		'<script>document.getElementById("play").onclick = () => {'
+		' const d = document.createElement("div"); d.style = "position:fixed;left:60px;top:40px;width:900px;height:520px;background:#000";'
+		' d.setAttribute("role", "dialog"); d.setAttribute("aria-labelledby", "title");'
+		' d.innerHTML = \'<label id="title" style="color:#fff">Calibration film.webm</label>\';'
+		' const v = document.createElement("video"); v.style = "width:0;height:0"; v.playsInline = true;'
+		' v.addEventListener("loadedmetadata", () => setTimeout(() => { v.style = "width:900px;height:506px"; }, 400), {once: true});'
+		f' setTimeout(() => {{ v.src = "{elsewhere.url_for("/calib.webm")}?quality=1080"; v.play(); }}, 1500);'
+		f' v.src = "{elsewhere.url_for("/calib.webm")}"; d.appendChild(v); document.body.appendChild(d); v.play(); }};</script></body>'
+	)
+	site.expect_request('/dialog-player').respond_with_data(page, content_type='text/html')
+	await _open(eyes, session, site.url_for('/dialog-player'))
+	cdp = await session.get_or_create_cdp_session(focus=False)
+	await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'document.getElementById("play").click()'}, session_id=cdp.session_id
+	)
+	p = await eyes.watch(seconds=2 * SECTION + 1.5, until='time')
+	assert p.items and all(i.tainted for i in p.items), p.text
+	assert any(len(i.sight.cuts) >= 1 for i in p.items), f'the higher-quality source was not seen: {p.text}'
+	# each item is named by the dialog it plays in, and sized once its metadata is in (Video.js attends first)
+	assert all(i.info.get('name') == 'Calibration film.webm' for i in p.items), p.text
+	assert all(i.info.get('w') and i.info.get('duration') for i in p.items), p.text
+
+
+def test_the_journal_folds_a_ticking_clock_but_keeps_a_peak_and_every_slide():
+	"""retinat_changes listed a player's clock once per second ("0:09", "0:10", ...). After a readout's first values,
+	a counter that only rises is folded away; a figure that moves both ways is still noted at a new high or low (the
+	one-tick peak eyesbench asks about), and a short sequence (a carousel's slides) is kept whole."""
+	from browser_use.eyes.service import _journal_worthy
+
+	state: dict = {}
+	clock = _journal_worthy([f'0:{s:02d}"' for s in range(1, 21)], state)
+	assert clock == [f'0:{s:02d}"' for s in range(1, 9)], clock
+	load = [41, 43, 42, 44, 40, 45, 43, 42, 44, 97, 43, 42, 39]
+	figures = _journal_worthy([f'CPU {v}%"' for v in load], state)
+	assert 'CPU 97%"' in figures and 'CPU 39%"' in figures and 'CPU 42%"' not in figures[8:], figures
+	slides = _journal_worthy([f'Code QX-{c}"' for c in (4711, 8302, 5519, 6604, 7120)] + ['Saved"'], state)
+	assert len(slides) == 6, slides
+
+
+async def test_page_content_filling_in_as_it_loads_is_one_line_and_a_later_toast_stays_its_own(eyes, session, site):
+	"""Hands-on on Wikimedia Commons: eight blocks of the page's own content, rendered by script while it loaded, came
+	back one by one as "text that appeared", next to (and longer than) what actually appeared later. Text arriving
+	before the load event, or in a burst of new elements just after it (MediaWiki rendered 0.7 s on), is the page
+	filling in: one line. A toast once the page has gone quiet is still its own line."""
+	import time as _time
+
+	def slow_image(request):
+		_time.sleep(1.2)  # holds the load event open while the script fills the page in
+		return Response(
+			b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;',
+			content_type='image/gif',
+		)
+
+	site.expect_request('/slow.gif').respond_with_handler(slow_image)
+	page = (
+		'<!doctype html><body style="font:16px sans-serif"><main id="m"></main><img src="/slow.gif">'
+		'<script>document.addEventListener("DOMContentLoaded", () => { for (let i = 1; i <= 6; i++) setTimeout(() => {'
+		' const p = document.createElement("p"); p.textContent = "Section " + i + " of the article, filled in by script";'
+		' document.getElementById("m").appendChild(p); }, i * 80); });'
+		'addEventListener("load", () => { for (let i = 7; i <= 9; i++) setTimeout(() => {'
+		' const p = document.createElement("p"); p.textContent = "Section " + i + " of the article, filled in by script";'
+		' document.getElementById("m").appendChild(p); }, (i - 6) * 200);'
+		' setTimeout(() => { const t = document.createElement("div");'
+		' t.textContent = "Saved #4242"; t.style = "position:fixed;top:10px;right:10px"; document.body.appendChild(t); }, 2000); });'
+		'</script></body>'
+	)
+	site.expect_request('/filling-in').respond_with_data(page, content_type='text/html')
+	await eyes.open()  # as retinat_open does: the eyes are on before the page starts, and see it fill in
+	await session.navigate_to(site.url_for('/filling-in'))
+	await asyncio.sleep(3.0)
+	p = await eyes.look()
+	lines = [line for line in p.text.splitlines() if 'Section' in line]
+	assert len(lines) == 1 and 'filled in as it loaded' in lines[0] and '9 blocks' in lines[0], p.text
+	assert '"Saved #4242"' in p.text, f'a toast after the load is still its own line: {p.text}'
+
+
+async def test_a_film_page_names_its_video_by_the_page_not_by_the_player_badges(eyes, session, site):
+	"""Hands-on on Wikimedia Commons: the film was journalled as 'now watching "Duration: 10 minutes and 35 seconds.
+	10:35 Subtitles available. CC"', the player's own badges and the screen-reader text behind them. A person sees
+	a film page about one film: the heading names it, and text only a screen reader gets is not on screen. A feed of
+	reels still names each by its caption (test_browse_watches_each_reel_once_and_puts_them_on_one_sheet)."""
+	import json
+
+	site.expect_request('/film-page').respond_with_data(
+		'<!doctype html><body style="margin:0;font:16px sans-serif"><style>.sr-only{position:absolute;width:1px;'
+		'height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%);white-space:nowrap}</style>'
+		'<h1>File:Calibration film.webm</h1><div class="fullImageLink"><span><span class="player">'
+		'<video src="/calib.webm" autoplay muted style="width:800px;height:450px"></video>'
+		'<span><span class="sr-only">Duration: 4 seconds.</span><span aria-hidden="true">0:04</span></span>'
+		'<span><span class="sr-only">Subtitles available.</span><span aria-hidden="true">CC</span></span>'
+		'</span></span><div>Size of the above preview of this WEBM file: 800 × 450 pixels.</div></div>'
+		'<table><tr><td><video src="/calib.webm" preload="metadata" style="width:82px;height:47px"></video></td>'
+		'<td>current 18:23, 10 May 2015, 4 s</td></tr></table></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/film-page'))
+	p = await eyes.watch(seconds=1.5, until='time')
+	assert p.items, p.text
+	assert '"File:Calibration film.webm"' in p.text.splitlines()[1], p.text
+	assert 'Duration: 4 seconds' not in p.text and 'Subtitles available' not in p.text, f'screen-reader text: {p.text}'
+	await asyncio.sleep(0.5)
+	assert eyes.journal_path is not None
+	watching = [e['text'] for e in map(json.loads, eyes.journal_path.read_text().splitlines()) if e['kind'] == 'item']
+	assert watching and 'File:Calibration film.webm' in watching[0], watching
+
+
+async def test_a_look_during_a_recording_costs_what_a_look_costs(eyes, session, site, tmp_path):
+	"""Found at retinat_record's first live use: while a recording ran, a look sent the recorder's own frame, the
+	whole viewport as PNG (1920x1080, ~2,700 tokens where a look is ~330). The eyes share the recorder's stream, so
+	the recording is not cut short, and fit what they send to their own size."""
+	await _open(eyes, session, site.url_for('/none'))
+	recorder = session._recording_watchdog
+	assert recorder is not None
+	await recorder.start_recording(tmp_path / 'during.mp4', framerate=5)
+	try:
+		p = await eyes.look()
+	finally:
+		saved = await recorder.stop_recording()
+	assert p.image is not None and p.image_size[0] <= 640, f'{p.image_size}: {p.text}'
+	assert p.image[:3] == b'\xff\xd8\xff', 'sent as JPEG, as a look always is'
+	assert saved is not None and saved.stat().st_size > 0, 'the recording is whole'
+
+
+async def test_looks_during_a_recording_follow_the_page_through_a_reload(eyes, session, site, tmp_path):
+	"""A guard, from a live look on the T-Rex runner that showed its start screen after the game had (as far as the
+	rules could tell) started: with a recording running and its frames paced, a look right after a reload shows the
+	reloaded page, and a later look the change that followed. This passes; the live case is not reproduced."""
+	from PIL import Image
+
+	site.expect_request('/tint').respond_with_data(
+		'<!doctype html><body style="margin:0;height:100vh;background:#f0f">'
+		"<script>setTimeout(() => document.body.style.background = '#0a0', 2000)</script></body>",
+		content_type='text/html',
+	)
+
+	def middle(p) -> tuple[int, ...]:
+		assert p.image is not None, p.text
+		with Image.open(io.BytesIO(p.image)) as img:
+			return img.convert('RGB').getpixel((img.width // 2, img.height // 2))  # type: ignore[return-value]
+
+	await _open(eyes, session, site.url_for('/tint'))
+	recorder = session._recording_watchdog
+	assert recorder is not None
+	await recorder.start_recording(tmp_path / 'reload.mp4', framerate=10)
+	try:
+		await asyncio.sleep(2.5)
+		assert middle(await eyes.look())[1] > 120, 'green once the page has turned'
+		await session.navigate_to(site.url_for('/tint'))  # reloaded: magenta again, then green
+		await asyncio.sleep(0.2)
+		first = middle(await eyes.look())
+		await asyncio.sleep(2.5)
+		then = middle(await eyes.look())
+	finally:
+		await recorder.stop_recording()
+	assert first[0] > 120 and first[1] < 100, f'the reloaded page, magenta: {first}'
+	assert then[1] > 120 and then[0] < 100, f'and then green: {then}'
+
+
+def _pictures(pictures: list) -> list[FrameSample]:
+	"""16x16 luma pictures (numpy arrays) -> frames at 10 fps."""
+	import numpy as np
+
+	return [
+		FrameSample(i + 1, 1, round(0.1 * i, 2), float(i), np.clip(p, 0, 255).astype(np.uint8).tobytes(), (0, 0, 0), True)
+		for i, p in enumerate(pictures)
+	]
+
+
+def test_a_dissolve_and_a_fade_through_black_are_shot_changes_and_a_pan_is_not():
+	"""Found on the Commons film: its title card dissolves into the clouds, and the eyes kept them as one shot (no
+	frame differs from the last by a cut's worth). A gradual transition is found the twin-comparison way: a run of
+	small changes whose ends differ like a cut, every frame between them a blend of the two. A pan's frames are not."""
+	import numpy as np
+
+	y, x = np.mgrid[0:16, 0:16].astype(np.float32)
+	a = 20 + 14 * x  # bright to the right
+	b = 230 - 13 * y  # bright at the top
+	blend = [a + (b - a) * k / 10 for k in range(1, 10)]
+
+	dissolve = sight.read(_pictures([a] * 20 + blend + [b] * 20))
+	assert len(dissolve.cuts) == 1 and 2.0 <= dissolve.cuts[0] <= 2.9, dissolve.cuts
+	assert dissolve.shots[1].gradual, dissolve.shots
+	from browser_use.eyes.hearing import Hearing
+	from browser_use.eyes.percept import ItemPercept, describe_item
+
+	frames = _pictures([a] * 20 + blend + [b] * 20)
+	timeline = describe_item(ItemPercept(1, 1, {}, frames, [], dissolve, Hearing(segments=[])))
+	assert 'fade->' in timeline and 'cut->' not in timeline, timeline
+
+	black = np.zeros((16, 16))
+	out_in = [a * (1 - k / 8) for k in range(1, 8)] + [black] * 5 + [b * k / 8 for k in range(1, 8)]
+	through_black = sight.read(_pictures([a] * 20 + out_in + [b] * 20))
+	assert len(through_black.cuts) == 2, through_black.cuts
+	assert through_black.shots[1].brightness < 40 and through_black.shots[2].gradual, through_black.shots
+
+	# A smooth pan by one cell over a second: at 16x16 its frames are nearly blends of its ends, so only motion
+	# compensation (the first frame shifted matches the last) tells it from a dissolve
+	def view(shift: float):
+		return 128 + 90 * np.sin((x - shift) * 0.8) * np.cos(y * 0.5)
+
+	pan = sight.read(_pictures([view(0)] * 20 + [view(k / 10) for k in range(1, 11)] + [view(1)] * 20))
+	assert pan.cuts == [], f'a slow pan is one shot: {pan.cuts}'
+	rng = np.random.default_rng(7)
+	still = sight.read(_pictures([a + rng.normal(0, 1.5, (16, 16)) for _ in range(50)]))
+	assert still.cuts == [], f'a still picture with noise is one shot: {still.cuts}'
+
+
+def _film_shots(edits: dict, frames: list[FrameSample]) -> tuple[list[tuple[float, bool]], float, float, list, list]:
+	"""Shot changes `sight.read` finds in a film's frames, scored against its edit list: (changes, precision, recall,
+	false ones, missed ones). A change counts for a cut within one sample period (+50 ms); one inside a gradual
+	transition counts for it (others inside it are not counted against); none is counted near an ambiguous one."""
+	tol = 1 / edits['samples_per_second'] + 0.05
+	lo, hi = edits['window']
+	changes = [(s.t0, s.gradual) for s in sight.read(frames).shots[1:]]
+	cuts, used, through, false = edits['cuts'], set(), set(), []
+	for t, _ in changes:
+		if not lo <= t <= hi or any(abs(t - a) <= tol for a in edits['ambiguous']):
+			continue
+		span = next((i for i, (a, b) in enumerate(edits['gradual']) if a - tol <= t <= b + tol), None)
+		if span is not None:
+			through.add(span)
+			continue
+		near = [i for i, c in enumerate(cuts) if i not in used and abs(c - t) <= tol]
+		if near:
+			used.add(min(near, key=lambda i: abs(cuts[i] - t)))
+		else:
+			false.append(round(t, 2))
+	found = len(used) + len(through)
+	missed = [c for i, c in enumerate(cuts) if i not in used] + [g for i, g in enumerate(edits['gradual']) if i not in through]
+	return changes, found / max(1, found + len(false)), found / (len(cuts) + len(edits['gradual'])), false, missed
+
+
+def test_the_shots_of_a_real_film_match_its_edit_list():
+	"""Every other test of shots uses made-up pictures. On a real film (Big Buck Bunny, CC BY 3.0, all 10.5 minutes,
+	as compositor sight samples a cross-origin video: 6 a second, area-averaged) the eyes found 94% of its 130 shot
+	changes but called 34 more that were not there: a bird falling out of a still shot, a squirrel's head passing the
+	lens, a whip pan. A hard cut inside a run of small motion was also reported as a fade at the run's middle, and a
+	clean cut right after busy motion was missed because the threshold had climbed with the motion.
+
+	A cut is now a spike (twice the change just before and after it) that reaches most of the picture. The film's edit
+	list was built from ffmpeg's scene scores and checked by eye (see assets/big_buck_bunny). The spike was chosen on
+	this film alone, then scored on a second one (Tears of Steel, live action); dropping the old threshold and adding
+	the spread were judged on both. Numbers in docs/hands-on/2026-10-13/notes.md."""
+	import json
+	import lzma
+
+	import numpy as np
+
+	folder = ASSETS / 'big_buck_bunny'
+	edits = json.loads((folder / 'edits.json').read_text())
+	rows = np.frombuffer(lzma.decompress((folder / 'grids_6fps.xz').read_bytes()), dtype=np.uint8).reshape(-1, 304)
+	step = 1 / edits['samples_per_second']
+	frames = [
+		FrameSample(
+			i + 1,
+			1,
+			round(i * step, 3),
+			i * step,
+			row[:256].tobytes(),
+			(int(row[256::3].mean()), int(row[257::3].mean()), int(row[258::3].mean())),
+			False,
+			row[256:].tobytes(),
+		)
+		for i, row in enumerate(rows)
+	]
+	changes, precision, recall, false, missed = _film_shots(edits, frames)
+	assert precision >= 0.93 and recall >= 0.9, f'precision {precision:.3f}, recall {recall:.3f}; false {false}; missed {missed}'
+
+	def change_near(t: float) -> tuple[float, bool] | None:
+		return next(((at, fade) for at, fade in changes if abs(at - t) <= step + 0.05), None)
+
+	assert change_near(25.0) is None, 'the bird knocked off its branch at 24.9 s is the same shot'
+	assert change_near(433.73) == (pytest.approx(433.83, abs=0.01), False), f'a hard cut, at its own time: {change_near(433.73)}'
+	assert change_near(258.1) is not None, 'the cut right after busy motion at 258.1 s'
+
+
+async def test_find_s_crop_of_a_large_match_is_shrunk_to_fit(eyes, session, site):
+	"""Found twice on Wikimedia Commons: find "play video" matched the whole 800x450 player, and its crop came back at
+	960x510, ~665 tokens, three looks' worth, to confirm a match whose place the text already gave. A crop is now
+	shrunk to fit (720x300 at most); a small match is still magnified."""
+	site.expect_request('/big-player').respond_with_data(
+		'<!doctype html><body style="margin:0;font:16px sans-serif"><p>Calibration film</p>'
+		'<a role="button" title="Play video" style="position:absolute;left:100px;top:80px;width:800px;height:450px;'
+		'background:linear-gradient(#2a6,#26a)"></a><p style="position:absolute;top:600px">Size of the preview</p></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/big-player'))
+	big = await eyes.find('play video')
+	assert 'named "Play video"' in big.text, big.text
+	assert big.image_size is not None and big.image_size[0] <= 720 and big.image_size[1] <= 300, big.text
+	assert big.image_tokens <= 300, big.text
+	small = await eyes.find('Size of the preview')
+	assert small.image_size is not None and small.image_size[0] >= 600, f'a small match is still magnified: {small.text}'
+
+
+async def test_a_panel_built_after_load_is_one_line_not_one_per_nested_block(eyes, session, site):
+	"""Found on Wikipedia's main page: its Appearance panel, built by script 2 s after load, came back as "Text Small
+	Standard Large" and again as "Small Standard Large" (and the same for Width and Color): a block and the block
+	inside it, each reported. What a block says is said once, by the outermost block that says it."""
+	site.expect_request('/panel').respond_with_data(
+		'<!doctype html><body style="font:16px sans-serif"><p>An article.</p><script>'
+		'addEventListener("load", () => setTimeout(() => { const d = document.createElement("div");'
+		' document.body.appendChild(d); for (const [h, o] of [["Text", "Small Standard Large"], ["Width", "Standard Wide"]]) {'
+		' const g = document.createElement("div"); d.appendChild(g); const t = document.createElement("div");'
+		' t.textContent = h; g.appendChild(t); const v = document.createElement("div"); v.textContent = o; g.appendChild(v); }'
+		' }, 1500));</script></body>',
+		content_type='text/html',
+	)
+	await eyes.open()
+	await session.navigate_to(site.url_for('/panel'))
+	await asyncio.sleep(2.5)
+	p = await eyes.look()
+	lines = [line for line in p.text.splitlines() if 'Standard' in line]
+	assert len(lines) == 1, p.text
+	assert 'Text Small Standard Large Width Standard Wide' in lines[0], p.text
+
+
+@pytest.mark.parametrize('order', ['recording started after a look', 'recording stopped after a look'])
+async def test_looks_follow_the_page_whichever_way_a_recording_starts_or_stops(eyes, session, site, tmp_path, order):
+	"""Found live on the T-Rex runner, three times: with a recording on, a look showed the game's start screen while
+	the game had been playing for seconds (the recording itself was right). The eyes' page view and the recorder
+	share one screencast: a recorder started after a look took its frames away, and one stopped after a look ended
+	the stream the view was sharing. Either way every later look was the same old frame."""
+	from PIL import Image
+
+	site.expect_request('/tinted').respond_with_data(
+		'<!doctype html><body style="margin:0;height:100vh;background:#f0f"></body>', content_type='text/html'
+	)
+
+	def middle(p) -> tuple[int, ...]:
+		assert p.image is not None, p.text
+		with Image.open(io.BytesIO(p.image)) as img:
+			return img.convert('RGB').getpixel((img.width // 2, img.height // 2))  # type: ignore[return-value]
+
+	async def paint(colour: str) -> None:
+		cdp = await session.get_or_create_cdp_session(focus=False)
+		await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': f'document.body.style.background = "{colour}"'}, session_id=cdp.session_id
+		)
+		await asyncio.sleep(0.5)
+
+	await _open(eyes, session, site.url_for('/tinted'))
+	recorder = session._recording_watchdog
+	assert recorder is not None
+	if order == 'recording started after a look':
+		assert middle(await eyes.look())[0] > 200
+		await recorder.start_recording(tmp_path / 'after.mp4', framerate=5)
+		try:
+			await paint('#0a0')
+			now = middle(await eyes.look())
+		finally:
+			await recorder.stop_recording()
+	else:
+		await recorder.start_recording(tmp_path / 'before.mp4', framerate=5)
+		assert middle(await eyes.look())[0] > 200
+		await recorder.stop_recording()
+		await paint('#0a0')
+		now = middle(await eyes.look())
+	assert now[1] > 120 and now[0] < 100, f'the page is green now; the look showed {now}'
+
+
+async def test_a_look_after_an_animation_stops_shows_where_it_stopped(eyes, session, site):
+	"""Found live on the T-Rex runner (looks after the game ended showed earlier frames) and pinned down by dumping
+	the frames: Chrome's screencast drops the repaint that ends an animation. Frames are in flight while it plays,
+	a repaint then is skipped, and a page that then stands still sends no other. So the newest streamed frame is not
+	'now' once the stream has gone quiet; a look then captures the page as it is."""
+	from PIL import Image
+
+	site.expect_request('/settles').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#fff"><canvas id="c" width="320" height="180"'
+		' style="display:block;width:100vw;height:100vh"></canvas><script>'
+		'const g = document.getElementById("c").getContext("2d"); const t0 = performance.now();'
+		'function frame(now) { const t = now - t0; g.fillStyle = t < 1500 ? `hsl(${t / 4}, 80%, 50%)` : "#0a0";'
+		' g.fillRect(0, 0, 320, 180); if (t < 1500) requestAnimationFrame(frame); } requestAnimationFrame(frame);'
+		'</script></body>',
+		content_type='text/html',
+	)
+	await _open(eyes, session, site.url_for('/settles'))
+	await eyes.look()  # the page view is streaming while the animation plays
+	await asyncio.sleep(2.5)
+	p = await eyes.look()
+	assert p.image is not None, p.text
+	with Image.open(io.BytesIO(p.image)) as img:
+		now = img.convert('RGB').getpixel((img.width // 2, img.height // 2))
+	assert now[1] > 120 and now[0] < 100, f'the animation ended green; the look showed {now}: {p.text}'

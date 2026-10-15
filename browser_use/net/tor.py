@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import binascii
 import logging
+import os
 import re
 import shutil
 import socket
@@ -400,6 +401,8 @@ class TorTransport:
 			f'ControlPort {self.config.control_port}',
 			'CookieAuthentication 1',
 			f'DataDirectory {data_dir}',
+			# Tor polls for this process and exits once it is gone, so even a killed server leaves no Tor behind
+			f'__OwningControllerProcess {os.getpid()}',
 		]
 		if self.config.exit_country:
 			lines.append(f'ExitNodes {{{self.config.exit_country}}}')

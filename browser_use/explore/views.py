@@ -42,6 +42,7 @@ class PageReport(BaseModel):
 	image_tokens: int = 0
 	dom_state_tokens: int | None = None  # what the classic DOM-dump step would cost here
 	error: str = ''
+	first_try: str = ''  # how the first load failed, when it took a second (a gateway error or no answer)
 
 
 class ExploreReport(BaseModel):

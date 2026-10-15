@@ -20,7 +20,9 @@ moments that differ, with the sound laid out underneath.
   changing character (speech starting after silence, music dropping out).
 - `'bored'` returns once the item stops showing anything new: it looped, or the marginal
   coverage of the last two seconds (see `sight.novelty`) fell below a threshold and the
-  sound has not changed. This is the same test a person applies when they swipe away.
+  sound has not changed. This is the same test a person applies when they swipe away. A
+  video longer than any watch, or of no known length (a film, a live stream; not a reel), is
+  given eight seconds instead.
 - `'item'` returns when the attended item changes (someone else scrolled).
 
 `hold=True` pauses the video when the watch returns and resumes it at the start of the next
@@ -37,12 +39,15 @@ import io
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlparse
 
-from browser_use.eyes import asr, hearing, motion, sight
+from browser_use.browser.capture import capture_screenshot
+from browser_use.eyes import asr, hearing, motion, ocr, sight
 from browser_use.eyes.archive import FrameArchive
 from browser_use.eyes.console import ConsoleLog
 from browser_use.eyes.percept import (
@@ -54,7 +59,7 @@ from browser_use.eyes.percept import (
 	page_text_note,
 	render_strip,
 )
-from browser_use.eyes.requests import RequestLog
+from browser_use.eyes.requests import RequestLog, told_as_page_failure
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
 from browser_use.human.input import HumanInput
 from browser_use.human.touch import HumanTouch
@@ -70,6 +75,13 @@ Detail = Literal['glance', 'look', 'study']
 # Below this marginal coverage for BORED_WINDOW_S, an item is showing nothing new.
 BORED_NOVELTY = 0.04
 BORED_WINDOW_S = 2.0
+# ...but an item longer than any watch can be (a film, a live stream; not a reel) gets this long: two calm seconds say little about a
+# film. Simulated on two whole films with checked edit lists (35 s watches starting every 5 s, sound unreadable as on a
+# cross-origin page), 2 s ended 72% and 30% of the watches while more shots were coming within them, losing ~6 shots
+# each; 8 s ended none early, and stopped only in end credits.
+BORED_LONG_WINDOW_S = 8.0
+# Longer than this is longer than any watch (retinat_watch takes 90 s at most).
+LONG_FORM_S = 90.0
 # Discrete sounds this recent (beeps, knocks, notifications) keep a still picture worth watching.
 BORED_SOUND_S = 4.0
 # How far back a watch reaches for what the item did before the call (the caller's own latency, or a question
@@ -123,6 +135,7 @@ class Eyes:
 		self.speech = asr.available() if speech is None else speech
 		self.retina = Retina(browser_session, fps=fps, audio=audio, pcm=bool(self.speech and audio))
 		self.requests = RequestLog(browser_session)  # what the page fetched; passive, redacted
+		self._requests_noted: set[int] = set()  # failed requests already told of in the journal
 		self.console = ConsoleLog(browser_session)  # what the page logged and threw; passive, redacted
 		self.touch = HumanTouch(browser_session, seed=seed)
 		self.hand = HumanInput(browser_session, seed=seed)
@@ -131,6 +144,8 @@ class Eyes:
 		self.journal_path = self.now_path.with_name('journal.jsonl') if self.now_path is not None else None
 		self._journaled: dict[str, Any] = {}
 		self._pending_text: list[str] = []  # text that appeared since the last journal write
+		self._readouts: dict[str, dict[str, Any]] = {}  # readouts (clocks, figures) seen on this page, for the journal
+		self._filled_in = 0  # blocks of the page's own text rendered while it loaded, since the last journal entry
 		# Keyframes copied to disk as they are taken, so recall reaches past the page's ring.
 		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
 		self._archiver: asyncio.Task | None = None
@@ -223,17 +238,22 @@ class Eyes:
 			return 'looped (seen in full)'
 		if self.retina.state.get('paused') and self.retina.state.get('vid') == vid:
 			return 'video paused'
+		# A film, or a video of no known length (a live stream says Infinity, which arrives as null): edited content that
+		# goes on. A canvas has no length either, and keeps the short window.
+		duration = self.retina.attended.get('duration')
+		long_form = self.retina.attended.get('kind') == 'video' and (not duration or duration > LONG_FORM_S)
+		window = BORED_LONG_WINDOW_S if long_form else BORED_WINDOW_S
 		now = mine[-1].wall
-		recent = [f for f in mine if f.wall >= now - BORED_WINDOW_S]
-		older = [f for f in mine if f.wall < now - BORED_WINDOW_S]
-		if not older or mine[-1].wall - mine[0].wall < BORED_WINDOW_S * 1.5:
+		recent = [f for f in mine if f.wall >= now - window]
+		older = [f for f in mine if f.wall < now - window]
+		if not older or mine[-1].wall - mine[0].wall < window * 1.5:
 			return None
 		gain = sight.novelty(older, recent)
 		if gain >= BORED_NOVELTY:
 			return None
 		sound = [h for h in hops if h.vid == vid]
-		recent_sound = [h for h in sound if h.wall >= now - BORED_WINDOW_S]
-		older_sound = [h for h in sound if h.wall < now - BORED_WINDOW_S]
+		recent_sound = [h for h in sound if h.wall >= now - window]
+		older_sound = [h for h in sound if h.wall < now - window]
 		if recent_sound:
 			sr = self.retina.state.get('sr')
 			after = {seg.kind for seg in hearing.listen(recent_sound, sr).segments if seg.duration >= 0.4}
@@ -251,7 +271,7 @@ class Eyes:
 		lately = [h for h in sound if h.wall >= now - BORED_SOUND_S]
 		if lately and hearing.listen(lately, self.retina.state.get('sr')).onsets:
 			return None  # discrete sounds still coming: the next beep is as unpredictable as the last
-		return f'nothing new for {BORED_WINDOW_S:.0f}s (novelty {gain:.3f})'
+		return f'nothing new for {window:.0f}s (novelty {gain:.3f})'
 
 	async def watch(self, *args: Any, **kwargs: Any) -> Percept:
 		"""Watch what plays: see `_watch` for the parameters."""
@@ -313,8 +333,8 @@ class Eyes:
 		percept = await self.perceive(
 			since=since, detail=detail, keyframes=keyframes, transcribe=transcribe, text_since=text_since, watch_start=start
 		)
-		if not percept.items and not self.retina.attended.get('vid'):
-			await self._show_page(percept)
+		if not percept.items:
+			await self._show_page(percept)  # nothing played (no video, or a paused one): the page as drawn is what there is
 		percept.stop_reason = reason
 		percept.started_at, percept.ended_at = start, time.monotonic()
 		self._last_percept_end = percept.ended_at
@@ -353,12 +373,22 @@ class Eyes:
 			if e.type == 'attend' and e.data.get('vid'):
 				info_by_vid[e.data['vid']] = e.data
 		muted_by_vid: dict[int, bool] = {}
-		tainted: set[int] = set()
 		for e in events:
 			if e.type == 'state' and e.data.get('vid'):
 				muted_by_vid[e.data['vid']] = bool(e.data.get('muted'))
-			elif e.type == 'tainted':
-				tainted.add(e.data.get('vid', 0))
+		# The retina says a video is unreadable once, when it finds out: from all it said, not only since `since` (a
+		# watch begun after that forgot it, found on Commons: no compositor line, its sound "none captured")
+		tainted = {e.data.get('vid', 0) for e in list(self.retina.events) if e.type == 'tainted'}
+		# What is on screen around the attended video now: its description was read when it was found (found on Commons:
+		# "0:00 / -:- Loaded 3.46%" at 0:14)
+		attended = self.retina.attended.get('vid')
+		if attended in info_by_vid:
+			try:
+				fresh = (await asyncio.wait_for(self.retina.page_state(), timeout=1.0)).get('attended') or {}
+				if fresh.get('vid') == attended:
+					info_by_vid[attended] = {**info_by_vid[attended], 'text': fresh.get('text', '')}
+			except Exception as e:
+				logger.debug(f'eyes: the attended item could not be described again: {type(e).__name__}: {e}')
 		k = keyframes or KEYFRAMES[detail]
 		do_speech = self.speech if transcribe is None else (transcribe and asr.available())
 		items: list[ItemPercept] = []
@@ -390,7 +420,6 @@ class Eyes:
 				jpegs: list[bytes | None] = [None] * len(seqs)
 			else:
 				jpegs, trouble = await self.retina.read_keyframes(seqs)
-			walls = [x.wall for x in f] + [x.wall for x in h]
 			self._items_seen = max(self._items_seen, vid)
 			items.append(
 				ItemPercept(
@@ -403,7 +432,8 @@ class Eyes:
 					hearing=heard,
 					keyframes=[Keyframe(f[i].t, f[i].seq, j) for i, j in zip(selection.indices, jpegs)],
 					coverage=selection.coverage,
-					watched_s=(max(walls) - min(walls)) if walls else 0.0,
+					watched_s=_watched_time([x.wall for x in f] or [x.wall for x in h]),
+					earlier=vid in self._reported,
 					muted=muted_by_vid.get(vid),
 					tainted=vid in tainted,
 					motion=motion.track(f),
@@ -418,11 +448,22 @@ class Eyes:
 		)
 		if trouble:
 			head += f'\n    no keyframe images: {trouble}'
-		return assemble(items, head, detail)
+		failed = _failed_video(self.retina.attended)
+		head += failed
+		return assemble(items, head, detail, empty='(no video played)' if failed else '(no video was on screen)')
+
+	async def _page_now(self) -> tuple[bytes | None, str]:
+		"""The page as the compositor draws it now, and how it was got: captured at this moment, else the stream's
+		newest frame (which can be older than the page; see PageWatcher.capture)."""
+		watcher = self._page_watcher()
+		jpeg = await watcher.capture()
+		if jpeg:
+			return jpeg, 'captured from the compositor at this moment'
+		return await watcher.wait_latest(), "the screencast's newest frame (a capture failed): it may be older than the page"
 
 	async def _show_page(self, percept: Percept) -> None:
 		"""No video in the percept: attach the page as the compositor draws it, so a watch still shows the screen."""
-		jpeg = await self._page_watcher().wait_latest()
+		jpeg, _ = await self._page_now()
 		if not jpeg:
 			return
 		from PIL import Image
@@ -430,11 +471,14 @@ class Eyes:
 		with Image.open(io.BytesIO(jpeg)) as img:
 			size = img.size
 		percept.image, percept.image_size, percept.image_tokens = jpeg, size, estimate_image_tokens(*size)
-		percept.text += f'\n    (no video: the page as drawn now, {size[0]}x{size[1]} ~{percept.image_tokens} tokens)'
+		percept.text += f'\n    (no video: the page as drawn now, frame {size[0]}x{size[1]}{self._click_scale(size)}; ~{percept.image_tokens} tokens)'
 
-	async def zoom(self, x: float, y: float, width: float, height: float, max_width: int = 1200) -> Percept:
-		"""A region of the viewport (CSS px, as on the look images and for clicks) captured fresh at up to 4x, so small
-		print is redrawn at that size, not upscaled from the ~640 px frame a look sends."""
+	async def zoom(
+		self, x: float, y: float, width: float, height: float, max_width: int = 1200, max_height: int | None = None
+	) -> Percept:
+		"""A region of the viewport (CSS px, as clicks take; a look's pixels times its stated factor) captured fresh at up to 4x, so small
+		print is redrawn at that size, not upscaled from the ~640 px frame a look sends. With max_height, a region
+		larger than max_width x max_height is shrunk to fit instead."""
 		assert width > 0 and height > 0, 'the region needs a size'
 		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
 		metrics = await cdp.cdp_client.send.Page.getLayoutMetrics(session_id=cdp.session_id)
@@ -442,23 +486,124 @@ class Eyes:
 		x, y = max(0.0, x), max(0.0, y)
 		width, height = min(width, vp['clientWidth'] - x), min(height, vp['clientHeight'] - y)
 		assert width > 0 and height > 0, 'the region is outside the viewport'
-		scale = max(1.0, min(4.0, max_width / width))
+		scale = min(4.0, max_width / width, max_height / height if max_height else float('inf'))
+		scale = scale if max_height else max(1.0, scale)
 		clip = {'x': vp['pageX'] + x, 'y': vp['pageY'] + y, 'width': width, 'height': height, 'scale': scale}
-		shot = await cdp.cdp_client.send.Page.captureScreenshot(
-			params={'format': 'jpeg', 'quality': 85, 'clip': clip},  # type: ignore[typeddict-item]
-			session_id=cdp.session_id,
-		)
+		shot = await capture_screenshot(cdp.cdp_client, {'format': 'jpeg', 'quality': 85, 'clip': clip}, cdp.session_id)
 		jpeg = base64.b64decode(shot['data'])
 		from PIL import Image
 
 		with Image.open(io.BytesIO(jpeg)) as img:
 			size = img.size
 		tokens = estimate_image_tokens(*size)
+		how = '(redrawn, not upscaled)' if scale >= 1.0 else '(shrunk to fit)'
 		text = (
-			f'🔍 zoomed on ({x:.0f}, {y:.0f}) {width:.0f}x{height:.0f} px of the viewport at {scale:.1f}x '
-			f'(redrawn, not upscaled); ~{tokens} tokens'
+			f'🔍 zoomed on ({x:.0f}, {y:.0f}) {width:.0f}x{height:.0f} px of the viewport at {scale:.1f}x {how}; ~{tokens} tokens'
 		)
 		return Percept([], text, jpeg, size, tokens, len(text) // 4)
+
+	async def _find_in_pixels(self, text: str, limit: int, vw: float, vh: float) -> Percept:
+		"""find() for text the page's own text does not have: read from the screen's pixels (map labels drawn into tiles,
+		words in an image or canvas, another site's frame). Only what is on screen now; seconds, not milliseconds."""
+		from PIL import Image
+
+		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		shot = await capture_screenshot(cdp.cdp_client, {'format': 'png'}, cdp.session_id)
+		picture = base64.b64decode(shot['data'])
+		with Image.open(io.BytesIO(picture)) as img:
+			scale = img.width / max(1.0, vw)  # picture pixels per CSS px
+		started = time.monotonic()
+		hits = ocr.find(await asyncio.to_thread(ocr.read, picture, text), text)
+		took = time.monotonic() - started
+		if not hits:
+			return Percept(
+				[],
+				f'🔎 "{text}": not found in the page text, the names of controls, or the text on screen (read from the '
+				f'pixels in {took:.1f}s; only what is in view)',
+				None,
+			)
+		lines = [f'🔎 "{text}": {len(hits)} match(es) read from the pixels on screen (OCR, {took:.1f}s; not in the page text)']
+		for i, (hit, whole) in enumerate(hits[:limit], 1):
+			x, y, w, h = (v / scale for v in hit.box)
+			lines.append(
+				f'  {i}. at ({x + w / 2:.0f}, {y + h / 2:.0f}), {w:.0f}x{h:.0f} px, in view, confidence {hit.confidence:.2f}: '
+				f'"{hit.text}"' + ('' if whole else ' (read only in part: look at the crop)') + page_text_note(hit.text)
+			)
+		x, y, w, h = (v / scale for v in hits[0][0].box)
+		cw, ch = max(240.0, w + 160), max(80.0, h + 60)
+		crop = await self.zoom(
+			min(max(0.0, x + w / 2 - cw / 2), max(0.0, vw - cw)),
+			min(max(0.0, y + h / 2 - ch / 2), max(0.0, vh - ch)),
+			cw,
+			ch,
+			max_width=720,
+			max_height=300,
+		)
+		crop.text = '\n'.join(lines) + '\n' + crop.text
+		return crop
+
+	async def scroll(self, screens: float | None = None, to: str | None = None, nth: int = 1) -> Percept:
+		"""Turn the real wheel over the middle of the page: by `screens` viewport heights (negative is up), or until
+		the `nth` match of the text `to` is in view, then say where it is (as find() does), ready to click.
+
+		Found on the Python docs: find said a match was "below the visible area: scroll down about 13.0 screens", and
+		nothing here scrolled a page; it took 13 PageDown keys, or swipes."""
+		assert (screens is None) != (to is None), 'scroll by screens, or to a text, not both'
+		assert nth >= 1, 'nth counts from 1'
+		if not self.retina.running:
+			await self.open()
+		vw, vh = await self.retina.evaluate('[innerWidth, innerHeight]') or [1280, 800]
+		await self.hand.move_to(vw / 2, vh / 2, haste=3)  # the wheel turns what is under the pointer
+		start = float(await self.retina.evaluate('scrollY') or 0)
+		if to is not None:
+			assert to.strip(), 'say what to scroll to'
+			for _ in range(3):  # smooth scrolling can fall short of a long way: look again and finish it
+				found = await self.retina.evaluate(f'({_FIND_JS})({json.dumps(to.strip())}, {int(nth) * 4})') or {}
+				matches = found.get('matches') or []
+				if len(matches) < nth:
+					break
+				m = matches[nth - 1]
+				centre = m['y'] + m['h'] / 2
+				if 0.15 * vh <= centre <= 0.85 * vh:
+					break
+				await self.hand.wheel(centre - vh / 2)
+				await self._scroll_settled()
+			result = await self.find(to, limit=max(nth, 3))
+			moved = float(await self.retina.evaluate('scrollY') or 0) - start
+			result.text = f'🖱 scrolled {"down" if moved >= 0 else "up"} {abs(moved) / vh:.1f} screens\n' + result.text
+			return result
+		assert screens is not None
+		await self.hand.wheel(screens * vh)
+		end = await self._scroll_settled()
+		moved = end - start
+		height = float(await self.retina.evaluate('document.documentElement.scrollHeight') or 0)
+		where = f'{end / vh:.1f} screens from the top of {height / vh:.1f}'
+		if abs(moved) < 2:
+			edge = 'the top' if screens < 0 else 'the end'
+			return Percept(
+				[], f'🖱 did not move: at {edge} of the page, or what is under the middle of it scrolls on its own ({where})', None
+			)
+		bottom = end + vh >= height - 4
+		return Percept(
+			[],
+			f'🖱 scrolled {"down" if moved > 0 else "up"} {abs(moved) / vh:.1f} screens: {where}'
+			+ (', at the end of the page' if bottom else '')
+			+ (', at the top' if end <= 0 else ''),
+			None,
+		)
+
+	async def _scroll_settled(self, timeout: float = 3.0) -> float:
+		"""Wait out a smooth scroll: scrollY once it has held still for two reads, or when `timeout` passes."""
+		deadline = time.monotonic() + timeout
+		last, still = None, 0
+		while time.monotonic() < deadline:
+			y = float(await self.retina.evaluate('scrollY') or 0)
+			still = still + 1 if y == last else 0
+			if still >= 2:
+				return y
+			last = y
+			await asyncio.sleep(0.08)
+		return float(last or 0)
 
 	async def find(self, text: str, limit: int = 5) -> Percept:
 		"""Where visible text is on the page: each match's centre in viewport CSS px (to click), whether it is in view
@@ -469,18 +614,25 @@ class Eyes:
 		found = await self.retina.evaluate(f'({_FIND_JS})({json.dumps(text.strip())}, {int(limit) * 4})') or {}
 		matches, vw, vh = found.get('matches') or [], found.get('vw') or 1, found.get('vh') or 1
 		if not matches:
+			if ocr.available():
+				return await self._find_in_pixels(text, limit, float(vw), float(vh))
 			return Percept(
 				[],
-				f'🔎 "{text}": not found in the visible text of the page (text inside images, canvas, iframes and closed shadow roots is not searched)',
+				f'🔎 "{text}": not found in the visible text or the names of controls on the page (text inside images, canvas, iframes and closed shadow roots is not searched; the ocr extra reads it from the screen)',
 				None,
 			)
 		lines = [
-			f'🔎 "{text}": {len(matches)} match(es) in the page text' + (f', the first {limit}' if len(matches) > limit else '')
+			f'🔎 "{text}": {len(matches)} match(es) in the page text and control names'
+			+ (f', the first {limit}' if len(matches) > limit else '')
 		]
 		in_view = None
 		for i, m in enumerate(matches[:limit], 1):
 			cx, cy = m['x'] + m['w'] / 2, m['y'] + m['h'] / 2
-			if cy < 0:
+			if cy < 0 and cy + float(found.get('sy') or 0) < 0:
+				# Above the top of the page itself: parked out of sight on purpose (found on MDN: a skip link, shown
+				# only when it has keyboard focus), so no scrolling reaches it
+				where = 'out of sight above the page: cannot be scrolled to (placed there on purpose, as a skip link is until it has keyboard focus)'
+			elif cy < 0:
 				where = f'above the visible area: scroll up about {(-cy) / vh:.1f} screens'
 			elif cy > vh:
 				where = f'below the visible area: scroll down about {(cy - vh) / vh + 0.5:.1f} screens'
@@ -499,7 +651,9 @@ class Eyes:
 		w, h = max(240.0, in_view['w'] + 160), max(80.0, in_view['h'] + 60)
 		x0 = min(max(0.0, in_view['x'] + in_view['w'] / 2 - w / 2), max(0.0, vw - w))
 		y0 = min(max(0.0, in_view['y'] + in_view['h'] / 2 - h / 2), max(0.0, vh - h))
-		crop = await self.zoom(x0, y0, w, h, max_width=720)
+		# A large match (a whole player) is shrunk to fit: its place is already in the text, and at full size the crop
+		# cost three looks (found on Commons, ~665 tokens for an 800x450 player)
+		crop = await self.zoom(x0, y0, w, h, max_width=720, max_height=300)
 		crop.text = '\n'.join(lines) + '\n' + crop.text
 		return crop
 
@@ -510,11 +664,14 @@ class Eyes:
 			await self.open()
 		await self.retina.wait_for_data(0.6)
 		# A video is watched briefly; a canvas is shown with the page around it (watch follows a canvas over time).
-		if self.retina.attended.get('vid') and self.retina.attended.get('kind') != 'canvas':
+		# A playing video is watched briefly; a paused or empty <video> (a player not started yet) is just part of the page.
+		playing = self.retina.state.get('vid') == self.retina.attended.get('vid') and self.retina.state.get('paused') is False
+		if self.retina.attended.get('vid') and self.retina.attended.get('kind') != 'canvas' and playing:
 			return await self.watch(seconds=seconds, until='time', min_seconds=seconds, detail=detail, keyframes=2)
-		jpeg = await self._page_watcher().wait_latest()
+		jpeg, how = await self._page_now()
 		url = self.retina.state.get('url', '')
-		text = f'👁 no video playing on {url[:120]}; this is the page as drawn now (a compositor frame, not a screenshot call)'
+		text = f'👁 no video playing on {url[:120]}; this is the page as drawn now ({how})'
+		text += _failed_video(self.retina.attended)
 		now = time.monotonic()
 		text += _text_lines(self.retina.events, self._text_since(now), self.retina.page_since)
 		self._last_percept_end = now
@@ -525,7 +682,7 @@ class Eyes:
 		with Image.open(io.BytesIO(jpeg)) as img:
 			size = img.size
 		tokens = estimate_image_tokens(*size)
-		text += f'\n~{tokens + len(text) // 4} tokens (frame {size[0]}x{size[1]} ~{tokens}; estimates)'
+		text += f'\n~{tokens + len(text) // 4} tokens (frame {size[0]}x{size[1]}{self._click_scale(size)}; image ~{tokens}; estimates)'
 		return Percept([], text, jpeg, size, tokens, len(text) // 4)
 
 	async def archive_now(self, limit: int = 40) -> int:
@@ -654,6 +811,13 @@ class Eyes:
 		)
 		return Percept([], text, jpeg, (w, h), tokens, len(text) // 4, frames=[(t, j) for t, j, _, _ in got])
 
+	def _click_scale(self, size: tuple[int, int]) -> str:
+		"""How a page image's pixels map to the CSS px clicks and taps take (a look image is smaller than the page)."""
+		vp = self._page_watcher().viewport
+		if not vp or not size[0]:
+			return ''
+		return f' of the {vp[0]:.0f}x{vp[1]:.0f} CSS px viewport: to click, multiply its pixels by {vp[0] / size[0]:.2f}'
+
 	def _page_watcher(self):
 		from browser_use.eyes.page import PageWatcher
 
@@ -675,7 +839,7 @@ class Eyes:
 			f'scrolled {result.screens} times in {result.seconds:.1f}s, {len(result.frames)} frames seen',
 			f'    sheet: {len(result.keyframes)} frames at '
 			+ ', '.join(f'{k.scroll_y / vh:.1f}' for k in result.keyframes)
-			+ f' screens down (cover {result.coverage:.0%} of what was seen)',
+			+ f' screens down (showing {result.coverage:.0%} of the page height)',
 		]
 		if result.moving:
 			lines.append(
@@ -683,6 +847,8 @@ class Eyes:
 				+ ', '.join(f'{y / vh:.1f}' for y in result.moving[:8])
 				+ ' screens down'
 			)
+		if result.fixed:
+			lines.append('    stays put while the page scrolls (what is under it was not seen): ' + _describe_bands(result.fixed))
 		image, size, tokens = (
 			(sheet[0], (sheet[1], sheet[2]), estimate_image_tokens(sheet[1], sheet[2])) if sheet else (None, None, 0)
 		)
@@ -897,7 +1063,7 @@ class Eyes:
 		frames = [f for f in self.retina.frames if f.vid == vid and f.wall >= cutoff]
 		hops = [h for h in self.retina.hops if h.vid == vid and h.wall >= cutoff]
 		fields.update(
-			caption=(att.get('text') or '').strip(),
+			caption=(att.get('name') or att.get('text') or '').strip(),
 			t=state.get('t'),
 			duration=att.get('duration'),
 			paused=bool(state.get('paused')),
@@ -999,11 +1165,46 @@ class Eyes:
 				entries.append(('state', 'paused' if f.get('paused') else 'playing again'))
 		if vid != last.get('vid') and last.get('vid') and not last.get('paused'):
 			self._note_sounds_soon(last['vid'])  # leaving an item mid-play: say what it sounded like
+		if f.get('url') != last.get('url'):
+			self._readouts = {}  # a new page: its readouts are new
 		self._journaled = {**last, **{k: f.get(k) for k in ('url', 'vid', 'sound', 'paused')}}
-		texts, self._pending_text = self._pending_text, []
+		texts, self._pending_text = _journal_worthy(self._pending_text, self._readouts), []
+		if self._filled_in:
+			entries.append(('text', f'the page filled in {self._filled_in} block(s) of its own text as it loaded'))
+			self._filled_in = 0
 		entries += [('text', f'text appeared: "{t}') for t in texts]  # each already closes its quote and carries its note
+		entries += [('request', line) for line in self._failed_requests()]
 		if entries:
 			self._append_journal(entries, vid, t)
+
+	def note_requests(self) -> None:
+		"""Journal the page's failed fetches now. On a still page no batch from the retina comes along to do it, so a
+		request refused after the page settled was never told of."""
+		if self.journal_path is None:
+			return
+		lines = self._failed_requests()
+		if lines:
+			self._append_journal(
+				[('request', line) for line in lines], int(self.retina.state.get('vid') or 0), self.retina.state.get('t')
+			)
+
+	def _failed_requests(self) -> list[str]:
+		"""A line for each fetch or XHR the page made that failed since the last call, once each.
+
+		Found on Wikipedia: "Alan Turing" typed into the search box left the suggestions for "Al" on screen, and
+		changes said nothing had changed; the suggestion request had been refused (429), which only the request log
+		showed. Images, scripts and the like are left out (an ad that 404s is not news), and so are requests the page
+		cancelled itself (a typeahead drops the one for the previous keystroke) and ones the browser side blocked (on
+		MDN, the profile's own ad blocker stopped its ad call)."""
+		lines = []
+		for req in self.requests.entries(since=max(0, self.requests.last_seq - 60), only='api', limit=60):
+			if req.seq in self._requests_noted or not told_as_page_failure(req):
+				continue
+			self._requests_noted.add(req.seq)
+			path = urlparse(req.url)
+			where = (path.path or '/') + (f'?{path.query}' if path.query else '')
+			lines.append(f'a request the page made failed: {req.status or req.error} {req.method} {where[:140]}')
+		return lines[:5]
 
 	def _append_journal(self, entries: list[tuple[str, str]], vid: int, t: Any) -> None:
 		assert self.journal_path is not None
@@ -1021,8 +1222,9 @@ class Eyes:
 		self._pending_text += [
 			str(e.data['text'])[:160] + '"' + page_text_note(str(e.data['text']), bool(e.data.get('faint')))
 			for e in events
-			if e.type == 'text' and e.data.get('text')
+			if e.type == 'text' and e.data.get('text') and not (e.data.get('loading') and not e.data.get('faint'))
 		]
+		self._filled_in += sum(1 for e in events if e.type == 'text' and e.data.get('loading') and not e.data.get('faint'))
 		now = time.monotonic()
 		if self.now_path is None or now - self._last_now < 1.0:
 			return
@@ -1169,8 +1371,122 @@ _FIND_JS = """(q, cap) => {
 		const context = shown.slice(c0, c1).trim();
 		out.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, context });
 	}
-	return { matches: out, vw: innerWidth, vh: innerHeight };
+	// Controls with no visible text (an icon button, a logo) carry their name in aria-label, title, alt or a
+	// placeholder: what a screen reader says, and what a person means by "the play button".
+	const els = [];
+	const collect = (root) => { for (const el of root.querySelectorAll('*')) { els.push(el); if (el.shadowRoot) collect(el.shadowRoot); } };
+	collect(document);
+	for (const el of els) {
+		if (out.length >= cap) break;
+		const name = el.getAttribute('aria-label') || el.getAttribute('title') ||
+			(el.tagName === 'IMG' ? el.getAttribute('alt') : null) || (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? el.getAttribute('placeholder') : null);
+		if (!name || !name.replace(/\\s+/g, ' ').toLowerCase().includes(needle)) continue;
+		const st = getComputedStyle(el);
+		if (st.visibility === 'hidden' || st.display === 'none' || +st.opacity === 0) continue;
+		const r = el.getBoundingClientRect();
+		if (r.width < 1 || r.height < 1) continue;
+		if (out.some((m) => m.x + m.w / 2 >= r.left && m.x + m.w / 2 <= r.right && m.y + m.h / 2 >= r.top && m.y + m.h / 2 <= r.bottom)) continue;
+		const role = el.getAttribute('role') || el.tagName.toLowerCase();
+		out.push({ x: r.left, y: r.top, w: r.width, h: r.height, context: role + ' named "' + name.replace(/\\s+/g, ' ').trim().slice(0, 80) + '"', named: true });
+	}
+	return { matches: out, vw: innerWidth, vh: innerHeight, sy: scrollY };
 }"""
+
+
+SHORT_SEQUENCE = 8  # a readout with at most this many values is listed in full
+
+
+def _extremes(members: list[tuple[str, float, bool]]) -> list[tuple[str, float, bool]]:
+	"""The values at the low and high of a readout's most varying number, in the order they appeared: a figure that
+	peaks for one tick keeps its peak when the rest of the ticking is folded away."""
+	numbers = [[float(n) for n in re.findall(r'\d+(?:\.\d+)?', m[0])] for m in members]
+	width = min(len(n) for n in numbers)
+	if not width:
+		return []
+	k = max(range(width), key=lambda i: max(n[i] for n in numbers) - min(n[i] for n in numbers))
+	low = min(range(len(members)), key=lambda j: numbers[j][k])
+	high = max(range(len(members)), key=lambda j: numbers[j][k])
+	return [members[j] for j in sorted({low, high})]
+
+
+def _readout_shape(text: str) -> str | None:
+	"""A readout's shape: its text with every number masked ("0:07" and "0:08" share "#:#"); None without digits."""
+	return re.sub(r'\d+', '#', text) if re.search(r'\d', text) else None
+
+
+def _numbers(text: str) -> tuple[float, ...]:
+	return tuple(float(n) for n in re.findall(r'\d+(?:\.\d+)?', text))
+
+
+def _journal_worthy(texts: list[str], readouts: dict[str, dict[str, Any]]) -> list[str]:
+	"""Which new texts the journal should note. A readout (a shape that repeats with other numbers) has its first
+	SHORT_SEQUENCE values noted, as a carousel's slides are each content. After that, a counter that only rises (a
+	clock, a loading percentage) is folded away, while a figure that moves both ways is noted at each new high or
+	low: the journal is about what changed, and a dashboard value that peaks for one tick is exactly that."""
+	kept = []
+	for t in texts:
+		shape = _readout_shape(t)
+		if shape is None:
+			kept.append(t)
+			continue
+		value = _numbers(t)
+		r = readouts.get(shape)
+		if r is None:
+			readouts[shape] = {'n': 1, 'lo': value, 'hi': value, 'last': value, 'rising': True}
+			kept.append(t)
+			continue
+		r['n'] += 1
+		r['rising'] = r['rising'] and value >= r['last']
+		new_extreme = value > r['hi'] or value < r['lo']
+		r['hi'], r['lo'], r['last'] = max(r['hi'], value), min(r['lo'], value), value
+		if r['n'] <= SHORT_SEQUENCE or (new_extreme and not r['rising']):
+			kept.append(t)
+	return kept
+
+
+def _describe_bands(bands: list[tuple[float, float, str]]) -> str:
+	"""Bands of the screen in words: 'the top 8%', 'the bottom 40% ("Support us")', or 'a band 30-45% down'."""
+	parts = []
+	for top, bottom, text in bands:
+		if top <= 0.03:
+			where = f'the top {round(bottom * 100)}%'
+		elif bottom >= 0.97:
+			where = f'the bottom {round((1 - top) * 100)}%'
+		else:
+			where = f'a band {round(top * 100)}-{round(bottom * 100)}% down'
+		parts.append(where + (f' ("{text}")' if text else ''))
+	return ', '.join(parts)
+
+
+# Samples further apart than this were not watched in between (the item was paused, held or out of sight).
+WATCHED_GAP_S = 1.0
+
+
+def _watched_time(walls: list[float]) -> float:
+	"""Seconds an item was watched: the time between its picture samples (its sound's, if it has no pictures), without
+	the gaps where it was not playing. The span of them counted the hold between two watches (found on Commons:
+	"watched 27.4s" for a 10 s watch). Sound is not used when there are pictures: it is tapped through a hold too."""
+	ws = sorted(walls)
+	return sum(min(b - a, WATCHED_GAP_S) for a, b in zip(ws, ws[1:]))
+
+
+# HTMLMediaElement error codes (MediaError), and what each means for whoever reads the percept.
+_MEDIA_ERRORS = {
+	1: 'MEDIA_ERR_ABORTED (loading was stopped)',
+	2: 'MEDIA_ERR_NETWORK (the download failed)',
+	3: 'MEDIA_ERR_DECODE (the data could not be decoded)',
+	4: 'MEDIA_ERR_SRC_NOT_SUPPORTED (the source could not be used: a dead link, or a format this browser cannot play)',
+}
+
+
+def _failed_video(attended: dict) -> str:
+	"""A line naming the attended video's load failure, or '' if it has none."""
+	error = attended.get('error') if attended.get('kind') == 'video' else None
+	if not error:
+		return ''
+	code, message = (list(error) + ['', ''])[:2]
+	said = f'; the browser says "{message}"' if message else ''
+	return f'\n    the video on the page failed to load: {_MEDIA_ERRORS.get(code, f"error {code}")}{said} ({attended.get("src", "")[:100]})'
 
 
 def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_from: float | None = None) -> str:
@@ -1182,20 +1498,45 @@ def _text_lines(events, since: float, page_since: float, limit: int = 12, fresh_
 	docs = [e.data['doc'] for e in events if e.type == 'state' and e.data.get('doc')]
 	current = docs[-1] if docs else None
 	seen: dict[str, tuple[float, bool]] = {}
+	filled: dict[str, float] = {}  # the page's own content, rendered by script while it loaded
 	for e in events:
 		doc = e.data.get('doc')
 		if current and doc and doc != current and (fresh_from is None or e.wall < fresh_from):
 			continue
 		if e.type == 'text' and e.wall >= since and e.data.get('text'):
-			seen.setdefault(' '.join(str(e.data['text']).split())[:240], (e.wall, bool(e.data.get('faint'))))
+			text = ' '.join(str(e.data['text']).split())[:240]
+			if e.data.get('loading') and not e.data.get('faint'):
+				filled.setdefault(text, e.wall)
+			else:
+				seen.setdefault(text, (e.wall, bool(e.data.get('faint'))))
+	head = ''
+	if filled:
+		shown = ', '.join(f'"{t[:60]}{"..." if len(t) > 60 else ""}"' for t in list(filled)[:3])
+		more = ', ...' if len(filled) > 3 else ''
+		head = f'\n    page content filled in as it loaded: {len(filled)} block{"s" if len(filled) != 1 else ""} ({shown}{more})'
 	if not seen:
-		return ''
-	lines = [
-		f'    "{t}" ({w - page_since:.1f}s after the page loaded)' + page_text_note(t, faint)
-		for t, (w, faint) in list(seen.items())[:limit]
-	]
-	more = f'\n    ... {len(seen) - limit} more' if len(seen) > limit else ''
-	return '\n    text that appeared:\n' + '\n'.join(lines) + more
+		return head
+	# A readout that ticks (a player's clock, a buffer percentage, a countdown) is one thing changing, not new text
+	# each second: values of one readout share a shape once their digits are masked.
+	groups: dict[str, list[tuple[str, float, bool]]] = {}
+	for t, (w, faint) in seen.items():
+		groups.setdefault(_readout_shape(t) or t, []).append((t, w, faint))
+	lines = []
+	for members in list(groups.values())[:limit]:
+		t, w, faint = members[0]
+		if len(members) == 1:
+			lines.append(f'    "{t}" ({w - page_since:.1f}s after the page loaded)' + page_text_note(t, faint))
+			continue
+		w1 = members[-1][1]
+		when = f'{w - page_since:.1f}s-{w1 - page_since:.1f}s after the page loaded'
+		if len(members) <= SHORT_SEQUENCE:  # a carousel's slides, a few steps: each value is content
+			lines.append('    ' + ' -> '.join(f'"{m[0]}"' for m in members) + f' ({when})')
+			continue
+		shown = [members[0], *_extremes(members), members[-1]]
+		kept = [m for k, m in enumerate(shown) if m not in shown[:k]]
+		lines.append('    ' + ' -> '.join(f'"{m[0]}"' for m in kept) + f' (a readout changing {len(members)} times, {when})')
+	more = f'\n    ... {len(groups) - limit} more' if len(groups) > limit else ''
+	return head + '\n    text that appeared:\n' + '\n'.join(lines) + more
 
 
 def _moved_on(frames: list[FrameSample]) -> bool:

@@ -41,6 +41,33 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Answers that say the way to the site failed, not the site: tried once more, RETRY_AFTER_S later (0: no response)
+GATEWAY_FAILURES = frozenset({0, 502, 503, 504})
+RETRY_AFTER_S = 2.0
+
+
+def _host_port(url: str) -> tuple[str, int]:
+	p = urlparse(url)
+	return (p.hostname or '').casefold(), p.port or {'http': 80, 'https': 443}.get(p.scheme, 0)
+
+
+def _same_site(start: str, url: str) -> bool:
+	"""Whether `url` is a page of the site `start` is on: the same host, and the same port or the default one of
+	either scheme. A site linking its own pages as http://, while the run started at https:// (found on info.cern.ch),
+	was taken for another site and not explored; another port is another service."""
+	(host, port), (other_host, other_port) = _host_port(start), _host_port(url)
+	defaults = {80, 443}
+	return host == other_host and (port == other_port or (port in defaults and other_port in defaults))
+
+
+def _check_url(link: str, page: str) -> str:
+	"""What to fetch to check `link` from `page`: its https address when it is http on an https page, because the
+	browser blocks that fetch as mixed content (and it answered "no response" for a page that loads)."""
+	if urlparse(page).scheme == 'https' and urlparse(link).scheme == 'http':
+		return 'https' + link[len('http') :]
+	return link
+
+
 _PROBE = (Path(__file__).parent / 'probe.js').read_text()
 SLOW_LOAD_MS = 4000
 LOOK_WIDTH = 360
@@ -64,6 +91,7 @@ class Explorer:
 		settle_s: float = 2.0,
 	) -> None:
 		assert max_pages >= 1, 'explore at least one page'
+		self._first_tries: dict[str, str] = {}  # url -> how its first load failed, when it took a second
 		self.session = browser_session
 		self.max_pages = max_pages
 		self.scroll = scroll
@@ -203,10 +231,52 @@ class Explorer:
 		return int(status), text
 
 	async def _status(self, url: str) -> int:
+		"""A link's status, asked twice when the first answer is a gateway error or none (see _page)."""
+		status = 0
+		for attempt in range(2):
+			value = await self._eval(
+				f"fetch({json.dumps(url)}, {{method: 'GET', credentials: 'same-origin', redirect: 'follow'}}).then(r => r.status).catch(() => 0)"
+			)
+			status = int(value or 0)
+			if status not in GATEWAY_FAILURES:
+				return status
+			if not attempt:
+				await asyncio.sleep(RETRY_AFTER_S)
+		return status
+
+	async def _navigate(self, url: str) -> str:
+		"""Load `url`, once more if the first load failed at the gateway (a 502/503/504 or no answer); returns how the
+		first load failed when it took a second, else ''. Raises if the second load cannot navigate either.
+
+		On a flaky network (found on gnu.org) the one load of the start page met a 502 "upstream request failed": the
+		run took its links from that error page, found none, and reported the site as broken, where a request a
+		moment later got 200."""
+		first = ''
+		for attempt in range(2):
+			try:
+				await self.session.navigate_to(url)
+				failed = await self._gateway_failure()
+			except Exception as e:
+				if attempt:
+					raise
+				failed = f'no answer ({str(e)[:120]})'
+			if not failed or attempt:
+				return first
+			first = self._first_tries[url] = failed
+			self._console.clear()
+			self._failed.clear()
+			await asyncio.sleep(RETRY_AFTER_S)
+		return first
+
+	async def _gateway_failure(self) -> str:
+		"""How the page just loaded failed at the gateway, or '' if it did not: a 502/503/504, or no response."""
 		value = await self._eval(
-			f"fetch({json.dumps(url)}, {{method: 'GET', credentials: 'same-origin', redirect: 'follow'}}).then(r => r.status).catch(() => 0)"
+			"(() => { const n = performance.getEntriesByType('navigation')[0]; return n ? n.responseStatus || 0 : -1 })()"
 		)
-		return int(value or 0)
+		status = int(value if value is not None else -1)
+		if status in GATEWAY_FAILURES:
+			return f'{status}' if status else 'no response'
+		return ''
 
 	@staticmethod
 	def _disallowed(robots: str) -> list[str]:
@@ -246,7 +316,7 @@ class Explorer:
 		for u in urls:
 			u = urljoin(start, u).split('#')[0]
 			p = urlparse(u)
-			if f'{p.scheme}://{p.netloc}' != origin or p.path.lower().endswith(
+			if not _same_site(start, u) or p.path.lower().endswith(
 				('.png', '.jpg', '.jpeg', '.pdf', '.webp', '.svg', '.xml', '.txt', '.json')
 			):
 				continue
@@ -330,7 +400,7 @@ class Explorer:
 		page = PageReport(url=url)
 		started = time.monotonic()
 		try:
-			await self.session.navigate_to(url)
+			page.first_try = await self._navigate(url) or self._first_tries.get(url, '')
 		except Exception as e:
 			page.error = str(e)[:400]
 			page.seconds = time.monotonic() - started
@@ -381,7 +451,10 @@ class Explorer:
 				logger.debug(f'explorer: no screencast: {e}')
 				live = None
 		try:
-			await self.session.navigate_to(start_url)
+			try:
+				await self._navigate(start_url)
+			except Exception as e:
+				logger.debug(f'explorer: the start page did not load: {type(e).__name__}: {e}')  # _page reports it
 			await asyncio.sleep(self.settle_s)
 			report.environment = json.loads(
 				await self._eval(
@@ -413,15 +486,32 @@ class Explorer:
 
 	async def _check_links(self, report: ExploreReport) -> None:
 		visited = {p.url for p in report.pages}
-		origin = urlparse(report.start_url).netloc
 		links: dict[str, list[str]] = {}
+		insecure: dict[str, list[str]] = {}
 		for p in report.pages:
 			for link in p.probe.get('links', []):
-				if urlparse(link).netloc == origin and link not in visited:
+				if not _same_site(report.start_url, link):
+					continue
+				if _check_url(link, p.url) != link:
+					insecure.setdefault(link, []).append(p.url)
+				if link not in visited:
 					links.setdefault(link, []).append(p.url)
+		if insecure:
+			_merge(
+				report,
+				[
+					Finding(
+						kind='insecure-link',
+						severity='low',
+						title=f"{len(insecure)} link(s) to the site's own pages over plain http from https pages",
+						pages=sorted({page for pages in insecure.values() for page in pages}),
+						evidence=list(insecure)[:10],
+					)
+				],
+			)
 		links = {u: v for u, v in links.items() if not any(urlparse(u).path.startswith(r) for r in self._disallowed_rules)}
 		for link in list(links)[:80]:
-			report.link_status[link] = await self._status(link)
+			report.link_status[link] = await self._status(_check_url(link, links[link][0]))
 		broken = {u: s for u, s in report.link_status.items() if s >= 400 or s == 0}
 		for u, s in broken.items():
 			_merge(
@@ -488,10 +578,17 @@ def _findings_for(page: PageReport) -> list[Finding]:
 		add('page-crash', 'high', f'Page crashes: "{crash}"', [*page.console[-3:], url])
 		return out
 	status = page.status
+	if page.first_try and not (status and status >= 400):
+		add('flaky', 'medium', f'{urlparse(url).path or "/"} failed once ({page.first_try}), then loaded on a retry', [url])
 	if status and status >= 400:
 		# Reached by following the site's own links: that is a broken link, and the error page's
 		# headings and meta tags say nothing about the site.
-		add('broken-link', 'high', f'Link to {urlparse(url).path or "/"} returns {status}', [url])
+		retried = (
+			f' on both of two tries {RETRY_AFTER_S:.0f} s apart (a gateway error: it may be the network, not the site)'
+			if page.first_try
+			else ''
+		)
+		add('broken-link', 'high', f'Link to {urlparse(url).path or "/"} returns {status}{retried}', [url])
 		return out
 	for line in page.console:
 		kind = 'js-exception' if line.startswith('exception') else 'console'

@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Literal, Union
 from cdp_use.client import logger
 from typing_extensions import TypedDict
 
+from browser_use.browser.capture import capture_screenshot
+
 if TYPE_CHECKING:
 	from cdp_use.cdp.dom.commands import (
 		DescribeNodeParameters,
@@ -704,7 +706,7 @@ class Element:
 			params['quality'] = quality
 
 		# Take screenshot
-		result = await self._client.send.Page.captureScreenshot(params, session_id=self._session_id)
+		result = await capture_screenshot(self._client, params, self._session_id)
 
 		return result['data']
 

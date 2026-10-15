@@ -90,6 +90,10 @@ eval = [
 ]
 cli-oci = ["browser-use[cli,oci]"]
 all = ["browser-use[cli,examples,aws,oci]"]
+# find() reading text drawn into images, canvas and other sites' frames: PP-OCR models (Apache-2.0) on onnxruntime
+ocr = [
+    "rapidocr-onnxruntime==1.4.4",
+]
 
 # will prefer to use local source code checked out in ../../browser-use (if present) instead of pypi browser-use package
 # [tool.uv.sources]

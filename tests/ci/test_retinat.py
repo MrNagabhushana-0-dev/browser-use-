@@ -187,6 +187,91 @@ async def test_changes_reports_text_that_appeared_once_then_nothing(retinat, sit
 	assert 'Saved #4242' not in second, second
 
 
+async def test_changes_says_what_a_list_now_says_when_its_rows_are_rewritten_in_place(retinat, site):
+	"""Found hands-on on Wikipedia: typing "Ada Lovelace" into the search box turned the suggestions for "A" into
+	"Ada Lovelace English mathematician (1815-1852)" and the rest, in the same rows. Neither changes nor a look said
+	so: only the first suggestions, for "A", were ever reported."""
+	import asyncio
+
+	rows = ''.join(f'<li><b>Alpha {n}</b> <i>first letter {n}</i></li>' for n in range(1, 8))
+	site.expect_request('/suggest-rows').respond_with_data(
+		f'<!doctype html><body><input value="Ada Lovelace"><ul id="s" style="position:absolute;top:40px">{rows}</ul><script>'
+		"setTimeout(() => { const names = ['Ada Lovelace', 'Ada Lovelace Award', 'Ada Lovelace Day', 'Alan M. Lovelace',"
+		" 'Lovelace (film)', 'Ada (programming language)', 'Byron'];"
+		" document.querySelectorAll('#s li').forEach((li, i) => { li.querySelector('b').firstChild.data = names[i];"
+		" li.querySelector('i').firstChild.data = 'English mathematician ' + (1815 + i); }); }, 2500);</script></body>",
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/suggest-rows')})
+	await _call(retinat, 'retinat_changes', {})  # what opening it did
+	await asyncio.sleep(3.5)
+	text = _text(await _call(retinat, 'retinat_changes', {}))
+	assert 'Ada Lovelace Award' in text and 'Byron' in text, text
+
+
+async def test_changes_sees_text_inside_web_components(retinat, site):
+	"""Found hands-on on MDN: its search box is a web component, and the suggestions it showed for "flexbox" were on
+	screen but never reported by changes or a look. The text watcher observed the document, and changes inside a
+	shadow root never reach it. Open shadow roots are now watched too, including ones attached after load."""
+	import asyncio
+
+	site.expect_request('/components').respond_with_data(
+		'<!doctype html><body><search-box></search-box><script>'
+		"setTimeout(() => { const root = document.querySelector('search-box').attachShadow({mode: 'open'});"
+		" root.innerHTML = '<ul><li>Loading</li></ul>';"
+		" setTimeout(() => { root.querySelector('ul').innerHTML = '<li>Basic concepts of flexbox</li>"
+		"<li>Typical use cases of flexbox</li>'; }, 2500); }, 300);</script></body>",
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/components')})
+	await _call(retinat, 'retinat_changes', {})  # what opening it did
+	await asyncio.sleep(3.5)
+	text = _text(await _call(retinat, 'retinat_changes', {}))
+	assert 'Basic concepts of flexbox' in text and 'Typical use cases of flexbox' in text, text
+
+
+def test_requests_our_own_blocker_stopped_are_not_the_pages_failures():
+	"""Found live on MDN: changes said "a request the page made failed: blocked POST /pong/get", its ad call, which the
+	profile's own ad blocker had stopped. Requests the browser side blocked are left out of changes; ones the page's
+	own policy blocked (CSP, mixed content) and HTTP errors are told."""
+	from browser_use.eyes.requests import Request, told_as_page_failure
+
+	def failed(**kw) -> Request:
+		return Request(seq=1, request_id='r', method='GET', url='https://a.example/x', type='Fetch', **kw)
+
+	assert told_as_page_failure(failed(status=429))
+	assert told_as_page_failure(failed(error='net::ERR_CONNECTION_RESET'))
+	assert told_as_page_failure(failed(error='blocked', blocked_by='csp'))
+	assert told_as_page_failure(failed(error='blocked', blocked_by='mixed-content'))
+	assert not told_as_page_failure(failed(error='blocked', blocked_by='other')), 'an extension, such as the ad blocker'
+	assert not told_as_page_failure(failed(error='blocked', blocked_by='subresource-filter'))
+	assert not told_as_page_failure(failed(error='canceled'))
+	assert not told_as_page_failure(failed(status=200))
+
+
+async def test_changes_says_when_a_request_the_page_made_failed(retinat, site):
+	"""Found hands-on on Wikipedia: "Alan Turing" typed into the search box left the suggestions for "Al" on screen,
+	and changes said nothing had changed. True, and no help: the suggestion request had been refused (429), which only
+	retinat_requests showed. A fetch or XHR that fails is now a change; images and the like are left out."""
+	import asyncio
+
+	site.expect_request('/api/suggest').respond_with_data('slow down', status=429, content_type='text/plain')
+	site.expect_request('/api/ok').respond_with_data('{"ok": true}', content_type='application/json')
+	site.expect_request('/gone.png').respond_with_data('', status=404)
+	site.expect_request('/typeahead').respond_with_data(
+		'<!doctype html><body><input id="q" value="Alan Turing"><img src="/gone.png"><script>'
+		"setTimeout(() => { fetch('/api/ok'); fetch('/api/suggest?q=Alan+Turing'); }, 2500);</script></body>",
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/typeahead')})
+	opened = _text(await _call(retinat, 'retinat_changes', {}))  # what opening it did, before the page fetches
+	assert '/api/suggest' not in opened, opened
+	await asyncio.sleep(3.0)
+	text = _text(await _call(retinat, 'retinat_changes', {}))
+	assert '429' in text and '/api/suggest' in text, text
+	assert '/api/ok' not in text and 'gone.png' not in text, text
+
+
 async def test_the_server_hears_a_muted_video_with_no_gesture_even_when_asked_late(retinat, site, beeps):
 	# Through the server's own launch profile, as an MCP client gets it: no autoplay flag passed in by the
 	# test, and no click on the page. The model's first call after opening comes seconds later; beeps
@@ -262,6 +347,20 @@ async def test_find_says_where_text_is_and_zoom_magnifies_small_print(retinat, s
 		assert img.width >= 3 * 120, f'magnified from a fresh capture, not the 640 px frame: {img.size}'
 
 
+async def test_find_does_not_send_you_scrolling_to_a_link_parked_above_the_page(retinat, site):
+	"""Found hands-on on MDN: find said "Skip to search" was "above the visible area: scroll up about 0.3 screens" on a
+	page already at its top. A skip link is parked out of sight on purpose until it has keyboard focus: no scrolling
+	reaches it."""
+	site.expect_request('/skip').respond_with_data(
+		'<!doctype html><body style="margin:0"><a href="#s" style="position:absolute;top:-300px">Skip to search</a>'
+		'<div style="height:3000px">page</div></body>',
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/skip')})
+	text = _text(await _call(retinat, 'retinat_find', {'text': 'Skip to search'}))
+	assert 'scroll up' not in text and 'cannot be scrolled to' in text, text
+
+
 async def test_find_matches_text_split_across_elements_and_inside_shadow_roots(retinat, site):
 	import re
 
@@ -281,6 +380,62 @@ async def test_find_keeps_to_one_block_in_its_match_and_its_context(retinat, sit
 	assert '"Terms apply to every order."' in terms, f'the context is its own paragraph, nothing more: {terms}'
 	across = _text(await _call(retinat, 'retinat_find', {'text': 'larger. terms'}))
 	assert 'not found' in across or '0 match' in across, f'two paragraphs are not one phrase: {across}'
+
+
+LONG_DOC = (
+	'<!doctype html><style>body{margin:0;font:18px sans-serif} p{height:300px;margin:0;padding:20px}</style><body>'
+	+ ''.join(f'<p>Section {n}</p>' for n in range(1, 40))
+	+ '<h2 id="far">asyncio.wait_for(aw, timeout)</h2>'
+	+ ''.join(f'<p>After {n}</p>' for n in range(1, 10))
+	+ '</body>'
+)
+
+
+async def test_scroll_brings_what_find_found_into_view_and_pages_by_screens(retinat, site):
+	"""Found hands-on on the Python docs: find said `wait_for` was "below the visible area: scroll down about 13.0
+	screens", and nothing in Retinat scrolled a page (only the desktop tools could): 13 PageDown keys, or swipes.
+	retinat_scroll turns the real wheel: by screens, or until a match is in view, then says where it is to click."""
+	import re
+
+	site.expect_request('/long').respond_with_data(LONG_DOC, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/long')})
+	result = await _call(retinat, 'retinat_scroll', {'to': 'wait_for'})
+	text = _text(result)
+	assert not result.is_error, text
+	m = re.search(r'at \((\d+), (\d+)\)[^:]*in view', text)
+	assert m, f'the match is said to be in view, with where to click: {text}'
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	box = await cdp.cdp_client.send.Runtime.evaluate(
+		params={
+			'expression': 'JSON.stringify(document.getElementById("far").getBoundingClientRect().toJSON())',
+			'returnByValue': True,
+		},
+		session_id=cdp.session_id,
+	)
+	import json
+
+	rect = json.loads(box['result']['value'])
+	vh = (
+		await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'innerHeight', 'returnByValue': True}, session_id=cdp.session_id
+		)
+	)['result']['value']
+	assert 0 <= rect['top'] and rect['bottom'] <= vh, f'the heading is on screen: {rect}, viewport {vh}'
+	assert abs(int(m.group(2)) - (rect['top'] + rect['height'] / 2)) <= 6, (text, rect)
+
+	before = (
+		await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'scrollY', 'returnByValue': True}, session_id=cdp.session_id
+		)
+	)['result']['value']
+	paged = _text(await _call(retinat, 'retinat_scroll', {'screens': -2}))
+	after = (
+		await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'scrollY', 'returnByValue': True}, session_id=cdp.session_id
+		)
+	)['result']['value']
+	assert abs((before - after) - 2 * vh) <= 0.25 * vh, (before, after, vh, paged)
+	assert 'up' in paged and 'screens' in paged, paged
 
 
 async def test_click_says_what_it_hit_and_refuses_when_it_is_not_what_was_expected(retinat, site):
@@ -403,3 +558,243 @@ async def test_console_shows_what_the_page_logged_and_threw_with_secrets_masked(
 	assert 'slow response' not in errors
 	cart = _text(await _call(retinat, 'retinat_console', {'pattern': 'cart'}))
 	assert 'cart is undefined' in cart and 'slow response from the cart' in cart and 'payment failed' not in cart, cart
+
+
+async def test_record_saves_a_video_of_what_the_browser_showed(retinat, site, tmp_path, monkeypatch):
+	"""After Claude in Chrome's gif_creator: the agent records its session for the person to review. Start, act, stop:
+	a finished video file whose frames show the pages changing. An MCP server keeps its browser open, so a recording
+	that only closed with the browser was never playable."""
+	import asyncio
+	from pathlib import Path
+
+	import imageio.v3 as iio
+	import numpy as np
+
+	monkeypatch.setenv('BROWSER_USE_RECORD_VIDEO_DIR', str(tmp_path / 'videos'))
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/')})
+	started = _text(await _call(retinat, 'retinat_record', {'action': 'start', 'framerate': 5}))
+	assert 'Recording to' in started, started
+	await asyncio.sleep(1.5)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/find')})
+	await asyncio.sleep(1.5)
+	saved = _text(await _call(retinat, 'retinat_record', {'action': 'stop'}))
+	path = Path(saved.split('Saved the recording: ')[1].split(' (')[0])
+	assert path.parent == tmp_path / 'videos' and path.stat().st_size > 1000, saved
+	frames = list(iio.imiter(path))
+	assert len(frames) >= 4, f'{len(frames)} frames'
+	change = float(np.abs(frames[0].astype(int) - frames[-1].astype(int)).mean())
+	assert change > 1.0, f'the first and last frames are the same page ({change:.2f})'
+	again = await _call(retinat, 'retinat_record', {'action': 'stop'})
+	assert again.is_error and 'no recording is running' in _text(again), _text(again)
+
+
+async def test_reflexes_act_the_moment_a_button_appears_and_the_agent_sleeps_until_told(retinat, site):
+	"""retinat_reflex installs rules the page runs every frame; retinat_wait sleeps until one notifies. Here a button
+	shows up after a second and a rule clicks it as it appears, with real input, while the agent waits in one call."""
+	page = (
+		'<!doctype html><title>Late</title><body><script>window.clicks = 0;'
+		"setTimeout(() => { const b = document.createElement('button'); b.id = 'go'; b.textContent = 'Claim';"
+		"b.style = 'position:fixed;left:200px;top:150px;width:160px;height:50px';"
+		'b.onclick = (e) => { if (e.isTrusted) clicks++; }; document.body.appendChild(b); }, 1000)</script></body>'
+	)
+	site.expect_request('/late').respond_with_data(page, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/late')})
+	rules = [
+		{'when': "see.text('#go') === 'Claim'", 'click': "[see.el('#go').cx, see.el('#go').cy]", 'notify': 'claimed'},
+	]
+	installed = _text(await _call(retinat, 'retinat_reflex', {'rules': rules}))
+	assert 'running every frame' in installed, installed
+	woke = _text(await _call(retinat, 'retinat_wait', {'timeout': 10}))
+	assert '"claimed"' in woke, woke
+	assert retinat.browser_session is not None
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	clicks = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'clicks', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	assert clicks['result']['value'] == 1, 'one real click, as the button appeared'
+	bad = await _call(retinat, 'retinat_reflex', {'rules': [{'when': 'see.el(', 'notify': 'x'}]})
+	assert bad.is_error and 'did not compile' in _text(bad), _text(bad)
+
+
+async def test_reflexes_through_retinat_act_within_a_frame_or_two(retinat, site):
+	"""Found live on the T-Rex runner: through Retinat, decision to input was ~80 ms at p50, while the library alone
+	measures ~2 ms. A reflex that lands five frames late is a reflex too late for a game."""
+	from tests.ci.test_reflex import FOLLOW, GAME
+
+	site.expect_request('/follow').respond_with_data(GAME, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/follow')})
+	await _call(retinat, 'retinat_look', {})  # as an agent does before it writes rules: the page watcher is running too
+	installed = _text(await _call(retinat, 'retinat_reflex', {'rules': FOLLOW}))
+	assert 'running every frame' in installed, installed
+	woke = _text(await _call(retinat, 'retinat_wait', {'timeout': 10}))
+	assert '"game over"' in woke, woke
+	stats = json.loads(_text(await _call(retinat, 'retinat_reflex', {'action': 'status'})))
+	assert stats['actions'] >= 4, stats
+	assert stats['latency_ms_p50'] is not None and stats['latency_ms_p50'] < 40, f'decision to key arriving: {stats}'
+
+
+async def test_a_look_after_a_recorded_game_shows_how_it_ended(retinat, site, tmp_path, monkeypatch):
+	"""Found live on the T-Rex runner, through these tools: look, record, the game played and stopped, look: the
+	look showed a frame from before the end. The page sweeps a white bar while it animates: a hue drifting 3.3 degrees a
+	frame moves no grid cell past changed()'s threshold, so the rule below once called the animation still 0.75 s in
+	and the look, rightly, showed it mid-way (the page's own clock said so: drawn last at 2013 ms, looked at before).
+	Two causes were real: the page view starved when the recorder took its stream (ecac0a8); the recorder lost the
+	repaint that ends an animation (5a16efe). A third, a stream read by rules going stale, was that faulty stop rule:
+	with the bar, this test passes 6 of 6 on 5a16efe too. Send the last look after retinat_wait has returned: sent
+	alongside it, a look shows the page as it was when the wait began."""
+	import base64
+	import io
+
+	from PIL import Image
+
+	monkeypatch.setenv('BROWSER_USE_RECORD_VIDEO_DIR', str(tmp_path / 'videos'))
+	site.expect_request('/runs').respond_with_data(
+		'<!doctype html><body style="margin:0;background:#fff"><h1 id="h">Press Space to start</h1>'
+		'<canvas id="c" width="600" height="150" style="display:block;margin:auto"></canvas><script>'
+		'const c = document.getElementById("c"), g = c.getContext("2d"); let t0 = null;'
+		'addEventListener("keydown", () => { if (t0 === null) { t0 = performance.now(); document.getElementById("h").remove();'
+		' c.style.width = "100vw"; c.style.height = "50vh"; requestAnimationFrame(frame); } });'
+		'function frame(now) { const t = now - t0; window.lastT = Math.round(t); g.fillStyle = t < 2000 ? `hsl(${t / 5}, 80%, 50%)` : "#0a0";'
+		' g.fillRect(0, 0, 600, 150); if (t < 2000) { g.fillStyle = "#fff"; g.fillRect((t * 1.5) % 600, 0, 60, 150); }'
+		' if (t < 2000) requestAnimationFrame(frame); }</script></body>',
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/runs')})
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/runs')})
+	await _call(retinat, 'retinat_look', {})
+	await _call(retinat, 'retinat_record', {'action': 'start', 'framerate': 10})
+	try:
+		rules = [
+			{'when': "see.frame > 60 && see.frame % 60 === 0 && !!document.getElementById('h')", 'key': ' '},
+			{
+				'when': "!document.getElementById('h') && (see.memory.q = see.changed({from: '#c'}) === 0 ? (see.memory.q || 0) + 1 : 0) > 45",
+				'notify': 'stopped',
+			},
+		]
+		await _call(retinat, 'retinat_reflex', {'rules': rules})
+		woke = _text(await _call(retinat, 'retinat_wait', {'timeout': 20}))
+		assert '"stopped"' in woke, woke
+		look = await _call(retinat, 'retinat_look', {})
+	finally:
+		await _call(retinat, 'retinat_record', {'action': 'stop'})
+	image = next(b for b in look.content if isinstance(b, types.ImageContent))
+	with Image.open(io.BytesIO(base64.b64decode(image.data))) as img:
+		middle = img.convert('RGB').getpixel((img.width // 2, img.height // 4))  # inside the canvas (top half)
+	if not (middle[1] > 120 and middle[0] < 100):
+		cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+		r = await cdp.cdp_client.send.Runtime.evaluate(
+			params={
+				'expression': 'JSON.stringify({lastT: window.lastT, now: Math.round(performance.now() - t0)})',
+				'returnByValue': True,
+			},
+			session_id=cdp.session_id,
+		)
+		page = r.get('result', {}).get('value')
+		raise AssertionError(f'the look shows {middle}, not the game as it ended (green); the page: {page}; {_text(look)}')
+
+
+async def test_a_look_asked_while_a_wait_is_pending_says_so(retinat, site):
+	"""Found live on the T-Rex runner: looks sent alongside retinat_wait ran at once, before the game ended, and I read
+	them as stale pictures of its end for an hour. A look asked while a wait is pending says so; one after it does not."""
+	import asyncio
+
+	site.expect_request('/later').respond_with_data(
+		'<!doctype html><body><p id="p">before</p>'
+		'<script>setTimeout(() => { document.getElementById("p").textContent = "after"; }, 4000)</script></body>',
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/later')})
+	await _call(retinat, 'retinat_reflex', {'rules': [{'when': "see.text('#p') === 'after'", 'notify': 'changed'}]})
+	waiting = asyncio.create_task(_call(retinat, 'retinat_wait', {'timeout': 20}))
+	await asyncio.sleep(0.2)
+	early = _text(await _call(retinat, 'retinat_look', {}))
+	woke = _text(await waiting)
+	assert '"changed"' in woke, woke
+	late = _text(await _call(retinat, 'retinat_look', {}))
+	assert 'still waiting' in early and 'retinat_wait' in early, early
+	assert 'still waiting' not in late, late
+
+
+def test_changes_folds_a_burst_of_labels_and_keeps_what_matters_when_cut(tmp_path):
+	"""Found hands-on on Puter's spreadsheet: after typing two cells, changes listed the grid's column letters, "A",
+	"B", "C" ... "T", one line each, and "(41 earlier change(s) not shown)": what the cells said was cut off, and could
+	not be asked for again. A burst of short labels is one line now; when changes must still be cut, pages, requests
+	and items are kept before texts, and what was left out is said by kind."""
+	import json
+	import time
+
+	from browser_use.eyes.hook import new_entries
+
+	now = time.time()
+	journal = tmp_path / 'journal.jsonl'
+	entries = [{'at': now, 'kind': 'page', 'text': 'opened https://sheet.example/'}]
+	entries += [{'at': now + 1, 'kind': 'text', 'text': 'text appeared: "Revenue"'}]
+	entries += [{'at': now + 1, 'kind': 'text', 'text': 'text appeared: "1200"'}]
+	entries += [{'at': now + 2, 'kind': 'text', 'text': f'text appeared: "{c}"'} for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ']
+	entries += [{'at': now + 3, 'kind': 'request', 'text': 'a request the page made failed: 500 POST /save'}]
+	journal.write_text('\n'.join(json.dumps(e) for e in entries) + '\n')
+	lines = new_entries(tmp_path / 'now.json', limit=5, reader='test')
+	text = '\n'.join(lines)
+	assert 'Revenue' in text and '1200' in text and 'opened https://sheet.example/' in text and '500 POST /save' in text, text
+	assert 'text appeared: "A"\n' not in text + '\n' and '26 short labels' in text, text
+	assert 'not shown' not in text, f'everything fits once the labels are folded: {text}'
+
+	entries = [{'at': now + 10 + i, 'kind': 'text', 'text': f'text appeared: "Row {i} of the report"'} for i in range(10)]
+	entries.insert(0, {'at': now + 9, 'kind': 'page', 'text': 'opened https://other.example/'})
+	journal.write_text(journal.read_text() + '\n'.join(json.dumps(e) for e in entries) + '\n')
+	text = '\n'.join(new_entries(tmp_path / 'now.json', limit=4, reader='test'))
+	assert 'opened https://other.example/' in text, f'a page is kept before texts: {text}'
+	assert 'Row 9 of the report' in text and '7 earlier text(s) not shown' in text, text
+
+
+async def test_requests_and_console_say_what_a_limit_left_out_and_filter_by_pattern(retinat, site):
+	"""Found on Poki: 624 requests, 594 of them analytics beacons, and retinat_requests showed the newest 30 as
+	"30 requests after #0", with since=624 next: the game's own frame, loaded first, could not be reached at all.
+	A limit now says how many it left out, and a pattern (a regular expression on the URL) finds one request."""
+	import asyncio
+	import re
+
+	site.expect_request('/beacon').respond_with_data('ok')
+	site.expect_request('/game/frame.html').respond_with_data('<p>game</p>', content_type='text/html')
+	site.expect_request('/noisy').respond_with_data(
+		"""<iframe src="/game/frame.html"></iframe><script>
+		for (let i = 0; i < 40; i++) { fetch('/beacon?n=' + i); console.log('beacon ' + i); }
+		console.log('the game is ready');
+		</script>""",
+		content_type='text/html',
+	)
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/noisy')})
+	newest = ''
+	for _ in range(50):
+		newest = _text(await _call(retinat, 'retinat_requests', {'limit': 10}))
+		if 'beacon?n=39' in newest:
+			break
+		await asyncio.sleep(0.1)
+	head = newest.splitlines()[0]
+	total = re.match(r'The newest 10 of (\d+) requests after #0', head)
+	assert total and int(total[1]) >= 42 and f'{int(total[1]) - 10} earlier not shown' in head, head
+	frame = _text(await _call(retinat, 'retinat_requests', {'pattern': r'game/.*\.html'}))
+	assert frame.startswith('1 request after #0') and '/game/frame.html' in frame and 'beacon' not in frame, frame
+	assert 'not a regular expression' in _text(await _call(retinat, 'retinat_requests', {'pattern': '('}))
+
+	logged = _text(await _call(retinat, 'retinat_console', {'limit': 5}))
+	total = re.match(r'The newest 5 of (\d+) console entries after #0', logged)
+	assert total and int(total[1]) >= 41 and f'{int(total[1]) - 5} earlier not shown' in logged, logged
+
+
+async def test_no_tool_offers_a_wait_longer_than_a_client_waits_for_a_call():
+	"""Found playing Subway Surfers: retinat_wait(timeout=60) came back as an error, "timed out after 60s". MCP
+	clients (Claude Code among them) give a tool call 60 s, so a wait or watch offered up to 300 s or 90 s failed
+	instead of answering; retinat_scan failed that way twice too. What a tool may be asked to wait now fits."""
+	server = RetinatServer()
+	handler = server.server.get_request_handler('tools/list')
+	assert handler is not None
+	listed = await handler.handler(None, types.PaginatedRequestParams())  # type: ignore[arg-type]
+	assert isinstance(listed, types.ListToolsResult)
+	too_long = {
+		f'{t.name}.{name}': spec['maximum']
+		for t in listed.tools
+		for name, spec in (t.input_schema.get('properties') or {}).items()
+		if name in ('timeout', 'seconds', 'max_seconds') and spec.get('maximum', 0) > 50
+	}
+	assert not too_long, too_long
