@@ -3719,3 +3719,55 @@ handed off in a new PR (`docs/agent-notes/handoff-2026-10-14/README.md`).
 11. **Carried over:**
     - confine the AI's page script to the page's own world (Round 54);
     - the A/B test of sheet vs recall vs journal with blind agents (Round 10).
+
+## Round 57 (unattended loop, 2026-10-19): PRs #11 and #12 merged; browse and watch on the budget; a cold first start
+
+**Branch.** PRs #11 and #12 are merged into `main` (`36b350c`). `claude/laughing-hawking-2cj3a6` was fast-forwarded to
+`main`, and the two commits made after PR #12's last push (browse/watch budget `f3239e9`, scan sheet `f7567ad`) were
+carried onto it as `75a7dc1` and `e0ed5e3`. New work goes in a new PR.
+
+**Slice B1, browse and watch under the call budget** (written 2026-10-14 after the 16:42 round, pushed now).
+- `browse_cap(left, more, max_s, min_s)`: an item is begun only with time for it and for what follows (a watch's own
+  work, the flick on, the browse's end), estimates grown to what was measured. Out of time a browse stops on the
+  next reel unwatched and says `call again with items=N`; that call begins with the reel.
+- `watch` stops at the call's end less 3 s and says `out of time: watched Xs of the asked Ys`.
+- Speech runs only with time for it (an estimated 4x real time); keyframe reads end with the call.
+- Affected files on 2026-10-14: 130 passed, 1 failed (the backstop test used `retinat_watch`, which now stops by
+  itself; the test now uses `retinat_explore`, which is not yet deadline-aware).
+
+**The scan sheet, checked live.** On *List of largest cities* (11.8 screens) the sheet showed 0.0, 2.6, 5.3, 8.1, 9.5,
+10.8 screens down; before `e0ed5e3`, 4.9 to 10.9. Clip: `docs/hands-on/2026-10-19/scan-sheet-spreads-from-the-top.mp4`.
+
+**Bug: the first `retinat_open` after a machine boots fails at 30 s** (seen in the handoff, again today at 18:30 on a
+container booted at 18:25:01; the retry worked in 19 s).
+- Measured: files untouched since boot read at 16-21 MB/s; Chrome's binary is 463 MB. With Chrome, its extensions and
+  a profile copy dropped from the guest's page cache (`posix_fadvise DONTNEED`), a launch failed at 31.5 s with the
+  same error, having paged in only 246 MB (`mincore`): scattered page faults, not bandwidth. Later evictions did not
+  reproduce it (3.5 s): the layer under the guest had kept the blocks. A sequential pre-read before the launch took it
+  to 3.5 s. Warm launches: 3.5-6 s.
+- Fixed, tests first:
+  - `BrowserSession.start(timeout=...)`: a start's time covers the launch inside it (its own 30 s event limit) and
+    Chrome's wait for its port (a fixed 30 s). Defaults unchanged.
+  - Retinat keeps one start in flight across calls (120 s in all). A call waits as long as its budget allows (less
+    10 s for its own work); otherwise `The browser is still starting (Ns so far ...). Nothing was done; call again.`
+    The next call joins the same start.
+  - A start stopped at its limit already left no Chrome behind; the test now asserts it.
+- Not verified: a real cold boot with the fix. Not fixed, seen on the way: with `executable_path` set and headless
+  on, `BrowserProfile.get_args()` runs `<chrome> --version` with `subprocess.run` on the event loop.
+
+ROUND57_CI
+
+**Next, in order:**
+1. **Games** (the owner's test of real-time vision), as in Round 56's list: Temple Run 2 key timing and corners, MR
+   Racer rule v3 (look at the target lane first), a rule for Subway Surfers' Left/Right tutorial step.
+2. **Explore under the call budget (slice B2):** `Explorer.run`/`resume`, `ExploreReport.pending`, navigation bounded
+   by `NavigateToUrlEvent(timeout_ms=...)` and `Page.stopLoading` on a cut; then move `Deadline` to a numpy-free module
+   before `browser_use/mcp/server.py` uses it.
+3. **A per-tab busy guard** so parallel long calls on one tab are refused, and a shielded release of a held touch or
+   button after a cut.
+4. **The `--version` probe** on the event loop (above): move it off the loop or cache it per executable.
+5. **A screen feed of only what the rules read** (Round 56's item 2).
+6. **Intermittents to watch:** the screen-recorder length test, the beep-count test, the play-arena title screen, the
+   feed test, the region-runner test, the reflex speed test.
+7. **Carried over:** confine the AI's page script to the page's own world (Round 54); the sheet vs recall vs journal
+   A/B with blind agents (Round 10).

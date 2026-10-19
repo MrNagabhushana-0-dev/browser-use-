@@ -1,5 +1,14 @@
 # Handoff, 2026-10-14 ~15:45 UTC
 
+**Status, 2026-10-19:** PRs #11 and #12 are merged. Of the pending work below:
+- item 1 is done (`2925247`, in PR #12);
+- item 2 ran on `2925247` and was red on the screen-recorder intermittent;
+- item 3's browse and watch half is done (`75a7dc1`);
+- the scan sheet's bottom bias is fixed (`e0ed5e3`);
+- item 5's cold-start `retinat_open` failure is fixed.
+
+What is still open is in the findings log, Round 57, "Next, in order".
+
 The owner hit their usage limit and asked, verbatim:
 
 > Do u mind urjent raising a new pr with everything on ur vm? Including my prompt & pending work
