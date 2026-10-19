@@ -109,6 +109,20 @@ def _text(result) -> str:
 	return '\n'.join(b.text for b in result.content if isinstance(b, types.TextContent))
 
 
+async def _open_started(server, url: str):
+	"""retinat_open for a test's setup, waiting out the browser's start: a server with a budget of a few seconds says the
+	browser is still starting rather than wait for it, and the tests time only the calls after their setup."""
+	import asyncio
+
+	for _ in range(60):
+		r = await _call(server, 'retinat_open', {'url': url})
+		if not (r.is_error and 'still starting' in _text(r)):
+			assert not r.is_error, _text(r)
+			return r
+		await asyncio.sleep(0.5)
+	raise AssertionError('the browser did not start in 30 s')
+
+
 async def test_it_is_its_own_server_with_only_vision_first_tools():
 	server = RetinatServer()
 	assert server.server.name == 'retinat'
@@ -822,7 +836,7 @@ async def test_a_long_scan_through_mcp_answers_within_the_call_budget(retinat_sh
 		+ '</body>'
 	)
 	site.expect_request('/very-tall').respond_with_data(page, content_type='text/html')
-	await _call(retinat_short, 'retinat_open', {'url': site.url_for('/very-tall')})  # no cold launch in the timing
+	await _open_started(retinat_short, site.url_for('/very-tall'))  # no cold launch in the timing
 	started = time.monotonic()
 	first = await _call(retinat_short, 'retinat_scan', {'max_screens': 80})
 	took = time.monotonic() - started
@@ -863,7 +877,7 @@ async def test_a_call_keeps_to_its_budget_by_itself_or_the_backstop_stops_it(tmp
 	)
 	try:
 		site.expect_request('/spin').respond_with_data(page, content_type='text/html')
-		await _call(server, 'retinat_open', {'url': site.url_for('/spin')})
+		await _open_started(server, site.url_for('/spin'))
 		await _call(server, 'retinat_reflex', {'rules': [{'when': 'false', 'notify': 'never'}]})
 		started = time.monotonic()
 		waited = await _call(server, 'retinat_wait', {'timeout': 10})
@@ -899,7 +913,7 @@ async def test_a_browse_through_mcp_keeps_to_the_call_budget(tmp_path, monkeypat
 	server = RetinatServer(call_budget_s=budget)
 	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
 	try:
-		await _call(server, 'retinat_open', {'url': site.url_for('/plain')})
+		await _open_started(server, site.url_for('/plain'))
 		await _call(server, 'retinat_look', {})  # the eyes open here, not in the timed call
 		started = time.monotonic()
 		r = await _call(server, 'retinat_browse', {'items': 5, 'max_seconds': 10, 'min_seconds': 2})
