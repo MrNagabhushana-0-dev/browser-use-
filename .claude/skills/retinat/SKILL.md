@@ -18,6 +18,8 @@ For a native desktop app rather than a web page, a server started with `BROWSER_
 
 1. **Open the page:** `retinat_open(url)`. If the reply starts with `BLOCKED:`, stop and tell the
    user what blocked you and what the reply advises. Never try to get past a bot wall or CAPTCHA.
+   If it says `The browser is still starting`, call it again: the first start after a machine boots
+   can take a minute, and goes on between calls.
 2. **Look before you act:**
    - `retinat_look` shows the current screen.
    - `retinat_scan` shows the whole page scrolled, which suits canvas, WebGL and scroll-driven

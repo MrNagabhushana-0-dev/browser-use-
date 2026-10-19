@@ -904,8 +904,9 @@ class BrowserUseServer:
 			return eyes.now_line()
 		raise Refused(f'Unknown tool: {tool_name}')
 
-	async def _init_browser_session(self, allowed_domains: list[str] | None = None, **kwargs):
-		"""Initialize browser session using config"""
+	async def _init_browser_session(self, allowed_domains: list[str] | None = None, start_timeout: float | None = None, **kwargs):
+		"""Initialize browser session using config. start_timeout: seconds the browser start may take (see
+		BrowserSession.start)."""
 		if self.browser_session:
 			return
 
@@ -957,7 +958,7 @@ class BrowserUseServer:
 		# Create browser session
 		self.browser_session = BrowserSession(browser_profile=profile)
 		try:
-			await self.browser_session.start()
+			await self.browser_session.start(timeout=start_timeout)
 		except BaseException:
 			# keep no half-started session: every later call would fail on it instead of retrying the launch
 			session, self.browser_session = self.browser_session, None

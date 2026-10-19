@@ -68,7 +68,8 @@ class LocalBrowserWatchdog(BaseWatchdog):
 			self.logger.debug('[LocalBrowserWatchdog] Received BrowserLaunchEvent, launching local browser...')
 
 			# self.logger.debug('[LocalBrowserWatchdog] Calling _launch_browser...')
-			process, cdp_url = await self._launch_browser()
+			# Chrome gets as long to open its port as the launch was given, and never less than before
+			process, cdp_url = await self._launch_browser(cdp_timeout=max(30.0, event.event_timeout or 0.0))
 			self._subprocess = process
 			# self.logger.debug(f'[LocalBrowserWatchdog] _launch_browser returned: process={process}, cdp_url={cdp_url}')
 
@@ -106,7 +107,7 @@ class LocalBrowserWatchdog(BaseWatchdog):
 			self.event_bus.dispatch(BrowserKillEvent())
 
 	@observe_debug(ignore_input=True, ignore_output=True, name='launch_browser_process')
-	async def _launch_browser(self, max_retries: int = 3) -> tuple[psutil.Process, str]:
+	async def _launch_browser(self, max_retries: int = 3, cdp_timeout: float = 30.0) -> tuple[psutil.Process, str]:
 		"""Launch browser process and return (process, cdp_url).
 
 		Handles launch errors by falling back to temporary directories if needed.
@@ -189,7 +190,7 @@ class LocalBrowserWatchdog(BaseWatchdog):
 
 				# Wait for CDP to be ready and get the URL
 				try:
-					cdp_url = await self._wait_for_cdp_url(debug_port, process=process)
+					cdp_url = await self._wait_for_cdp_url(debug_port, timeout=cdp_timeout, process=process)
 				except RuntimeError as e:
 					# Chrome said why it exited on stderr: without it the error says only that it did.
 					said = await self._stderr_tail(subprocess)

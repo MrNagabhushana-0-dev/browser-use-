@@ -909,3 +909,50 @@ async def test_a_browse_through_mcp_keeps_to_the_call_budget(tmp_path, monkeypat
 		assert 'out of time' in _text(r) and 'call again with items=5' in _text(r), _text(r)
 	finally:
 		await server._close_all_sessions()
+
+
+async def test_a_browser_slow_to_start_is_waited_for_across_calls_and_started_once(tmp_path, monkeypatch, site):
+	"""The first call after a machine boots waited on a Chrome read off a cold disk: the start was stopped at 30 s, the
+	call failed, and the next call launched a browser over again. Now a start runs on past a call that cannot wait
+	for it: that call says the browser is still starting and to call again, and a later call gets it. One launch."""
+	import asyncio
+	import time
+
+	import psutil
+
+	from browser_use.browser.watchdogs.local_browser_watchdog import LocalBrowserWatchdog
+
+	chrome = LocalBrowserWatchdog._find_installed_browser_path()
+	assert chrome
+	slow = tmp_path / 'slow-chrome.sh'
+	# The profile asks this Chrome its version for the user agent: that is not a launch, and is not slow
+	slow.write_text(
+		f'#!/bin/sh\ncase "$1" in --version) exec "{chrome}" "$@";; esac\n'
+		f'echo launch >> "{tmp_path / "launches"}"\nsleep 5\nexec "{chrome}" "$@"\n'
+	)
+	slow.chmod(0o755)
+	site.expect_request('/plain').respond_with_data('<!doctype html><title>Plain</title><body>plain', content_type='text/html')
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(call_budget_s=3)
+	server.config.setdefault('browser_profile', {}).update(
+		{'headless': True, 'user_data_dir': str(tmp_path / 'profile'), 'executable_path': str(slow)}
+	)
+	try:
+		started = time.monotonic()
+		first = await _call(server, 'retinat_open', {'url': site.url_for('/plain')})
+		took = time.monotonic() - started
+		assert first.is_error and 'still starting' in _text(first) and 'call again' in _text(first), _text(first)
+		assert took < 3.5, f'took {took:.1f}s with a 3 s budget'
+		for _ in range(30):
+			await asyncio.sleep(1)
+			r = await _call(server, 'retinat_open', {'url': site.url_for('/plain')})
+			if not r.is_error:
+				break
+			assert 'still starting' in _text(r), _text(r)
+		assert not r.is_error and 'Opened "Plain"' in _text(r), _text(r)
+		assert (tmp_path / 'launches').read_text().count('launch') == 1
+	finally:
+		await server._close_all_sessions()
+	assert not [
+		p for p in psutil.process_iter(['cmdline']) if any(str(tmp_path / 'profile') in a for a in p.info['cmdline'] or [])
+	], 'a browser was left running'

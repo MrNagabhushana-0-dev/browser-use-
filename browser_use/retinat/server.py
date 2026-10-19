@@ -35,6 +35,7 @@ import base64
 import json
 import os
 import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 from browser_use.eyes.views import CALL_BUDGET_S, Deadline
@@ -75,6 +76,11 @@ ACTING = frozenset(
 # stop BACKSTOP_GRACE_S after it if it does not stop by itself (the client's 60 s minus room for the answer)
 LONG_TOOLS = frozenset({'retinat_scan', 'retinat_browse', 'retinat_watch', 'retinat_explore', 'retinat_desktop_watch'})
 BACKSTOP_GRACE_S = 6.0
+# What a browser start may take in all, across calls: the first start after a machine boots reads Chrome off a cold
+# disk, and went past the 30 s it was given. A call waits for a start only as long as its own budget allows, keeping
+# START_RESERVE_S of it for its own work once the browser is up.
+START_TIMEOUT_S = 120.0
+START_RESERVE_S = 10.0
 
 # What a click at (x, y) lands on: the topmost element there (into open shadow roots), lifted to the control that owns
 # it, described as role plus the text a person would read on it.
@@ -654,6 +660,8 @@ class RetinatServer(BrowserUseServer):
 		self.cdp_url = bridge.cdp_url if bridge else cdp_url
 		self._control: 'DesktopControl | None' = None  # computer use, made on first use
 		self._waits = 0  # retinat_wait calls in progress
+		self._starting: asyncio.Task[None] | None = None  # the browser start in flight, which calls join
+		self._starting_since = 0.0
 		self.server = Server('retinat', version=get_browser_use_version())
 		self._setup_retinat_handlers()
 
@@ -715,7 +723,31 @@ class RetinatServer(BrowserUseServer):
 		self.server.add_request_handler('resources/list', types.PaginatedRequestParams, empty_resources)
 		self.server.add_request_handler('prompts/list', types.PaginatedRequestParams, empty_prompts)
 
-	async def _ensure_session(self) -> None:
+	async def _ensure_session(self, deadline: Deadline | None = None) -> None:
+		"""A browser for this call. Its start runs on past a call that cannot wait for it, and later calls join that same
+		start: a slow start was stopped part way at 30 s, and the next call began another from nothing."""
+		if self._starting is None:
+			if self.browser_session:
+				return
+			self._starting = asyncio.create_task(self._start_session())
+			self._starting.add_done_callback(lambda t: t.cancelled() or t.exception())  # a failure is told to a later call
+			self._starting_since = time.monotonic()
+		starting = self._starting
+		wait = deadline.clamp(START_TIMEOUT_S, reserve=START_RESERVE_S) if deadline is not None and deadline.bounded else None
+		try:
+			await asyncio.wait_for(asyncio.shield(starting), wait)
+		except TimeoutError:
+			if starting.done():
+				raise  # the start itself timed out
+			raise RuntimeError(
+				f'The browser is still starting ({time.monotonic() - self._starting_since:.0f}s so far: Chrome read off a '
+				'cold disk, as after the machine boots, can take a minute). Nothing was done; call again.'
+			) from None
+		finally:
+			if starting.done() and self._starting is starting:
+				self._starting = None  # started, or failed and told: the next call starts afresh if it must
+
+	async def _start_session(self) -> None:
 		if not self.browser_session:
 			if self.bridge:
 				try:
@@ -727,11 +759,11 @@ class RetinatServer(BrowserUseServer):
 						"The person's browser is not connected; tell them what to do. "
 						+ summary(checks(await self.bridge.status()))
 					) from None
-				await self._init_browser_session(allowed_domains=None)
+				await self._init_browser_session(allowed_domains=None, start_timeout=START_TIMEOUT_S)
 			elif self.cdp_url:
-				await self._init_browser_session(allowed_domains=None, cdp_url=self.cdp_url)
+				await self._init_browser_session(allowed_domains=None, cdp_url=self.cdp_url, start_timeout=START_TIMEOUT_S)
 			else:
-				await self._init_browser_session()
+				await self._init_browser_session(start_timeout=START_TIMEOUT_S)
 
 	@staticmethod
 	def _content(percept) -> list['types.ContentBlock']:
@@ -812,7 +844,7 @@ class RetinatServer(BrowserUseServer):
 			return self._content(await desktop.watch(seconds=float(args.get('seconds', 8))))
 		if name.startswith('retinat_desktop_'):
 			return await self._call_control(name, args)
-		await self._ensure_session()
+		await self._ensure_session(deadline)
 		assert self.browser_session is not None
 		if self.bridge is not None and name in ACTING:
 			self._check_wheel()
@@ -1049,6 +1081,10 @@ class RetinatServer(BrowserUseServer):
 		return f'{count} reflex rule(s) running every frame on this tab. retinat_wait sleeps until one notifies.'
 
 	async def _close_all_sessions(self) -> str:
+		if self._starting is not None:
+			self._starting.cancel()  # a start cancelled part way kills what it had begun
+			await asyncio.gather(self._starting, return_exceptions=True)
+			self._starting = None
 		if self._control is not None:
 			self._control.close()
 			self._control = None

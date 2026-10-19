@@ -905,9 +905,17 @@ class BrowserSession(BaseModel):
 		BaseWatchdog.attach_handler_to_session(self, CloseTabEvent, self.on_CloseTabEvent)
 
 	@observe_debug(ignore_input=True, ignore_output=True, name='browser_session_start')
-	async def start(self) -> None:
-		"""Start the browser session."""
-		start_event = self.event_bus.dispatch(BrowserStartEvent())
+	async def start(self, timeout: float | None = None) -> None:
+		"""Start the browser session.
+
+		timeout: seconds the start may take, the launch inside it included, instead of the defaults
+		(TIMEOUT_BrowserStartEvent / TIMEOUT_BrowserLaunchEvent, 30 s). Chrome read off a cold disk, as after a
+		machine boots, can take longer than that.
+		"""
+		assert timeout is None or timeout > 0, 'a start takes some seconds'
+		start_event = self.event_bus.dispatch(
+			BrowserStartEvent() if timeout is None else BrowserStartEvent(event_timeout=timeout)
+		)
 		await start_event
 		# Ensure any exceptions from the event handler are propagated
 		await start_event.event_result(raise_if_any=True, raise_if_none=False)
@@ -996,7 +1004,11 @@ class BrowserSession(BaseModel):
 						raise CloudBrowserError(f'Failed to create cloud browser: {e}')
 				elif self.is_local:
 					# Launch local browser using event-driven approach
-					launch_event = self.event_bus.dispatch(BrowserLaunchEvent())
+					launch = BrowserLaunchEvent()
+					if event.event_timeout and launch.event_timeout and event.event_timeout > launch.event_timeout:
+						# The launch is most of a start: it gets the time the start was given
+						launch = BrowserLaunchEvent(event_timeout=event.event_timeout)
+					launch_event = self.event_bus.dispatch(launch)
 					await launch_event
 
 					# Get the CDP URL from LocalBrowserWatchdog handler result

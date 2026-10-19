@@ -105,3 +105,62 @@ async def test_two_processes_starting_on_one_profile_at_the_same_moment_both_get
 	]
 	outputs = [(await asyncio.wait_for(r.communicate(), 90))[0].decode() for r in racers]
 	assert all('STARTED' in out for out in outputs), outputs
+
+
+def _slow_chrome(tmp_path, delay: float) -> str:
+	"""The real Chrome, begun `delay` seconds late, as one read off a cold disk; each launch adds a line to launches."""
+	from browser_use.browser.watchdogs.local_browser_watchdog import LocalBrowserWatchdog
+
+	chrome = LocalBrowserWatchdog._find_installed_browser_path()
+	assert chrome, 'no Chrome installed to test with'
+	path = tmp_path / 'slow-chrome.sh'
+	# The profile asks this Chrome its version for the user agent: that is not a launch, and is not slow
+	path.write_text(
+		f'#!/bin/sh\ncase "$1" in --version) exec "{chrome}" "$@";; esac\n'
+		f'echo launch >> "{tmp_path / "launches"}"\nsleep {delay}\nexec "{chrome}" "$@"\n'
+	)
+	path.chmod(0o755)
+	return str(path)
+
+
+def _running_on(profile_dir) -> list[int]:
+	"""Processes started with this profile directory: the launcher while it waits, then Chrome."""
+	import psutil
+
+	found = []
+	for p in psutil.process_iter(['pid', 'cmdline']):
+		try:
+			if any(str(profile_dir) in part for part in p.info['cmdline'] or []):
+				found.append(p.info['pid'])
+		except (psutil.NoSuchProcess, psutil.AccessDenied):
+			pass
+	return found
+
+
+async def test_a_slow_launch_starts_when_given_the_time_and_leaves_nothing_behind_when_not(tmp_path, monkeypatch) -> None:
+	"""Chrome read off a cold disk, as after a machine boots, took a first start past 30 s, and the start was stopped
+	at 30 s. Given the time with start(timeout=...), a slow launch comes up: the timeout covers the launch inside the
+	start. Stopped at its limit, a start leaves no browser behind to hold the profile."""
+	import pytest
+
+	monkeypatch.setenv('TIMEOUT_BrowserStartEvent', '2')  # stand-ins for the 30 s defaults, to keep this short
+	monkeypatch.setenv('TIMEOUT_BrowserLaunchEvent', '2')
+	slow = _slow_chrome(tmp_path, delay=3)
+	profile_dir = tmp_path / 'profile'
+
+	cut = BrowserSession(browser_profile=BrowserProfile(headless=True, executable_path=slow, user_data_dir=profile_dir))
+	try:
+		with pytest.raises(Exception, match='timed out'):
+			await cut.start()
+		await asyncio.sleep(3.5)  # past the delay: a launch left running would be Chrome by now
+		assert not _running_on(profile_dir), 'a start stopped at its limit left its browser running'
+	finally:
+		await cut.kill()
+
+	given = BrowserSession(browser_profile=BrowserProfile(headless=True, executable_path=slow, user_data_dir=profile_dir))
+	try:
+		await given.start(timeout=20)
+		assert given.cdp_url
+		await given.navigate_to('about:blank')
+	finally:
+		await given.kill()
