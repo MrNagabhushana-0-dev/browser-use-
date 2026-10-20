@@ -3818,3 +3818,31 @@ issue #58687 asked for it and is closed, with no shipped fix confirmed; Cursor's
 9. **A browse's glimpses in a finished browse:** an item glimpsed while a flick overshot is still listed after the
    watched ones when the browse was not stopped for time (it was before this round too); decide whether a browse
    should only ever list what it watched.
+
+## Round 58 (unattended loop, 2026-10-20 01:42): MR Racer 109 -> 657 with lane keeping
+
+Hands-on only, no library change (`docs/hands-on/2026-10-20/notes.md`).
+
+- **A second cold boot:** the first `retinat_open` after it took 10 s and the MCP connect 6 s (49 s and 88 s on the
+  boot before). How slow a boot is depends on the layer under the VM.
+- **MR Racer, Endless (Farm Land), all driving by reflex rules at 480 px:**
+  - calibration run: 122;
+  - **v3**, dodge only into a lane whose boxes read clear, else brake: 163; its 300 ms steering pulses left it
+    straddling a line, and a car it moved away from clipped it;
+  - **v4**, plus lane keeping by the white lines just below the car (centred: lines at x ~385 and ~693; straddling:
+    one at ~515-528): **611 at 4.0 km**, but pinned to the right barrier at 30 km/h for long stretches, because the
+    road's edge line under the car read as a lane line on the left;
+  - **v5**, a line under the car with no lane line to its right is the edge, so steer left: swapped in live, the
+    run ended at **657 (4.26 km), the best MR Racer score so far** (was 159 in a challenge, 109 in Endless). It crashed
+    within 30 s of the swap; not looked into yet.
+- Measured: the box above our roof rose 0 -> 5 -> 42 -> 74 dark pixels over ~3 s before a rear-end; the side boxes'
+  clear-road levels differ (right 0-3, left up to ~100), so each has its own threshold.
+- Found: a notice keyed on `see.frame` came ~50 s late on the results screen (few frames drawn); keyed on `see.t` it
+  is on time. Not a library bug: worth a line in the reflex tool's description.
+
+**Next, in order:**
+1. **Racer:** why v5 crashed after the swap; stop braking for the barrier and trees the roof box also reads; a box
+   for a car level with us.
+2. Temple Run 2 key timing and corners; Subway Surfers' Left/Right tutorial step (Round 56's list).
+3. The rest of Round 57's list: explore under the call budget (slice B2), the per-tab busy guard and a bounded flick,
+   the `--version` probe and the slow connect after a boot, progress notifications.
