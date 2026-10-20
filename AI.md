@@ -210,6 +210,7 @@ continuous stream on disk rather than in your context.
 | Find everything broken on a site | `retinat_explore` | a report plus 1 sheet |
 | Know what the page fetched, which request failed, or what an API answered | `retinat_requests` (`only="failed"` or `"api"`; `body=#n` for one response, tokens and passwords masked) | text only, about 20 tokens a line |
 | Know what the page logged or threw: console errors and warnings, uncaught exceptions, failed loads | `retinat_console` (`level="error"` or `"warning"`, `pattern` a regex, `since` the cursor; keys and tokens masked) | text only, a line per entry |
+| Play a real-time game yourself, deciding every move from what you see | `retinat_step` with `ms`, `tap` and `hold` (the page's clock stands still between steps; see [Step mode](#step-mode-playing-it-yourself-turn-by-turn)) | 1 image per step (about 300-500 tokens) |
 
 Token figures are estimates. Images are costed at about one token per 28×28 px patch.
 
@@ -280,6 +281,27 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
 - **Look after `retinat_wait` returns, not alongside it.** A client may send both at once, and the look then runs
   straight away, before what you are waiting for. Such a look says so ("asked while a retinat_wait was still
   waiting").
+
+## Step mode: playing it yourself, turn by turn
+
+Reflexes play a game with rules you wrote; step mode lets you play it, each move decided from the frame you saw.
+Your turn takes seconds and the game moves every 16 ms, so `retinat_step` stops the page's clock while you think, as
+game benchmarks do (VideoGameBench Lite, Orak and NitroGen pause the game during inference; the ALE steps it a few frames
+per action):
+
+- `retinat_step(ms=250, tap=['ArrowLeft'])` presses the key, plays 250 ms of game time a frame at a time (about 250 ms
+  of real time too), stops the clock again and shows you the frame it ended on. The first step pauses the page.
+- `tap` keys are down for the first ~50 ms; `hold` keys stay down through this step and the next ones, until a step
+  leaves them out (a throttle stays pressed while you think).
+- `charge_thinking=true` first plays the time you took to decide, with the last keys still held: how the same play
+  would fare live (OmniGameArena's latency-charged mode). Report scores with the mode they were made in: a turn-based
+  score is not real-time play, and every answer says how much slower than live the play was.
+- `action=resume` gives the page real time back. A tab cannot leave Chrome's virtual time once in it, so Retinat
+  keeps moving its clock with the real one from then on; `retinat_open` does this by itself.
+
+What stops with the clock: `performance.now()`, `Date`, timers, posted messages and animation frames, in the page and
+in frames its process draws (a game frame from the same site, as poki.com hosts games on *.gdn.poki.com). What does
+not: sound, CSS animations, video, workers, and a frame from another site running in its own process.
 
 ## Hard rules
 

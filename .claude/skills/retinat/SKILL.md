@@ -45,7 +45,10 @@ For a native desktop app rather than a web page, a server started with `BROWSER_
    - `retinat_requests(only="failed")` when something did nothing: the failing request and, with `body=#n`, what
      the server said (tokens and passwords masked).
    - `retinat_console(level="error")` when the page breaks or goes blank: what it logged and threw.
-5. **Find bugs across a site:** `retinat_explore(url)` returns a report plus a sheet of every
+5. **Play a real-time game yourself:** `retinat_step(ms, tap=[...], hold=[...])` stops the page's clock while you
+   think and plays only the game time each step asks, then shows the frame it ended on. Say a score made this way is
+   turn-based; `charge_thinking=true` plays your thinking time first, to see how the play would fare live.
+6. **Find bugs across a site:** `retinat_explore(url)` returns a report plus a sheet of every
    page. Present the findings with their evidence.
 
 ## Geo-blocked or censored pages

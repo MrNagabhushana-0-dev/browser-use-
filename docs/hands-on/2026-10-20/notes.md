@@ -94,3 +94,45 @@ environment against the lockfile before running: every installed package's metad
 off the cold disk, under a lock on `.venv` that the two servers starting together share. `.mcp.json` now starts both
 with `uv run --no-sync` (0.04 s warm against 0.1-0.2 s); `uv sync` after cloning or changing dependencies, as the
 setup already says. To verify on the next cold boot.
+
+## 4. A fresh boot (05:42 UTC) with `uv run --no-sync`
+
+The machine had been up less than a minute when the round began. From the client's own log: **Retinat connected in
+6.3 s and browser-use in 9.0 s**, against 79.7 s (03:36) and 93.5 s (02:42) on earlier cold boots. The first
+`retinat_open` took 17 s, like the 16 s at 04:42; the coldest boots took 47-49 s. So the layer under the VM was partly
+warm: the connect is checked on a fresh boot, not on the coldest disk seen.
+
+## 5. Step mode: the model plays, not its rules
+
+The owner asked whether the racer was really me playing. It was not: reflex rules I wrote drove it (section 2). Real-
+time games outrun a model's turn, so game benchmarks pause the game while the model thinks (VideoGameBench Lite, Orak,
+NitroGen) or step it a few frames per action (the ALE's frame skip). `retinat_step` does that to a web page.
+
+Measured on a local page before building it (CDP `Emulation.setVirtualTimePolicy`, Chromium headless=new):
+- paused: `performance.now()`, `Date.now()` and a 50 ms `setInterval` stood still over a second of real time; a key
+  sent while paused was delivered; a screenshot took 0.13-0.3 s.
+- `requestAnimationFrame` did not stop: 60 callbacks a second, with timestamps on real time (3446 -> 4446 ms while
+  the clock stood at 3410). A game timed by those timestamps, or by counting frames, ran on through the pause.
+- advancing 500 ms at once ran the timers due (10 of 50 ms) but only 7 frames; stepping 16-17 ms and waiting for a
+  frame each time played 500 ms as 30 even frames in 0.5 s of real time.
+- a frame from another origin of the same site (as poki.com hosts its games on `*.gdn.poki.com`) stood still and
+  stepped with the page. browser-use launches Chrome here with `--disable-site-isolation-trials`, so a frame from
+  another site was not in a process of its own and could not be tried.
+- virtual time cannot be left: after a pause, detaching the CDP session that set it left the page frozen.
+- once a paused page draws nothing, Chrome makes no more frames, and neither a style change nor a screenshot starts
+  them again; a 1 px canvas drawn every frame keeps them coming.
+
+So the page's `requestAnimationFrame` is made to wait for the clock to move and to hand out its time, a 1 px canvas
+(1% opaque) keeps frames coming, and `resume` moves the clock with the real one from then on. Tests on local games
+timed all three ways (`tests/ci/test_clock.py`); without the rAF change, the rAF-timed game moved 1000 ms in a 1 s
+pause.
+
+Subway Surfers on Poki is not Unity: its assets are Vite-built JavaScript (`assets/*-hash.js`, a webp sprite atlas)
+served from `5dd312fa-....gdn.poki.com`, the same site as the page.
+
+**Found on the way:** after Retinat was restarted with the new tool, Claude Code reconnected in 1.7 s but kept the tool
+list of its first connection, so `retinat_step` could not be called. Retinat did not say its tools could change. It
+now serves `subscriptions/listen` (the 2026-07-28 protocol Claude Code speaks) and tells each process's first listener
+that the list changed, or older clients on their first call. Both are tested over real stdio with the SDK's clients.
+In this session the tool still did not show up within the same turn, so whether Claude Code re-lists on the notice
+is not yet seen.
