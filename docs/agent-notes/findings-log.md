@@ -3862,8 +3862,11 @@ Hands-on only, no library change (`docs/hands-on/2026-10-20/notes.md`).
     serves (failed before: no front); a call taken 4 s into a 5 s budget waits ~1 s (4.5 s without `CALL_STARTED`);
     the stdio lifecycle tests pass through the front.
   - Affected files (Retinat, MCP lifecycle/page tools/annotations/client errors, network, desktop control and eyes,
-    bridge, proxy CA): **152 passed, 0 failed** (9m48s). Full `tests/ci` on `769b029`: running at this commit (result in the next commit).
+    bridge, proxy CA): **152 passed, 0 failed** (9m48s). Full `tests/ci` on `769b029`: lost to a container restart; rerun on the head after it.
   - Measured warm over stdio: `initialize` 1.37 s through the front, 3.09 s importing the server first.
-  - Not verified: the connect on the next cold boot (estimated ~35-40 s by module count).
+  - **On the next cold boot (03:36) the connect took 79.7 s**, not ~35-40 s: `uv run` itself ran ~54 s before Python
+    started (its sync check reads 243 packages' metadata, 1,706 files, under a lock on `.venv` both servers share);
+    Python's part fell from ~44 s to ~27 s. `.mcp.json` now starts both servers with `uv run --no-sync`. To verify on
+    the next cold boot.
 
 **Next, in order:** as in Round 58, with "the slow connect after a boot" done if the next cold boot confirms it.

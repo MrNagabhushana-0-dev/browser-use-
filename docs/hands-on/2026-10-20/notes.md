@@ -59,3 +59,11 @@ first tool call waits for it, and its budget counts from when the front took it.
 1.37 s (3.09 s importing the server first), `tools/list` 0.01 s, the first call 4.6 s.
 
 Not verified yet: the connect time on the next cold boot. By module count it should fall to roughly 35-40 s.
+
+**The next cold boot (03:36 UTC), with the front:** the connect took **79.7 s** (88 and 93.5 s before), less than
+estimated. By the process start times, `uv run` itself ran ~54 s before Python started (03:36:54 to 03:37:48);
+Python then answered the handshake in ~27 s (~44 s on the boot before, without the front). `uv run` checks the
+environment against the lockfile before running: every installed package's metadata (243 packages, 1,706 files) read
+off the cold disk, under a lock on `.venv` that the two servers starting together share. `.mcp.json` now starts both
+with `uv run --no-sync` (0.04 s warm against 0.1-0.2 s); `uv sync` after cloning or changing dependencies, as the
+setup already says. To verify on the next cold boot.
