@@ -51,9 +51,15 @@ _BUDGET_WAIT_S = 5.0
 # Virtual time moves only when the page has no task ready to run: after this many tasks run in a row it is moved on
 # anyway, so a page that keeps posting work (messages, a busy loop of promises) cannot hold the clock back
 _STARVATION_TASKS = 100
-# The most one move of the pump may catch up, and how many failures in a row (the tab gone) stop it
+# How long a frame is waited for before our world is made again: a page left for another one sits frozen in the
+# back-forward cache, and a frame asked of its world never comes
+_FRAME_WAIT_S = 1.0
+# The most one move of the pump may catch up, how often it checks the beat is still there (a new page has none), and how
+# long it keeps failing before it takes the tab to be gone: a pump that stops while its tab lives freezes the tab for
+# good, so a page being replaced must never be enough
 _PUMP_CATCH_UP_MS = 250.0
-_PUMP_GIVE_UP = 50
+_PUMP_BEAT_CHECK = 30
+_PUMP_GIVE_UP_S = 30.0
 _EXPIRED_EVENT = 'Emulation.virtualTimeBudgetExpired'
 _WORLD = 'browser_use_clock'
 # requestAnimationFrame on the page's clock, in every frame of the tab, now and on each new document: a callback runs
@@ -292,30 +298,52 @@ class PageClock:
 			self._world = (frame_id, world['executionContextId'])
 		return self._world[1]
 
-	async def _next_frame(self) -> None:
+	async def _next_frame(self) -> bool:
 		"""Wait for the page to draw its next frame, asked in our own world: the page's requestAnimationFrame (ours or its
-		own) is not the one waited on."""
+		own) is not the one waited on. False if none came, after making the world again once."""
 		trouble = ''
-		for attempt in (1, 2):
+		for _ in (1, 2):
 			try:
-				result = await self._send(
+				result = await asyncio.wait_for(self._frame_in_world(), _FRAME_WAIT_S)
+				if not result.get('exceptionDetails'):
+					return True
+				trouble = str(result['exceptionDetails'])
+			except TimeoutError:
+				trouble = f'no frame within {_FRAME_WAIT_S:.0f}s'
+			except Exception as e:  # the context is gone with the page it was in
+				trouble = f'{type(e).__name__}: {e}'
+			self._world = None  # the page was replaced or left: make the world again in the one shown now
+		logger.debug(f'clock: no frame to wait for: {trouble}')
+		return False
+
+	async def _frame_in_world(self) -> dict[str, Any]:
+		return await self._send(
+			'Runtime',
+			'evaluate',
+			{
+				'expression': 'new Promise((done) => requestAnimationFrame(() => done(1)))',
+				'contextId': await self._world_id(),
+				'awaitPromise': True,
+			},
+		)
+
+	async def _check_beat(self) -> None:
+		"""Make our world (and its beat) again if the page shown now has none: it was replaced since."""
+		try:
+			result = await asyncio.wait_for(
+				self._send(
 					'Runtime',
 					'evaluate',
-					{
-						'expression': 'new Promise((done) => requestAnimationFrame(() => done(1)))',
-						'contextId': await self._world_id(),
-						'awaitPromise': True,
-					},
-				)
-				if not result.get('exceptionDetails'):
-					return
-				trouble = str(result['exceptionDetails'])
-			except Exception as e:  # the context is gone with the page it was in
-				if attempt == 2:
-					raise
-				trouble = f'{type(e).__name__}: {e}'
-			self._world = None  # the page was replaced since: make the world again in the new one
-		logger.debug(f'clock: no frame to wait for: {trouble}')
+					{'expression': '!!window.__browserUseBeat', 'contextId': await self._world_id(), 'returnByValue': True},
+				),
+				_FRAME_WAIT_S,
+			)
+			if result.get('result', {}).get('value') is True:
+				return
+		except Exception as e:
+			logger.debug(f'clock: the beat is gone: {type(e).__name__}: {e}')
+		self._world = None
+		await self._world_id()
 
 	async def _stop_beat(self) -> None:
 		world, self._world = self._world, None
@@ -339,23 +367,26 @@ class PageClock:
 				await self._key(key, 'keyUp')
 
 	async def _run_pump(self) -> None:
-		"""Real time, played as steps are: the clock moves by the real time since its last move, then a frame is drawn."""
+		"""Real time: every frame or so the clock moves by the real time since its last move."""
 		last = time.monotonic()
-		failures = 0
+		failing_since: float | None = None
+		moves = 0
 		try:
-			while failures < _PUMP_GIVE_UP:
+			while failing_since is None or time.monotonic() - failing_since < _PUMP_GIVE_UP_S:
+				await asyncio.sleep(FRAME_MS / 1000)
 				now = time.monotonic()
 				ms = min(_PUMP_CATCH_UP_MS, (now - last) * 1000)
 				last = now
 				try:
 					if ms >= 1:
 						await self._advance(round(ms))
-					await self._next_frame()
-					failures = 0
+					moves += 1
+					if moves % _PUMP_BEAT_CHECK == 0:
+						await self._check_beat()
+					failing_since = None
 				except Exception as e:  # a page being replaced, or the tab gone
-					failures += 1
-					logger.debug(f'clock: the pump missed a beat: {type(e).__name__}: {e}')
-					await asyncio.sleep(FRAME_MS / 1000)
+					failing_since = failing_since or time.monotonic()
+					logger.debug(f'clock: the pump missed a move: {type(e).__name__}: {e}')
 			logger.debug('clock: the pump stopped: the tab is gone')
 		except asyncio.CancelledError:
 			raise
