@@ -53,6 +53,7 @@ from browser_use.retinat.tools import (  # noqa: F401  (the tool lists are impor
 if TYPE_CHECKING:
 	from browser_use.bridge import BridgeRelay
 	from browser_use.desktop.service import DesktopControl
+	from browser_use.eyes.clock import PageClock
 
 TOOL_PREFIX = 'retinat_'
 # Said on what a seeing tool returns when it was asked while a retinat_wait was pending: a client may send both at
@@ -77,6 +78,7 @@ ACTING = frozenset(
 		'retinat_type',
 		'retinat_key',
 		'retinat_reflex',
+		'retinat_step',
 	}
 )
 
@@ -88,6 +90,8 @@ BACKSTOP_GRACE_S = 6.0
 # disk, and went past the 30 s it was given. A call waits for a start only as long as its own budget allows, keeping
 # START_RESERVE_S of it for its own work once the browser is up.
 START_TIMEOUT_S = 120.0
+# What a step keeps of its call to capture and send the frame it ended on
+STEP_ANSWER_S = 2.0
 START_RESERVE_S = 15.0  # a first retinat_open after its launch took 13-15 s more (eyes, navigation, the wall check)
 _START_STOPPED = 'The browser start was stopped (the route changed, or the server is closing). Nothing was done; call again.'
 
@@ -150,6 +154,7 @@ class RetinatServer(BrowserUseServer):
 		self._waits = 0  # retinat_wait calls in progress
 		self._starting: asyncio.Task[None] | None = None  # the browser start in flight, which calls join
 		self._starting_since = 0.0
+		self._clocks: dict[str, 'PageClock'] = {}  # per tab, once retinat_step has paused it
 		self.server = Server('retinat', version=get_browser_use_version())
 		self._setup_retinat_handlers()
 
@@ -266,6 +271,7 @@ class RetinatServer(BrowserUseServer):
 
 	async def _drop_browser_session(self) -> None:
 		await self._stop_starting()  # a start in flight is for the old route
+		await self._close_clocks()
 		await super()._drop_browser_session()
 
 	async def _start_session(self) -> None:
@@ -370,11 +376,17 @@ class RetinatServer(BrowserUseServer):
 		if self.bridge is not None and name in ACTING:
 			self._check_wheel()
 		if name == 'retinat_open':
+			# a paused tab would not commit the new page: its clock is given back first
+			clock = await self._clock(create=False)
+			resumed = ''
+			if clock is not None and clock.paused:
+				await clock.resume()
+				resumed = ' (the page was paused by retinat_step: it runs on real time again)'
 			if not args.get('new_tab'):
 				await self._eyes()  # watch from the page's first moment: what appears right after load counts
 			note = await act(self._navigate_routed(args['url'], bool(args.get('new_tab')), strict=True))
 			await asyncio.sleep(1.0)
-			return await self._wall_note() + note
+			return await self._wall_note() + resumed + note
 		if name == 'retinat_explore':
 			from browser_use.explore import Explorer, render_markdown, render_sheet
 
@@ -389,6 +401,8 @@ class RetinatServer(BrowserUseServer):
 			return await self._record(str(args['action']), int(args.get('framerate', 8)))
 		if name in ('retinat_reflex', 'retinat_wait'):
 			return await self._reflex(name, args, deadline)
+		if name == 'retinat_step':
+			return await self._step(args, deadline)
 		eyes = await self._eyes()
 		if name == 'retinat_console':
 			from browser_use.eyes.console import render as render_console
@@ -601,9 +615,80 @@ class RetinatServer(BrowserUseServer):
 			raise Refused(str(e)) from e
 		return f'{count} reflex rule(s) running every frame on this tab. retinat_wait sleeps until one notifies.'
 
+	async def _step(self, args: dict[str, Any], deadline: Deadline | None = None) -> str | list['types.ContentBlock']:
+		"""Pause, step or resume the focused tab's clock: the model plays a real-time page turn by turn."""
+		import io
+
+		from PIL import Image
+
+		from browser_use.eyes.clock import FRAME_MS, STEP_MAX_MS
+		from browser_use.mcp.effects import Refused, act
+
+		action = str(args.get('action') or 'step')
+		if action == 'resume':
+			clock = await self._clock(create=False)
+			if clock is None or not clock.paused:
+				return 'The page already runs on real time.'
+			await clock.resume()
+			return 'The page runs on real time again (Retinat moves its clock with the real one from now on).'
+		clock = await self._clock()
+		assert clock is not None
+		if not clock.paused:
+			await act(clock.pause())
+		if action == 'pause':
+			return 'Paused: the page stands still until a step plays it, or action=resume.'
+		ms = float(args.get('ms', 250))
+		if not FRAME_MS <= ms <= STEP_MAX_MS:
+			raise Refused(f'ms is game time to play, {FRAME_MS:.0f}-{STEP_MAX_MS:.0f}')
+		# a step is played at about real speed: within the call it plays what fits and keeps time to answer
+		stop_at = deadline.at - STEP_ANSWER_S if deadline is not None and deadline.bounded else None
+		hold = [str(k) for k in args.get('hold') or []]
+		tap = [str(k) for k in args.get('tap') or []]
+		charge = bool(args.get('charge_thinking'))
+		stepped = await act(clock.step(ms, hold=hold, tap=tap, charge_thinking=charge, stop_at=stop_at))
+		eyes = await self._eyes()
+		jpeg, how = await eyes._page_now()
+		cut = f' of the {ms:.0f} asked (the call had no time for more)' if stepped.game_ms < ms - FRAME_MS else ''
+		thought = f'First played your {stepped.charged_ms / 1000:.1f}s of thinking with the last keys held. ' if charge else ''
+		held = f'holding {", ".join(stepped.held)}' if stepped.held else 'no keys held'
+		text = (
+			f'{thought}Played {stepped.game_ms:.0f} ms{cut} ({stepped.frames} frames) in {stepped.real_s:.1f}s; paused again, '
+			f'{held}. Turn-based so far: {clock.played_ms / 1000:.1f}s of game time took {clock.slowdown:.0f}x as long '
+			'in real time.'
+		)
+		if not jpeg:
+			return text + ' No frame could be captured.'
+		with Image.open(io.BytesIO(jpeg)) as img:
+			size = img.size
+		text += f' The frame it ended on ({how}), {size[0]}x{size[1]}{eyes._click_scale(size)}.'
+		return [
+			types.TextContent(type='text', text=text),
+			types.ImageContent(type='image', data=base64.b64encode(jpeg).decode(), mime_type='image/jpeg'),
+		]
+
+	async def _clock(self, create: bool = True) -> 'PageClock | None':
+		"""The focused tab's clock, made on first use."""
+		from browser_use.eyes.clock import PageClock
+
+		assert self.browser_session is not None
+		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		clock = self._clocks.get(cdp.target_id)
+		if clock is not None and clock.session is not self.browser_session:
+			await clock.close()
+			clock = None
+		if clock is None and create:
+			clock = self._clocks[cdp.target_id] = PageClock(self.browser_session)
+		return clock
+
+	async def _close_clocks(self) -> None:
+		clocks, self._clocks = list(self._clocks.values()), {}
+		for clock in clocks:
+			await clock.close()
+
 	async def _close_all_sessions(self) -> str:
 		try:
 			await self._stop_starting()
+			await self._close_clocks()
 		finally:
 			if self._control is not None:
 				self._control.close()

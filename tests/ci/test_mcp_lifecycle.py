@@ -70,3 +70,51 @@ async def test_a_stopped_retinat_server_closes_its_browser(page, tmp_path, stop)
 		await asyncio.sleep(0.2)
 	alive = [b.pid for b in browsers if b.is_running() and b.status() != psutil.STATUS_ZOMBIE]
 	assert not alive, f'browser processes outlived the server ({stop}): {alive}'
+
+
+async def test_a_restarted_retinat_tells_its_client_to_list_the_tools_again(tmp_path):
+	"""Found hands-on: Retinat was restarted with a new tool (retinat_step); Claude Code reconnected in 1.7 s but kept the
+	tool list of the first connection, so the new tool could not be called for the rest of the session. A client
+	re-lists the tools when told the list changed: each server process says so once, on its first tool call."""
+	import mcp.types as types
+	from mcp import ClientSession, StdioServerParameters
+	from mcp.client.stdio import stdio_client
+
+	told: list[str] = []
+
+	async def on_message(message) -> None:
+		note = getattr(message, 'root', message)  # bare, or wrapped as older SDKs hand it over
+		if isinstance(note, types.ToolListChangedNotification):
+			told.append(note.method)
+
+	env = {**os.environ, 'BROWSER_USE_EYES_NOW': str(tmp_path / 'now.json'), 'BROWSER_USE_CONFIG_DIR': str(tmp_path / 'config')}
+	params = StdioServerParameters(command=sys.executable, args=['-m', 'browser_use.retinat', '--network', 'off'], env=env)
+	async with stdio_client(params) as (read, write):
+		async with ClientSession(read, write, message_handler=on_message) as client:
+			init = await client.initialize()
+			assert init.capabilities.tools is not None and init.capabilities.tools.list_changed, init.capabilities
+			for _ in range(2):
+				status = await client.call_tool('retinat_network_status', {})
+				assert not status.is_error, status
+			await asyncio.sleep(0.5)
+			assert told == ['notifications/tools/list_changed'], told
+			listed = await client.list_tools()
+			assert 'retinat_step' in {t.name for t in listed.tools}
+
+
+async def test_a_restarted_retinat_tells_a_listening_client_to_list_the_tools_again(tmp_path):
+	"""The same on the 2026-07-28 protocol, which Claude Code speaks: change notices go out on the stream a client opens
+	with subscriptions/listen, so Retinat serves one and tells each new listener once that the tool list changed."""
+	from mcp.client.client import Client
+	from mcp.client.stdio import StdioServerParameters
+	from mcp.shared.subscriptions import ToolsListChanged
+
+	env = {**os.environ, 'BROWSER_USE_EYES_NOW': str(tmp_path / 'now.json'), 'BROWSER_USE_CONFIG_DIR': str(tmp_path / 'config')}
+	params = StdioServerParameters(command=sys.executable, args=['-m', 'browser_use.retinat', '--network', 'off'], env=env)
+	async with Client(params) as client:
+		assert client.session.protocol_version == '2026-07-28', client.session.protocol_version
+		async with client.listen(tools_list_changed=True) as sub:
+			event = await asyncio.wait_for(anext(sub), 10)
+			assert isinstance(event, ToolsListChanged), event
+		listed = await client.list_tools()
+		assert 'retinat_step' in {t.name for t in listed.tools}

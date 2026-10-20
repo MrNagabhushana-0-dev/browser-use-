@@ -1,0 +1,367 @@
+"""Step mode: the page's clock stands still while the agent thinks, and moves only as far as each step asks.
+
+A model's turn takes seconds, a real-time game moves on every 16 ms, so a model cannot play one live; its rules can
+(reflexes), but then the rules play, not the model. Benchmarks of models on such games pause the game while the model
+thinks (VideoGameBench Lite, Orak, NitroGen's clock-intercepting wrapper) or let it act once every few frames (the
+Arcade Learning Environment's frame skip). Here the same is done to a web page through CDP virtual time:
+
+- `pause()` stops the page's clock: `performance.now()`, `Date.now()`, timers and posted messages stand still, in the
+  page and in the frames its renderer process draws (a frame from another origin of the same site included, as
+  poki.com hosts its games on *.gdn.poki.com). A frame from another site in a process of its own is not covered.
+- `step(ms, hold=..., tap=...)` presses keys, then moves the clock one frame (1/60 s) at a time, waiting for each frame
+  to be drawn, so the game sees as many even ticks as it would have in that time; then the clock stops again. Held
+  keys stay down from step to step until a step leaves them out (the ALE's action repeat); a tap is down for its
+  first frames. `charge_thinking=True` first plays the time the agent took to decide, with the keys of the last step
+  still held: how the same play would fare live (OmniGameArena's latency-charged mode).
+- `resume()` hands the page back to real time. Virtual time cannot be turned off again for a tab (measured: a pause
+  outlives the CDP session that set it; Chromium has no way back outside its tests), so from then on a pump moves the
+  clock with the real one, frame by frame.
+
+Measured on Chromium (headless=new), and so read in its source: while virtual time stands still,
+`requestAnimationFrame` keeps firing at 60 Hz with timestamps on real time, so a game timed by those timestamps, or
+one that counts frames, would run on. The page's `requestAnimationFrame` is made to wait for the page clock to move and
+to hand out its time. Sound (Web Audio), CSS animations, video and workers keep real time.
+
+A score made in step mode is not real-time play: the game waited for every decision.
+"""
+
+import asyncio
+import logging
+import time
+from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from browser_use.eyes.reflex import _key_params
+
+if TYPE_CHECKING:
+	from browser_use.browser.session import BrowserSession
+
+logger = logging.getLogger(__name__)
+
+FRAME_MS = 1000 / 60
+# The most one step may play; a step costs about its own length in real time (each frame is waited for)
+STEP_MAX_MS = 5000.0
+# The most thinking time `charge_thinking` plays before a step's keys
+CHARGE_MAX_MS = 10_000.0
+# How many frames a tap is down for: a game that reads keys on a fixed tick of its own (~50 Hz physics) can miss one
+TAP_FRAMES = 3
+# How long a frame's budget may take to be spent before the page is taken to be stuck
+_BUDGET_WAIT_S = 5.0
+# Virtual time moves only when the page has no task ready to run: after this many tasks run in a row it is moved on
+# anyway, so a page that keeps posting work (messages, a busy loop of promises) cannot hold the clock back
+_STARVATION_TASKS = 100
+# The most one move of the pump may catch up, and how many failures in a row (the tab gone) stop it
+_PUMP_CATCH_UP_MS = 250.0
+_PUMP_GIVE_UP = 50
+_EXPIRED_EVENT = 'Emulation.virtualTimeBudgetExpired'
+_WORLD = 'browser_use_clock'
+# requestAnimationFrame on the page's clock, in every frame of the tab, now and on each new document: a callback runs
+# only once the clock has moved since the last batch, and is handed the clock's time. CDP does not hold frames back while
+# virtual time stands still, and their own timestamps keep real time. Ids are kept clear of the browser's own, so a
+# frame asked for before this was installed can still be cancelled.
+_RAF_ON_PAGE_CLOCK = r"""(() => {
+	if (window.__browserUseRaf) return;
+	const raf = window.requestAnimationFrame.bind(window), caf = window.cancelAnimationFrame.bind(window);
+	window.__browserUseRaf = raf;
+	let queue = new Map(), next = 1e9, ticking = false, last = NaN;
+	const tick = () => {
+		ticking = false;
+		const now = performance.now();
+		if (now !== last && queue.size) {
+			last = now;
+			const batch = queue;
+			queue = new Map();
+			for (const callback of batch.values()) {
+				try { callback(now); } catch (e) { reportError(e); }
+			}
+		}
+		if (queue.size && !ticking) { ticking = true; raf(tick); }
+	};
+	window.requestAnimationFrame = (callback) => {
+		const id = ++next;
+		queue.set(id, callback);
+		if (!ticking) { ticking = true; raf(tick); }
+		return id;
+	};
+	window.cancelAnimationFrame = (id) => { if (!queue.delete(id) && id < 1e9) caf(id); };
+})()"""
+
+
+# Frames keep coming while the clock stands still only if something keeps drawing: once a paused page draws nothing (the
+# requestAnimationFrame above holds the game back), Chrome stops making frames, and neither a style change nor a
+# screenshot starts them again (measured), so no step could be played. A 1 px canvas, 1% opaque, drawn every frame from
+# a world of our own, keeps them coming for as long as the tab is on our clock.
+_BEAT = r"""(() => {
+	if (window.__browserUseBeat) return;
+	const canvas = document.createElement('canvas');
+	canvas.width = canvas.height = 1;
+	canvas.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:2147483647';
+	document.documentElement.append(canvas);
+	const g = canvas.getContext('2d');
+	let on = true, n = 0;
+	const beat = () => {
+		if (!on) return;
+		g.fillStyle = n++ % 2 ? '#000' : '#fff';
+		g.fillRect(0, 0, 1, 1);
+		requestAnimationFrame(beat);
+	};
+	requestAnimationFrame(beat);
+	window.__browserUseBeat = () => { on = false; canvas.remove(); delete window.__browserUseBeat; };
+})()"""
+
+
+class Stepped(BaseModel):
+	"""What one step played."""
+
+	model_config = ConfigDict(extra='forbid')
+
+	game_ms: float
+	frames: int
+	real_s: float
+	charged_ms: float = 0.0  # the agent's thinking time played before the step, with charge_thinking
+	held: list[str] = Field(default_factory=list)  # keys still down after the step
+
+
+class PageClock:
+	"""The clock of the focused tab: pause(), step(), resume()."""
+
+	def __init__(self, browser_session: 'BrowserSession') -> None:
+		self.session = browser_session
+		self.paused = False
+		self.played_ms = 0.0  # game time played by steps since the first pause, thinking charged included
+		self.paused_s = 0.0  # real time the page spent under step mode
+		self.target_id: str | None = None
+		self.held: list[str] = []
+		self._since: float | None = None  # when the current stretch of step mode began (monotonic)
+		self._last_step_end: float | None = None
+		self._cdp: Any = None
+		self._session_id: str | None = None
+		self._expired = asyncio.Event()
+		self._handler: Any = None
+		self._incumbent: Any = None
+		self._pump: asyncio.Task | None = None
+		self._world: tuple[str, int] | None = None  # (frame id, context id) of our own world in the top frame
+
+	@property
+	def virtual(self) -> bool:
+		"""Whether this tab's clock is ours (paused or pumped); it stays so until the tab closes."""
+		return self._session_id is not None
+
+	@property
+	def slowdown(self) -> float:
+		"""Real time per unit of game time under step mode: how much longer the play took than it would have live."""
+		spent = self.paused_s + (time.monotonic() - self._since if self._since is not None else 0.0)
+		return spent / (self.played_ms / 1000) if self.played_ms else 0.0
+
+	async def pause(self) -> None:
+		"""Stop the tab's clock. The first pause takes the tab's clock over for good (see the module docstring)."""
+		await self._stop_pump()
+		if self._session_id is None:
+			cdp = await self.session.get_or_create_cdp_session(focus=False)
+			self._cdp, self._session_id, self.target_id = cdp, cdp.session_id, cdp.target_id
+			registry = getattr(self.session.cdp_client, '_event_registry', None)
+			handlers = getattr(registry, '_handlers', None)
+			self._incumbent = handlers.get(_EXPIRED_EVENT) if isinstance(handlers, dict) else None
+			self._handler = self._on_expired
+			self.session.cdp_client.register.Emulation.virtualTimeBudgetExpired(self._handler)
+			await self._send('Page', 'addScriptToEvaluateOnNewDocument', {'source': _RAF_ON_PAGE_CLOCK, 'runImmediately': True})
+		await self._world_id()  # the beat starts while frames still come
+		await self._send('Emulation', 'setVirtualTimePolicy', {'policy': 'pause'})
+		self.paused = True
+		self._since = time.monotonic()
+		self._last_step_end = None
+
+	async def step(
+		self,
+		ms: float,
+		hold: list[str] | tuple[str, ...] = (),
+		tap: list[str] | tuple[str, ...] = (),
+		charge_thinking: bool = False,
+		stop_at: float | None = None,
+	) -> Stepped:
+		"""Play `ms` of game time a frame at a time with `hold` down throughout (and after, until a step leaves a key
+		out) and `tap` down for its first frames, then stand still again. `charge_thinking` first plays the time since
+		the last step ended with the last step's keys. `stop_at` (monotonic) ends the step after the frame playing then."""
+		assert self.paused, 'pause() first'
+		assert 0 < ms <= STEP_MAX_MS, f'a step plays 1-{STEP_MAX_MS:.0f} ms'
+		began = time.monotonic()
+		charged = 0.0
+		if charge_thinking and self._last_step_end is not None:
+			thought_ms = min(CHARGE_MAX_MS, (began - self._last_step_end) * 1000)
+			charged = await self._play(max(1, round(thought_ms / FRAME_MS)), stop_at=stop_at) if thought_ms >= FRAME_MS else 0.0
+		hold = list(dict.fromkeys(hold))
+		for key in [k for k in self.held if k not in hold]:
+			await self._key(key, 'keyUp')
+		for key in [k for k in hold if k not in self.held]:
+			await self._key(key, 'keyDown')
+		self.held = hold
+		taps = [k for k in dict.fromkeys(tap) if k not in hold]
+		for key in taps:
+			await self._key(key, 'keyDown')
+		frames = max(1, round(ms / FRAME_MS))
+		try:
+			played = await self._play(frames, stop_at=stop_at, release_after=(TAP_FRAMES, taps))
+		finally:
+			for key in taps:  # a step shorter than a tap still lets go of it
+				await self._key(key, 'keyUp')
+		self.played_ms += charged + played
+		self._last_step_end = time.monotonic()
+		return Stepped(
+			game_ms=played,
+			frames=round(played / FRAME_MS),
+			real_s=self._last_step_end - began,
+			charged_ms=charged,
+			held=list(self.held),
+		)
+
+	async def resume(self) -> None:
+		"""Back to real time: held keys go up, and from now on the clock moves with the real one."""
+		await self._release_all()
+		if self._since is not None:
+			self.paused_s += time.monotonic() - self._since
+			self._since = None
+		self.paused = False
+		if self.virtual and self._pump is None:
+			self._pump = asyncio.create_task(self._run_pump(), name='page-clock-pump')
+
+	async def close(self) -> None:
+		"""Let go of held keys, stop the pump and the event handler (the tab, if it lives on, keeps the clock where it
+		stands)."""
+		try:
+			await self._release_all()
+		except Exception as e:
+			logger.debug(f'clock: could not let go of held keys: {type(e).__name__}: {e}')
+		await self._stop_pump()
+		await self._stop_beat()
+		registry = getattr(self.session.cdp_client, '_event_registry', None) if self._handler is not None else None
+		handlers = getattr(registry, '_handlers', None)
+		if isinstance(handlers, dict) and handlers.get(_EXPIRED_EVENT) is self._handler:
+			if self._incumbent is not None:
+				self.session.cdp_client.register.Emulation.virtualTimeBudgetExpired(self._incumbent)
+			else:
+				handlers.pop(_EXPIRED_EVENT, None)
+		self._handler = None
+
+	# -- internals ---------------------------------------------------------------------------------------------------
+
+	async def _play(self, frames: int, stop_at: float | None = None, release_after: tuple[int, list[str]] = (0, [])) -> float:
+		"""Move the clock `frames` frames, waiting for each to be drawn; the game time played."""
+		after, keys = release_after
+		played = 0
+		for i in range(frames):
+			# whole milliseconds that add up over frames: 17, 16, 17, ... for 1/60 s
+			await self._advance(round((i + 1) * FRAME_MS) - round(i * FRAME_MS))
+			await self._next_frame()
+			played = i + 1
+			if played == after:
+				for key in keys:
+					await self._key(key, 'keyUp')
+				keys = []
+			if stop_at is not None and time.monotonic() >= stop_at:
+				break
+		release_after[1][:] = keys  # what is still down is let go by the caller
+		return float(round(played * FRAME_MS))
+
+	def _on_expired(self, event: dict[str, Any], session_id: str | None = None) -> None:
+		if session_id == self._session_id:
+			self._expired.set()
+		elif self._incumbent is not None:
+			self._incumbent(event, session_id)
+
+	async def _send(self, domain: str, method: str, params: dict[str, Any]) -> dict[str, Any]:
+		assert self._cdp is not None
+		return await getattr(getattr(self._cdp.cdp_client.send, domain), method)(params=params, session_id=self._session_id)
+
+	async def _advance(self, ms: float) -> None:
+		self._expired.clear()
+		await self._send(
+			'Emulation',
+			'setVirtualTimePolicy',
+			{'policy': 'advance', 'budget': ms, 'maxVirtualTimeTaskStarvationCount': _STARVATION_TASKS},
+		)
+		await asyncio.wait_for(self._expired.wait(), _BUDGET_WAIT_S)
+
+	async def _world_id(self) -> int:
+		"""Our own world in the top frame, made (with its beat) on first use and again after the page is replaced."""
+		if self._world is None:
+			tree = await self._send('Page', 'getFrameTree', {})
+			frame_id = tree['frameTree']['frame']['id']
+			world = await self._send('Page', 'createIsolatedWorld', {'frameId': frame_id, 'worldName': _WORLD})
+			await self._send('Runtime', 'evaluate', {'expression': _BEAT, 'contextId': world['executionContextId']})
+			self._world = (frame_id, world['executionContextId'])
+		return self._world[1]
+
+	async def _next_frame(self) -> None:
+		"""Wait for the page to draw its next frame, asked in our own world: the page's requestAnimationFrame (ours or its
+		own) is not the one waited on."""
+		trouble = ''
+		for attempt in (1, 2):
+			try:
+				result = await self._send(
+					'Runtime',
+					'evaluate',
+					{
+						'expression': 'new Promise((done) => requestAnimationFrame(() => done(1)))',
+						'contextId': await self._world_id(),
+						'awaitPromise': True,
+					},
+				)
+				if not result.get('exceptionDetails'):
+					return
+				trouble = str(result['exceptionDetails'])
+			except Exception as e:  # the context is gone with the page it was in
+				if attempt == 2:
+					raise
+				trouble = f'{type(e).__name__}: {e}'
+			self._world = None  # the page was replaced since: make the world again in the new one
+		logger.debug(f'clock: no frame to wait for: {trouble}')
+
+	async def _stop_beat(self) -> None:
+		world, self._world = self._world, None
+		if world is not None:
+			try:
+				await self._send(
+					'Runtime',
+					'evaluate',
+					{'expression': 'window.__browserUseBeat && window.__browserUseBeat()', 'contextId': world[1]},
+				)
+			except Exception as e:  # gone with its page
+				logger.debug(f'clock: no beat to stop: {type(e).__name__}: {e}')
+
+	async def _key(self, key: str, kind: str) -> None:
+		await self._send('Input', 'dispatchKeyEvent', _key_params(key, kind))
+
+	async def _release_all(self) -> None:
+		held, self.held = self.held, []
+		if self._session_id is not None:
+			for key in held:
+				await self._key(key, 'keyUp')
+
+	async def _run_pump(self) -> None:
+		"""Real time, played as steps are: the clock moves by the real time since its last move, then a frame is drawn."""
+		last = time.monotonic()
+		failures = 0
+		try:
+			while failures < _PUMP_GIVE_UP:
+				now = time.monotonic()
+				ms = min(_PUMP_CATCH_UP_MS, (now - last) * 1000)
+				last = now
+				try:
+					if ms >= 1:
+						await self._advance(round(ms))
+					await self._next_frame()
+					failures = 0
+				except Exception as e:  # a page being replaced, or the tab gone
+					failures += 1
+					logger.debug(f'clock: the pump missed a beat: {type(e).__name__}: {e}')
+					await asyncio.sleep(FRAME_MS / 1000)
+			logger.debug('clock: the pump stopped: the tab is gone')
+		except asyncio.CancelledError:
+			raise
+
+	async def _stop_pump(self) -> None:
+		if self._pump is not None:
+			self._pump.cancel()
+			await asyncio.gather(self._pump, return_exceptions=True)
+			self._pump = None

@@ -1077,3 +1077,59 @@ async def test_a_call_that_waited_for_the_server_to_load_counts_that_wait(tmp_pa
 		assert took < 1.5, f'the wait took {took:.1f}s with 1 s of its budget left'
 	finally:
 		await server._close_all_sessions()
+
+
+async def _runner(server) -> dict:
+	assert server.browser_session is not None
+	cdp = await server.browser_session.get_or_create_cdp_session(focus=False)
+	r = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'JSON.stringify(game)', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	return json.loads(r['result']['value'])
+
+
+async def test_step_plays_a_game_turn_by_turn_and_shows_the_frame_each_turn_ends_on(retinat, site):
+	"""The owner's test: play the game yourself, not through rules you wrote. A model's turn takes seconds and this game
+	moves every frame, so retinat_step stops the page's clock while the model thinks, plays only as much game time as
+	each step asks, with the keys it asks, and shows the frame the next decision is made from."""
+	import asyncio
+
+	from tests.ci.test_clock import GAME
+
+	site.expect_request('/runner').respond_with_data(GAME, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/runner')})
+	first = await _call(retinat, 'retinat_step', {'ms': 300, 'tap': ['ArrowLeft']})
+	text = _text(first)
+	assert not first.is_error, text
+	assert any(isinstance(b, types.ImageContent) for b in first.content), 'the frame to decide from'
+	assert 'Played 300 ms' in text and 'paused' in text, text
+	await asyncio.sleep(0.1)
+	a = await _runner(retinat)
+	assert a['lane'] == -1, 'the tap changed lane'
+	await asyncio.sleep(1.0)  # the model thinking
+	look = await _call(retinat, 'retinat_look', {})
+	assert not look.is_error, _text(look)
+	b = await _runner(retinat)
+	assert b['t'] == a['t'], f'the game moved while the model thought: {a["t"]} -> {b["t"]}'
+	second = await _call(retinat, 'retinat_step', {'ms': 500, 'hold': ['ArrowUp']})
+	assert 'Played 500 ms' in _text(second), _text(second)
+	c = await _runner(retinat)
+	assert abs(c['t'] - b['t'] - 500) <= 18, c['t'] - b['t']
+	assert c['boosted'] > b['boosted'] and c['up'] is True, 'held until a step leaves it out'
+	assert 'holding ArrowUp' in _text(second) and 'Turn-based' in _text(second), _text(second)
+	# a page opened from a paused tab loads: its clock is given back first
+	site.expect_request('/later').respond_with_data(
+		'<!doctype html><title>Later</title><body><script>window.fired = false; setTimeout(() => { window.fired = true; }, 300);</script></body>',
+		content_type='text/html',
+	)
+	opened = await _call(retinat, 'retinat_open', {'url': site.url_for('/later')})
+	assert not opened.is_error and 'Later' in _text(opened), _text(opened)
+	assert 'real time' in _text(opened), _text(opened)
+	await asyncio.sleep(1.0)
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	r = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'fired', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	assert r['result']['value'] is True
+	resumed = await _call(retinat, 'retinat_step', {'action': 'resume'})
+	assert not resumed.is_error and 'real time' in _text(resumed), _text(resumed)

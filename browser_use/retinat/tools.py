@@ -506,6 +506,43 @@ def _browser_tools() -> list['types.Tool']:
 			annotations=ro,
 		),
 		types.Tool(
+			name='retinat_step',
+			description=(
+				'Play a real-time page (a game) yourself, turn by turn: its clock stands still while you think, and '
+				'each step plays `ms` of game time a frame at a time, then stands still again and shows you the frame '
+				'it ended on. `tap` keys are down for the first ~50 ms; `hold` keys stay down through this step and the '
+				'next ones until a step leaves them out. The first step pauses the page: timers, performance.now(), Date '
+				'and animation frames stop with it; sound does not. A score made this way is not real-time play: the '
+				'game waited for every decision. charge_thinking=true first plays the time you took to decide, with the '
+				'last keys still held, to see how the same play would fare live. action=resume gives the page real time '
+				'back (the tab keeps a clock Retinat moves with the real one from then on); retinat_open does so by itself.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'action': {'type': 'string', 'enum': ['step', 'pause', 'resume'], 'default': 'step'},
+					'ms': {
+						'type': 'number',
+						'default': 250,
+						'minimum': 17,
+						'maximum': 5000,
+						'description': 'Game time to play, played at about real speed (a frame each 1/60 s).',
+					},
+					'tap': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Keys pressed for the first ~50 ms.'},
+					'hold': {
+						'type': 'array',
+						'items': {'type': 'string'},
+						'description': 'Keys down through the step, and after it until a step leaves them out.',
+					},
+					'charge_thinking': {
+						'type': 'boolean',
+						'default': False,
+						'description': 'Play the time since the last step first (up to 10 s), with its keys still held.',
+					},
+				},
+			},
+		),
+		types.Tool(
 			name='retinat_now',
 			description='One line on what is on screen and audible right now. No image; nearly free.',
 			input_schema={'type': 'object', 'properties': {}},

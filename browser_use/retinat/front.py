@@ -14,6 +14,10 @@ from typing import TYPE_CHECKING, Any
 
 import mcp.types as types
 from mcp.server import Server
+from mcp.server.lowlevel.server import NotificationOptions
+from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler
+from mcp.shared.subscriptions import ToolsListChanged
+from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 
 from browser_use.eyes.views import CALL_BUDGET_S
 from browser_use.net import NetworkMode, NetworkRouter
@@ -29,6 +33,9 @@ if TYPE_CHECKING:
 CALL_STARTED: ContextVar[float | None] = ContextVar('retinat_call_started', default=None)
 # Of a call's budget, what is kept for the call itself once the server has loaded
 LOAD_RESERVE_S = 15.0
+# How long after a listen stream is opened the tool-list notice goes out on it: the stream is subscribed to the bus once
+# it is acknowledged, and a notice published before that is lost (no replay)
+LISTEN_NOTICE_DELAY_S = 0.5
 
 
 def tool_list() -> list[types.Tool]:
@@ -47,11 +54,31 @@ class RetinatFront:
 		self._network = network
 		self.bridge_port = bridge_port
 		self.call_budget_s = float(os.environ.get('BROWSER_USE_MCP_CALL_BUDGET_S') or CALL_BUDGET_S)
-		self.server = Server('retinat', version=get_browser_use_version())
+		# A client that reconnects to a restarted server may keep the tool list of its first connection (found: Claude Code
+		# did, so a tool added since could not be called). Each server process tells its client once that the list
+		# changed: on 2026-07-28 connections on the stream the client opens with subscriptions/listen, on older ones
+		# with the first tool call.
+		self._bus = InMemorySubscriptionBus()
+		self.server = Server('retinat', version=get_browser_use_version(), on_subscriptions_listen=self._listen)
+		self._listen_handler = ListenHandler(self._bus)
 		self.inner: 'RetinatServer | None' = None
 		self._loading: asyncio.Task['RetinatServer'] | None = None
 		self._loading_since = 0.0
+		self._told_tools = False  # whether this process has told its client to list the tools again
+		self._notice: asyncio.Task[None] | None = None
 		self._setup_handlers()
+
+	async def _listen(self, context: Any, params: Any) -> Any:
+		"""Serve a subscriptions/listen stream; the first one opened is told the tool list changed."""
+		if not self._told_tools:
+			self._told_tools = True
+
+			async def tell() -> None:
+				await asyncio.sleep(LISTEN_NOTICE_DELAY_S)
+				await self._bus.publish(ToolsListChanged())
+
+			self._notice = asyncio.create_task(tell())
+		return await self._listen_handler(context, params)
 
 	def start_loading(self) -> None:
 		if self._loading is None:
@@ -80,6 +107,12 @@ class RetinatFront:
 
 		async def call_tool(context: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
 			started = time.monotonic()
+			if not self._told_tools and context.protocol_version not in MODERN_PROTOCOL_VERSIONS:
+				self._told_tools = True
+				try:
+					await context.session.send_tool_list_changed()
+				except Exception as e:  # never at the cost of the call
+					print(f'Retinat: could not tell the client to list the tools again: {type(e).__name__}: {e}', file=sys.stderr)
 			self.start_loading()
 			assert self._loading is not None
 			try:
@@ -116,7 +149,8 @@ class RetinatFront:
 		self.start_loading()
 		async with stdio_server() as (read_stream, write_stream):
 			try:
-				await self.server.run(read_stream, write_stream, self.server.create_initialization_options())
+				options = self.server.create_initialization_options(NotificationOptions(tools_changed=True))
+				await self.server.run(read_stream, write_stream, options)
 			except BrokenPipeError:
 				pass  # the client left while we wrote: closing follows
 
