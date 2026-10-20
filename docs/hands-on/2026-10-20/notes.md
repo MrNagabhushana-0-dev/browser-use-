@@ -37,8 +37,13 @@ What was measured (offline, on frames of the recordings):
 Also met: Poki's "You've played for 1 hours, Sign in" popup and the game's "watch a video for cash" dialog over the
 results. Both closed with their X; no sign-in.
 
+**Why v5 crashed** (offline, its recording at 4 fps): 4 s after the swap, still against the right barrier. Its keeper
+saw no line under the car, so it did not steer; a car came up level with us on the left (the box beside us rose
+116 -> 214 -> 536 -> 656 over ~1.5 s); the box above our roof crossed 15 with neither side clear, so it braked; ~1 s
+later the car on the left hit us. Not the swap: no rule acts on a car alongside.
+
 **Next for the racer:**
-- why v5 crashed (its first 30 s off the barrier);
+- a rule for a car alongside: speed up or brake to separate rather than hold;
 - the box above the roof also reads the barrier and trees, so the rules brake there for nothing (it held 30 km/h);
 - the side box "beside us" misses a car level with us;
 - try Two Way once XP level 3 unlocks it.
