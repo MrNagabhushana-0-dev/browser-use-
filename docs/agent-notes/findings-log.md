@@ -3862,7 +3862,15 @@ Hands-on only, no library change (`docs/hands-on/2026-10-20/notes.md`).
     serves (failed before: no front); a call taken 4 s into a 5 s budget waits ~1 s (4.5 s without `CALL_STARTED`);
     the stdio lifecycle tests pass through the front.
   - Affected files (Retinat, MCP lifecycle/page tools/annotations/client errors, network, desktop control and eyes,
-    bridge, proxy CA): **152 passed, 0 failed** (9m48s). Full `tests/ci` on `769b029`: lost to a container restart; rerun on the head after it.
+    bridge, proxy CA): **152 passed, 0 failed** (9m48s). Full `tests/ci` on `769b029`: lost to a container restart. **On `d806fcb`: red, 2 failed, 1,758 passed, 30
+    skipped** (46m57s):
+    - `test_screenrec.py::test_a_recording_is_finalized_into_a_playable_file` (asked ~2 s, got 1.0 s): the known
+      intermittent;
+    - `test_desktop_control.py::test_the_ai_clicks_and_types_in_a_granted_app`: the click and typing worked ("Typed
+      10 characters in testnotes ... the screen changed"); the test app's read-back of the field (`App.eval`, CDP)
+      returned no value. Not in what this round changed (the opt-in name is bypassed by `enabled=True`); the file
+      passed 13/13 alone five times after. `App.eval` now waits for its own reply by id and raises with the reply
+      when evaluation fails, so a recurrence says why. New intermittent to watch.
   - Measured warm over stdio: `initialize` 1.37 s through the front, 3.09 s importing the server first.
   - **On the next cold boot (03:36) the connect took 79.7 s**, not ~35-40 s: `uv run` itself ran ~54 s before Python
     started (its sync check reads 243 packages' metadata, 1,706 files, under a lock on `.venv` both servers share);

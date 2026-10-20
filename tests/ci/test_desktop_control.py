@@ -104,6 +104,11 @@ class App:
 					{'id': 1, 'method': 'Runtime.evaluate', 'params': {'expression': expression, 'returnByValue': True}}
 				)
 				reply = await ws.receive_json()
+				while reply.get('id') != 1:  # an event first: the reply is still to come
+					reply = await ws.receive_json()
+		# Seen once under a full run: no value came back. Say what did, rather than hand the test a None
+		if 'error' in reply or 'exceptionDetails' in (reply.get('result') or {}):
+			raise RuntimeError(f'evaluating {expression!r} in the test app failed: {reply}')
 		return reply['result']['result'].get('value')
 
 	async def ready(self) -> None:
