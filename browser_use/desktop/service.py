@@ -24,13 +24,13 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
+from browser_use.desktop import OPT_IN_ENV  # defined in the package, light, for the tool list
 from browser_use.desktop.x11 import X11, AppInfo, PersonWatch
 from browser_use.human.motion import bezier_path, keystroke_delays, move_duration_ms
 from browser_use.mcp.effects import Refused
 
 logger = logging.getLogger(__name__)
 
-OPT_IN_ENV = 'BROWSER_USE_DESKTOP_CONTROL'
 APPS_ENV = 'BROWSER_USE_DESKTOP_APPS'  # e.g. "gedit,libreoffice:full,xterm:click"
 SIGNATURE_SIZE = (256, 160)
 CONSENT_CLASS = 'retinat-consent'  # the window that asks the person (browser_use/desktop/consent.py)

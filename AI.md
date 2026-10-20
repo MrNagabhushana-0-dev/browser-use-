@@ -189,7 +189,7 @@ continuous stream on disk rather than in your context.
 
 | You want to... | Call | Typical cost |
 |---|---|---|
-| Open a page, and know if it refused you | `retinat_open` (the first call after a machine boots can answer `The browser is still starting ... call again`: Chrome read off a cold disk took over 30 s; the start goes on, and the next call joins it) | text only |
+| Open a page, and know if it refused you | `retinat_open` (the first call after a machine boots can answer `Retinat is still loading ...` or `The browser is still starting ... call again`: files read off a cold disk took the server's import past 90 s and Chrome's launch past 30 s; both go on, and the next call joins them) | text only |
 | See what's on screen now | `retinat_look` | 1 image (about 400–900 tokens) |
 | Understand a whole canvas or scroll-driven page | `retinat_scan` (answers within ~50 s, as clients drop a call at 60; a page too long for one call ends with `call again with from_screen=...`, and the next call goes on from there) | 1 sheet (about 1–1.5k tokens) |
 | Watch a video or reel, including its sound | `retinat_watch` with `until=bored` | 1 sheet plus a timeline (about 300–900 tokens per item) |

@@ -1018,3 +1018,62 @@ async def test_a_browser_dropped_while_it_starts_or_after_is_started_afresh_and_
 		await server._close_all_sessions()
 	await asyncio.sleep(1)
 	assert not running(), 'a browser was left running'
+
+
+async def test_the_handshake_and_tool_list_load_nothing_heavy_and_list_what_the_server_serves(tmp_path, monkeypatch):
+	"""After a machine boots, importing all of browser-use took Retinat 88-93 s to answer a client's handshake (each of
+	~2,200 modules read off a cold disk), against the client's 120 s to connect. The process now answers the
+	handshake and the tool list from light modules while the rest loads; the list is the one the server serves."""
+	import asyncio
+	import sys
+
+	probe = (
+		'import sys\n'
+		'from browser_use.retinat.front import tool_list\n'
+		'names = [t.name for t in tool_list()]\n'
+		"heavy = ('browser_use.mcp.server', 'browser_use.retinat.server', 'browser_use.agent.views', 'lmnr', 'openai',\n"
+		"         'browser_use.browser.session', 'browser_use.desktop.service')\n"
+		"print(','.join(names)); print(','.join(m for m in heavy if m in sys.modules))\n"
+	)
+	proc = await asyncio.create_subprocess_exec(
+		sys.executable, '-c', probe, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+	)
+	stdout, stderr = await asyncio.wait_for(proc.communicate(), 120)
+	assert proc.returncode == 0, stderr.decode()
+	names_line, heavy_line = stdout.decode().split('\n')[:2]
+	assert heavy_line == '', f'the handshake path imported {heavy_line}'
+
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer()
+	listed = await server.server.get_request_handler('tools/list').handler(None, types.PaginatedRequestParams())  # type: ignore[arg-type]
+	assert names_line.split(',') == [t.name for t in listed.tools]
+	from browser_use.retinat.front import tool_list
+
+	assert [t.model_dump() for t in tool_list()] == [t.model_dump() for t in listed.tools]
+
+
+async def test_a_call_that_waited_for_the_server_to_load_counts_that_wait(tmp_path, monkeypatch, site):
+	"""The front takes a call before the server has loaded and hands it over once it has: the call's budget counts from
+	when the front took it, so the time spent loading is not given twice and the answer still comes inside 60 s."""
+	import time
+
+	from browser_use.retinat.front import CALL_STARTED
+
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(call_budget_s=5)
+	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	site.expect_request('/plain').respond_with_data('<!doctype html><title>Plain</title><body>plain', content_type='text/html')
+	try:
+		await _open_started(server, site.url_for('/plain'))
+		await _call(server, 'retinat_reflex', {'rules': [{'when': 'false', 'notify': 'never'}]})
+		token = CALL_STARTED.set(time.monotonic() - 4)  # taken 4 s ago, of a 5 s budget
+		try:
+			started = time.monotonic()
+			waited = await _call(server, 'retinat_wait', {'timeout': 10})
+			took = time.monotonic() - started
+		finally:
+			CALL_STARTED.reset(token)
+		assert not waited.is_error and 'Nothing notified' in _text(waited), _text(waited)
+		assert took < 1.5, f'the wait took {took:.1f}s with 1 s of its budget left'
+	finally:
+		await server._close_all_sessions()

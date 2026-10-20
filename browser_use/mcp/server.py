@@ -1105,34 +1105,9 @@ class BrowserUseServer:
 
 	def _network_tool_entries(self, prefix: str) -> list[types.Tool]:
 		"""The two tools an agent (or a UI toggle) uses to choose the route."""
-		return [
-			types.Tool(
-				name=f'{prefix}_network',
-				description=(
-					'Choose how the browser reaches the web. mode "off" = direct; "auto" = direct, then retry once '
-					'through Tor after a network failure or a "not available in your country" page; "always" = '
-					'through Tor. exit_country is a two-letter code such as "de" or "jp" (omit for any). Use it '
-					'for public pages a network censors or geo-fences. It does NOT get past bot walls or CAPTCHAs '
-					'(Tor exits are challenged more, and walls are reported, never bypassed), and you must never '
-					'log in or enter credentials over Tor. Changing route restarts the browser and closes its tabs.'
-				),
-				input_schema={
-					'type': 'object',
-					'properties': {
-						'mode': {'type': 'string', 'enum': ['off', 'auto', 'always']},
-						'exit_country': {'type': 'string', 'description': 'Two-letter country code, e.g. "de".'},
-						'reason': {'type': 'string', 'description': 'Why, for the session log.'},
-					},
-					'required': ['mode'],
-				},
-			),
-			types.Tool(
-				name=f'{prefix}_network_status',
-				description='The current route, the exit Tor reports (address and country), and recent route events.',
-				input_schema={'type': 'object', 'properties': {}},
-				annotations=types.ToolAnnotations(read_only_hint=True),
-			),
-		]
+		from browser_use.net.tools import network_tools
+
+		return network_tools(prefix)
 
 	async def _network_set(self, arguments: dict[str, Any]) -> str:
 		"""Change the route; if it changed, drop the browser so the next call starts on the new one."""
@@ -1896,61 +1871,7 @@ def _is_secret_field(attributes: dict[str, str]) -> bool:
 	)
 
 
-async def serve_until_stopped(server: Any) -> None:
-	"""Run an MCP server over stdio until the client leaves or a signal (SIGTERM, SIGHUP, SIGINT) stops it, then close
-	its browsers, bridge and Tor. Without this a stopped server left its Chromium running with no one to close it.
-
-	On a signal the process exits from here once that is done: the stdio transport reads stdin in a worker thread that
-	no cancellation reaches while the client keeps the pipe open, so the server would otherwise close its browser and
-	then hang for good (both found hands-on)."""
-	import signal
-
-	loop = asyncio.get_running_loop()
-	stop = asyncio.Event()
-	for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-		try:
-			loop.add_signal_handler(sig, stop.set)
-		except (NotImplementedError, RuntimeError, ValueError):
-			pass  # Windows, or not the main thread: the client closing stdin still ends run()
-	running = asyncio.create_task(server.run())
-	stopping = asyncio.create_task(stop.wait())
-	try:
-		await asyncio.wait({running, stopping}, return_when=asyncio.FIRST_COMPLETED)
-	finally:
-		stopping.cancel()
-		await _close_everything(server)
-	if stop.is_set():
-		_log_stopped_by_signal()
-		os._exit(0)
-	if not running.cancelled():
-		running.result()
-
-
-async def _close_everything(server: Any) -> None:
-	"""Each part gets its own bounded try, so one that hangs or fails does not keep the rest running."""
-	closers: list[tuple[str, Any]] = [('sessions', server._close_all_sessions)]
-	session = getattr(server, 'browser_session', None)
-	if session is not None:
-		closers.append(('browser', session.kill))
-	for name in ('bridge', 'network'):
-		part = getattr(server, name, None)
-		close = getattr(part, 'stop', None) or getattr(part, 'close', None)
-		if close is not None:
-			closers.append((name, close))
-	for name, close in closers:
-		try:
-			await asyncio.wait_for(close(), timeout=15)
-		except Exception as e:
-			logger.debug(f'closing the {name} on exit: {type(e).__name__}: {e}')
-
-
-def _log_stopped_by_signal() -> None:
-	logger.info('Stopped by a signal; browsers, bridge and Tor closed.')
-	for stream in (sys.stdout, sys.stderr):
-		try:
-			stream.flush()
-		except Exception:
-			pass
+from browser_use.serving import _close_everything, _log_stopped_by_signal, serve_until_stopped  # noqa: E402,F401
 
 
 async def main(session_timeout_minutes: int = 10):
