@@ -42,3 +42,20 @@ results. Both closed with their X; no sign-in.
 - the box above the roof also reads the barrier and trees, so the rules brake there for nothing (it held 30 km/h);
 - the side box "beside us" misses a car level with us;
 - try Two Way once XP level 3 unlocks it.
+
+## 3. A third cold boot (02:42 UTC), and the 90 s connect fixed
+
+The container had booted ~100 s before the round. The first `retinat_open`
+(`https://en.wikipedia.org/wiki/Temple_Run_2`) opened on the first call in 47 s; before the fix of 2026-10-19 this
+case failed at 30 s. But **the Retinat MCP server took 93.5 s to connect** (88 s on the boot of 23:42), against the
+client's 120 s, and the client's first `initialize` probe timed out.
+
+Why: before answering anything the server imported all of browser-use, 2,241 modules (3.9 s warm). After a boot each
+file is read off a cold disk. Answering the handshake needs only the `mcp` package.
+
+Fixed, test-first: the process starts from a front (`browser_use/retinat/front.py`) that answers the handshake and
+the tool list from light modules, 902 modules (1.35 s warm), and imports the server proper in a worker thread; the
+first tool call waits for it, and its budget counts from when the front took it. Over real stdio, warm: `initialize`
+1.37 s (3.09 s importing the server first), `tools/list` 0.01 s, the first call 4.6 s.
+
+Not verified yet: the connect time on the next cold boot. By module count it should fall to roughly 35-40 s.

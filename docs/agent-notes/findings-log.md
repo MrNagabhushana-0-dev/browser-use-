@@ -3846,3 +3846,24 @@ Hands-on only, no library change (`docs/hands-on/2026-10-20/notes.md`).
 2. Temple Run 2 key timing and corners; Subway Surfers' Left/Right tutorial step (Round 56's list).
 3. The rest of Round 57's list: explore under the call budget (slice B2), the per-tab busy guard and a bounded flick,
    the `--version` probe and the slow connect after a boot, progress notifications.
+
+## Round 59 (unattended loop, 2026-10-20 02:42): Retinat answers the handshake while browser-use loads
+
+- **Third cold boot:** the first `retinat_open` opened on the first call in 47 s (the start-across-calls fix holds);
+  the **MCP connect took 93.5 s** (88 s two boots before), against the client's 120 s.
+- Cause, measured: the server imported 2,241 modules (3.9 s warm) before answering; the handshake needs ~600 (`mcp`).
+- **Fixed, test-first** (`769b029`): `retinat/front.py` answers `initialize` and `tools/list` from light modules (902
+  modules, 1.35 s warm) and imports `RetinatServer` in a worker thread; a tool call waits for it, its deadline counting
+  from when the front took it (`CALL_STARTED`), or says "Retinat is still loading ... call again" near the end of its
+  budget. Moved to light modules: the tool definitions (`retinat/tools.py`), the route tools (`net/tools.py`), the
+  stdio serve/close helpers (`serving.py`), the desktop-control opt-in name (`desktop/__init__.py`); `browser_use.retinat`
+  imports lazily; old import paths still work.
+  - Tests: in a fresh process the front's import and tool list load no heavy module and list exactly what the server
+    serves (failed before: no front); a call taken 4 s into a 5 s budget waits ~1 s (4.5 s without `CALL_STARTED`);
+    the stdio lifecycle tests pass through the front.
+  - Affected files (Retinat, MCP lifecycle/page tools/annotations/client errors, network, desktop control and eyes,
+    bridge, proxy CA): **152 passed, 0 failed** (9m48s). Full `tests/ci` on `769b029`: running at this commit (result in the next commit).
+  - Measured warm over stdio: `initialize` 1.37 s through the front, 3.09 s importing the server first.
+  - Not verified: the connect on the next cold boot (estimated ~35-40 s by module count).
+
+**Next, in order:** as in Round 58, with "the slow connect after a boot" done if the next cold boot confirms it.
