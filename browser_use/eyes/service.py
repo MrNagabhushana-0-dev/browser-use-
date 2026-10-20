@@ -67,10 +67,12 @@ from browser_use.eyes.views import (
 	BROWSE_FINAL_RESERVE_S,
 	BROWSE_NEXT_EST_S,
 	BROWSE_OVERHEAD_EST_S,
+	SPEECH_START_S,
 	WATCH_TAIL_S,
 	Deadline,
 	browse_cap,
 	stop_line,
+	watch_span,
 )
 from browser_use.human.input import HumanInput
 from browser_use.human.touch import HumanTouch
@@ -161,6 +163,7 @@ class Eyes:
 		self.archive = FrameArchive(self.now_path.with_name('frames')) if archive and self.now_path is not None else None
 		self._archiver: asyncio.Task | None = None
 		self._watching = 0  # watches in progress: the archiver keeps out of their way
+		self._browse_left_on = 0  # an item a browse watched and had no time to flick past: the next browse skips it
 		self._archive_quiet_until = 0.0  # monotonic time before which archiving does not ask the page again
 		self._meaning = None  # MeaningIndex over the archive, made on first search
 		self._last_now = 0.0
@@ -324,13 +327,19 @@ class Eyes:
 		since = self._unreported_since(start, start_vid)
 		text_since = self._text_since(start)
 		reason = f'watched {seconds:.0f}s'
-		# What was asked, and no more than the call leaves after the work that follows the watching
-		stop_at = min(start + seconds, dl.at - WATCH_TAIL_S)
+		# What was asked, and no more than the call leaves after the work that follows the watching, the speech model's
+		# included: it runs over all that was heard (from before the watch too) once the watching ends
+		do_speech = self.speech if transcribe is None else (transcribe and asr.available())
+		held = _watched_time([h.wall for h in self.retina.hops if h.vid == start_vid and since <= h.wall < start and h.pcm])
+		span = watch_span(dl.at - start - WATCH_TAIL_S, seconds, ASR_REALTIME_X if do_speech else math.inf, held)
+		stop_at = start + span
 		while True:
 			now = time.monotonic()
 			if now >= stop_at:
-				if stop_at < start + seconds:
+				if span < seconds:
 					reason = f'out of time: watched {now - start:.0f}s of the asked {seconds:.0f}s'
+					if do_speech:
+						reason += ', leaving the speech model time to transcribe it'
 				break
 			await self.retina.wait_for_data(min(0.5, stop_at - now))
 			if time.monotonic() - start < min_seconds:
@@ -379,6 +388,7 @@ class Eyes:
 		watch_start: float | None = None,
 		deadline: Deadline | None = None,
 		exclude: frozenset[int] = frozenset(),
+		empty: str | None = None,
 	) -> Percept:
 		"""Build a percept from everything the retina gathered since `since` (monotonic time), and the page text
 		that appeared since `text_since` (default: `since`). `order` puts these items first, in this order; items in
@@ -429,7 +439,7 @@ class Eyes:
 			untranscribed = None
 			if do_speech and h and any(x.pcm for x in h):
 				# A thread cannot be stopped once started: begin the speech model only with time for it in this call
-				if dl.allows(_watched_time([x.wall for x in h]) / ASR_REALTIME_X + 1.5):
+				if dl.allows(_watched_time([x.wall for x in h]) / ASR_REALTIME_X + SPEECH_START_S):
 					regions, said = await asyncio.to_thread(_speech, h)
 					if regions is not None:
 						hearing.apply_speech_regions(heard, regions)
@@ -484,7 +494,9 @@ class Eyes:
 			head += f'\n    no keyframe images: {trouble}'
 		failed = _failed_video(self.retina.attended)
 		head += failed
-		return assemble(items, head, detail, empty='(no video played)' if failed else '(no video was on screen)')
+		if empty is None:
+			empty = '(no video played)' if failed else '(no video was on screen)'
+		return assemble(items, head, detail, empty=empty)
 
 	async def _page_now(self) -> tuple[bytes | None, str]:
 		"""The page as the compositor draws it now, and how it was got: captured at this moment, else the stream's
@@ -1085,6 +1097,11 @@ class Eyes:
 		covered = 0
 		stopped = ''
 		next_est, overhead_est = BROWSE_NEXT_EST_S, BROWSE_OVERHEAD_EST_S
+		left_on, self._browse_left_on = self._browse_left_on, 0
+		if left_on and self.retina.attended.get('vid', 0) == left_on:
+			# The last browse watched this item and had no time to flick on: begin past it, not with it again
+			moved = await self.next()
+			log.append(f'skipped the item the last browse watched: next by {moved.method} in {moved.seconds:.1f}s')
 		# The speech model runs over everything watched at the end: its time grows with each item
 		speech_rate = ASR_REALTIME_X if self.speech else math.inf
 		for i in range(items):
@@ -1092,7 +1109,7 @@ class Eyes:
 			cap: float | None = max_seconds
 			if dl.bounded:
 				final_reserve = BROWSE_FINAL_RESERVE_S + (time.monotonic() - start) / speech_rate
-				cap = browse_cap(dl.left(), more, max_seconds, min_seconds, final_reserve, next_est, overhead_est)
+				cap = browse_cap(dl.left(), more, max_seconds, min_seconds, final_reserve, next_est, overhead_est, speech_rate)
 			if cap is None:
 				stopped = 'time'
 				break
@@ -1117,7 +1134,8 @@ class Eyes:
 			if more:
 				if not dl.allows(next_est + BROWSE_FINAL_RESERVE_S):
 					stopped = 'time'
-					log.append('  -> no time left to flick on: call retinat_next before going on')
+					self._browse_left_on = self.retina.attended.get('vid', 0)
+					log.append('  -> no time left to flick on: the next browse begins past this item')
 					break
 				moved = await self.next()
 				next_est = max(next_est, moved.seconds + 0.5)
@@ -1133,8 +1151,18 @@ class Eyes:
 		# Stopped for time after a flick: the item now on screen was not watched, and the next call begins with it
 		on_screen = self.retina.attended.get('vid', 0)
 		exclude = frozenset({on_screen}) if stopped and on_screen and on_screen not in watched else frozenset()
+		if exclude:
+			log.append('  -> the item on screen was not watched: the next call begins with it')
+		elif stopped and not watched:
+			log.append('  -> nothing was watched: the next call begins with what is on screen')
 		percept = await self.perceive(
-			since=start, detail=detail, keyframes=keyframes, order=watched, deadline=deadline, exclude=exclude
+			since=start,
+			detail=detail,
+			keyframes=keyframes,
+			order=watched,
+			deadline=deadline,
+			exclude=exclude,
+			empty='(none watched: no time was left in this call)' if stopped else None,
 		)
 		percept.text = percept.text.replace('{REASON}', f'browsed {covered} item(s)')
 		percept.text += '\n' + '\n'.join(log)

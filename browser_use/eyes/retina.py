@@ -265,7 +265,11 @@ class Retina:
 				got.update(zip(page_seqs, [_decode_data_url(u) for u in (urls or [None] * len(page_seqs))]))
 			except TimeoutError:
 				# What was seen and heard is already held; losing the pictures must not lose the watch.
-				why = await self._why_no_answer()
+				if timeout is not None and timeout < self.keyframes_timeout:
+					# Cut by the call's time, not given up on: no probe past that time, and no blame on the page
+					why = f'the page did not hand them over in the {timeout:.1f}s this call had left'
+				else:
+					why = await self._why_no_answer()
 				logger.warning(f'👁️ keyframes: {why}')
 		return [got.get(s) for s in seqs], why
 

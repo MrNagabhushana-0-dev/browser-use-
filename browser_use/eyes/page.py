@@ -14,6 +14,7 @@ whole page as it looked while scrolling, including anything that animates as you
 import asyncio
 import base64
 import io
+import math
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -105,10 +106,12 @@ def choose_page_frames(
 	A scan knows where each frame was scrolled, so frames are first chosen for the page height they add, the way a
 	reader would page through it (found on BBC News: chosen by how alike they look, as for a film, two frames 0.1
 	screens apart were both kept while strips of the page were on none; white pages of headlines all look alike at
-	16x16). Of frames that add as much, the one farthest from those chosen is taken, beginning at the top: a sheet too
-	small for the page spreads over it (found on Wikipedia: six frames of a 12-screen list were all of its bottom
-	half, the title on none). Of two at one place the later is kept: lazy images have had longer to load. Frames left
-	over go to what differs most from those chosen, which is what moves on its own (a canvas, an animation)."""
+	16x16). The first frames are taken at even places from the top frame to the bottom one, as many as the sheet holds
+	and the page needs: they tile a page they can cover, and spread from the top over one they cannot (found on
+	Wikipedia: six frames of a 12-screen list were all of its bottom half, the title on none; spread by distance alone,
+	they split gaps, and a 6-screen page lost three quarter-screen strips). Of two at one place the later is kept: lazy
+	images have had longer to load. Then frames go to the height they add, and what is left over to what differs most
+	from those chosen, which is what moves on its own (a canvas, an animation)."""
 	if not frames or k <= 0 or viewport_h <= 0:
 		return [], 0.0
 	page_h = max(page_h, max(f.scroll_y for f in frames) + viewport_h)
@@ -122,20 +125,7 @@ def choose_page_frames(
 			covered += max(0.0, min(b, hi) - max(a, lo))
 		return (hi - lo) - covered  # spans never overlap each other (each is trimmed to what it adds)
 
-	while len(chosen) < k:
-		gains = [(added(i), i) for i in range(len(frames)) if i not in chosen]
-		if not gains:
-			break
-		gain = max(gains)[0]
-		if gain < 0.02 * viewport_h:
-			break
-
-		def spread(i: int) -> tuple[int, int]:
-			# how far from every frame chosen (the first: how near the top); then the later frame of two at one place
-			far = min((abs(frames[i].scroll_y - frames[j].scroll_y) for j in chosen), default=-frames[i].scroll_y)
-			return round(far), i
-
-		best = max((i for g, i in gains if g >= gain - 0.02 * viewport_h), key=spread)
+	def take(best: int) -> None:
 		chosen.append(best)
 		lo, hi = frames[best].scroll_y, min(frames[best].scroll_y + viewport_h, page_h)
 		for a, b in sorted(spans):  # keep only the new part, so spans stay disjoint
@@ -145,6 +135,23 @@ def choose_page_frames(
 				hi = a
 		if hi > lo:
 			spans.append((lo, hi))
+
+	# Even places from the top frame to the bottom one, no further apart than a screen if the sheet holds enough
+	top, bottom = min(f.scroll_y for f in frames), max(f.scroll_y for f in frames)
+	places = min(k, math.ceil((bottom - top) / viewport_h - 1e-9) + 1)
+	for n in range(places):
+		target = top + (bottom - top) * n / max(1, places - 1)
+		best = max(range(len(frames)), key=lambda i: (-round(abs(frames[i].scroll_y - target)), i))
+		if best not in chosen and added(best) >= 0.02 * viewport_h:
+			take(best)
+	while len(chosen) < k:
+		gains = [(added(i), i) for i in range(len(frames)) if i not in chosen]
+		if not gains:
+			break
+		gain, best = max(gains)
+		if gain < 0.02 * viewport_h:
+			break
+		take(best)
 	shown = sum(b - a for a, b in spans) / page_h
 	if len(chosen) < k and len(samples) == len(frames):
 		matrix = sight.grids(samples)

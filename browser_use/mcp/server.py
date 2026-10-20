@@ -956,20 +956,25 @@ class BrowserUseServer:
 		profile = BrowserProfile(**profile_data)
 
 		# Create browser session
-		self.browser_session = BrowserSession(browser_profile=profile)
+		session = self.browser_session = BrowserSession(browser_profile=profile)
 		try:
-			await self.browser_session.start(timeout=start_timeout)
+			await session.start(timeout=start_timeout)
 		except BaseException:
 			# keep no half-started session: every later call would fail on it instead of retrying the launch
-			session, self.browser_session = self.browser_session, None
+			if self.browser_session is session:
+				self.browser_session = None
 			try:
 				await session.kill()
 			except Exception:
 				pass
 			raise
+		if self.browser_session is not session:
+			# dropped while it started (a route change): it is not the browser wanted now
+			await session.kill()
+			raise RuntimeError('The browser was replaced while it started. Nothing was done; call again.')
 
 		# Track the session for management
-		self._track_session(self.browser_session)
+		self._track_session(session)
 
 		# Create tools for direct actions
 		self.tools = Tools()

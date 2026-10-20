@@ -113,7 +113,7 @@ def _slow_chrome(tmp_path, delay: float) -> str:
 
 	chrome = LocalBrowserWatchdog._find_installed_browser_path()
 	assert chrome, 'no Chrome installed to test with'
-	path = tmp_path / 'slow-chrome.sh'
+	path = tmp_path / 'slow-browser.sh'
 	# The profile asks this Chrome its version for the user agent: that is not a launch, and is not slow
 	path.write_text(
 		f'#!/bin/sh\ncase "$1" in --version) exec "{chrome}" "$@";; esac\n'
@@ -164,3 +164,19 @@ async def test_a_slow_launch_starts_when_given_the_time_and_leaves_nothing_behin
 		await given.navigate_to('about:blank')
 	finally:
 		await given.kill()
+
+
+async def test_a_launch_keeps_its_own_limit_unless_the_start_is_given_more_time(tmp_path, monkeypatch) -> None:
+	"""TIMEOUT_BrowserLaunchEvent caps a launch (to fail fast on a hung Chrome) even when TIMEOUT_BrowserStartEvent is
+	longer: only a start given more time than its default, with start(timeout=...), passes that time to its launch."""
+	import pytest
+
+	monkeypatch.setenv('TIMEOUT_BrowserStartEvent', '8')
+	monkeypatch.setenv('TIMEOUT_BrowserLaunchEvent', '2')
+	slow = _slow_chrome(tmp_path, delay=3)
+	session = BrowserSession(browser_profile=BrowserProfile(headless=True, executable_path=slow, user_data_dir=tmp_path / 'p'))
+	try:
+		with pytest.raises(Exception, match='timed out'):
+			await session.start()
+	finally:
+		await session.kill()

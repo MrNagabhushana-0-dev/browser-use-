@@ -3751,9 +3751,31 @@ container booted at 18:25:01; the retry worked in 19 s).
   - Retinat keeps one start in flight across calls (120 s in all). A call waits as long as its budget allows (less
     10 s for its own work); otherwise `The browser is still starting (Ns so far ...). Nothing was done; call again.`
     The next call joins the same start.
-  - A start stopped at its limit already left no Chrome behind; the test now asserts it.
-- Not verified: a real cold boot with the fix. Not fixed, seen on the way: with `executable_path` set and headless
-  on, `BrowserProfile.get_args()` runs `<chrome> --version` with `subprocess.run` on the event loop.
+  - **Corrected:** a start stopped at its limit *did* leave its Chrome running. The first test's check was vacuous (a
+    wrapper path containing "chrome" makes the profile be copied elsewhere); the review below caught it.
+- **Verified on a real cold boot** (the container restarted at ~23:42): the first `retinat_open` since boot opened on
+  the first call in 49 s, where it had failed at 30 s. The Retinat MCP server took 88 s to connect after that boot
+  (cold imports; the client allows 120 s).
+- Not fixed, seen on the way: with `executable_path` set and headless on, `BrowserProfile.get_args()` runs
+  `<chrome> --version` with `subprocess.run` on the event loop.
+
+**Review of the round's commits** (workflow `wf_a4277e9c-140`: 5 reviewers, a skeptic per serious finding; 2 of the
+skeptics hit the usage limit). 10 confirmed, 0 refuted; fixed test-first (each new test failed first):
+- a launch cut at its limit, or a cancelled start, left Chrome running: `_launch_browser` kills the Chrome it began
+  when the wait for its port ends without one, and a cancelled `start()` kills it (`kill_launching`);
+- Retinat's start in flight: stopped (its Chrome killed) on a route change and at close; a finished start is let go
+  so a dropped browser is started afresh (it failed on `assert self.browser_session`); a cancelled start answers as
+  such; a start ending as its wait does reports its own outcome; `START_RESERVE_S` 10 -> 15 s (an open's work after
+  the launch measured 13-15 s);
+- a launch inherits the start's time only when `start()` was given more than its default;
+- `browse_cap` accepted no item with `max_seconds < min_seconds + 0.5`: the browse watched nothing, forever;
+- speech: a watch of 38-45 s and a browse's last item were left no time to transcribe (`watch_span`,
+  `browse_cap(speech_rate=)`);
+- the scan sheet's distance tie-break split gaps (a 6-screen page: 88% shown, was 100%): it now seeds at even places,
+  then fills by height added;
+- smaller: "(no video was on screen)" when a browse watched nothing; a keyframe read cut by the call blamed the page
+  and probed past the deadline; a browse with no time to flick on is skipped past by the next browse; the 1 s-budget
+  test's backstop grace is 2 s.
 
 ROUND57_CI
 
@@ -3764,8 +3786,10 @@ ROUND57_CI
    by `NavigateToUrlEvent(timeout_ms=...)` and `Page.stopLoading` on a cut; then move `Deadline` to a numpy-free module
    before `browser_use/mcp/server.py` uses it.
 3. **A per-tab busy guard** so parallel long calls on one tab are refused, and a shielded release of a held touch or
-   button after a cut.
-4. **The `--version` probe** on the event loop (above): move it off the loop or cache it per executable.
+   button after a cut. With it: bound the flick inside a browse by the deadline (it can take 8-16 s on a feed that
+   will not move), and stop a start cancelled before Chrome is spawned.
+4. **The `--version` probe** on the event loop (above): move it off the loop or cache it per executable. And the
+   88 s MCP connect after a cold boot (lazy imports in `browser_use.retinat`).
 5. **A screen feed of only what the rules read** (Round 56's item 2).
 6. **Intermittents to watch:** the screen-recorder length test, the beep-count test, the play-arena title screen, the
    feed test, the region-runner test, the reflex speed test.

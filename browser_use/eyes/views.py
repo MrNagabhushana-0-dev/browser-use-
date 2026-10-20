@@ -86,6 +86,8 @@ BROWSE_OVERHEAD_EST_S = 1.5  # a watch's own work around the watching
 WATCH_TAIL_S = 3.0
 # How much faster than real time the speech model transcribes, at least: an estimate, not measured here
 ASR_REALTIME_X = 4.0
+# What starting the speech model costs over its transcribing (loading, the voice-activity pass)
+SPEECH_START_S = 1.5
 
 
 def browse_cap(
@@ -96,10 +98,23 @@ def browse_cap(
 	final_reserve: float = BROWSE_FINAL_RESERVE_S,
 	next_est: float = BROWSE_NEXT_EST_S,
 	overhead_est: float = BROWSE_OVERHEAD_EST_S,
+	speech_rate: float = math.inf,
 ) -> float | None:
 	"""How long the next item of a browse may be watched with `left` seconds of the call to go, or None when it cannot
-	be watched for `min_s` and a little: after it come a watch's own work, a flick on when there are `more` items, and
-	the end of the browse."""
-	assert max_s > 0 and min_s >= 0, (max_s, min_s)
-	cap = min(max_s, left - final_reserve - overhead_est - (next_est if more else 0.0))
-	return cap if cap >= min_s + 0.5 else None
+	be watched for `min_s` and a little (or its whole `max_s`, when that is less): after it come a watch's own work, a
+	flick on when there are `more` items, and the end of the browse. With speech, the speech model transcribes the
+	item at the end at `speech_rate` times real time, so the item shares its time with that."""
+	assert max_s > 0 and min_s >= 0 and speech_rate > 0, (max_s, min_s, speech_rate)
+	room = left - final_reserve - overhead_est - (next_est if more else 0.0)
+	cap = min(max_s, room / (1.0 + 1.0 / speech_rate))
+	return cap if cap >= min(min_s + 0.5, max_s) else None
+
+
+def watch_span(room_s: float, seconds: float, speech_rate: float = math.inf, held_s: float = 0.0) -> float:
+	"""How long a watch asked for `seconds` may watch, with `room_s` seconds before the work after it (WATCH_TAIL_S).
+	With speech, the speech model then runs over all it heard, `held_s` of it from before the watch began, at
+	`speech_rate` times real time: the watch leaves it that time."""
+	assert seconds > 0 and speech_rate > 0 and held_s >= 0, (seconds, speech_rate, held_s)
+	if math.isfinite(speech_rate):
+		room_s = (room_s - SPEECH_START_S - held_s / speech_rate) * speech_rate / (speech_rate + 1.0)
+	return max(0.0, min(seconds, room_s))

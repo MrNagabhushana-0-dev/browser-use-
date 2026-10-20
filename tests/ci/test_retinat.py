@@ -862,12 +862,12 @@ def test_every_tool_that_can_run_long_is_under_the_call_budget():
 async def test_a_call_keeps_to_its_budget_by_itself_or_the_backstop_stops_it(tmp_path, monkeypatch, site):
 	"""A call held to a 1 s budget. A wait and a watch end with the budget by themselves (after a cold browser launch a
 	50 s wait went past the client's 60 s). A tool that does not yet keep to the budget (explore, until it takes a
-	deadline) is stopped half a second past it and says so, instead of the client giving up on it; the next call
-	works."""
+	deadline) is stopped two seconds past it and says so, instead of the client giving up on it; the next call works.
+	The two seconds leave a watch the work after its watching (3 s in production), so a busy machine does not fail it."""
 	import time
 
 	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
-	server = RetinatServer(call_budget_s=1, backstop_grace_s=0.5)
+	server = RetinatServer(call_budget_s=1, backstop_grace_s=2.0)
 	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
 	page = (
 		'<!doctype html><title>Spin</title><body style="margin:0"><canvas id="c" width="400" height="300"></canvas><script>'
@@ -888,12 +888,12 @@ async def test_a_call_keeps_to_its_budget_by_itself_or_the_backstop_stops_it(tmp
 		watched = await _call(server, 'retinat_watch', {'seconds': 10})
 		took = time.monotonic() - started
 		assert not watched.is_error and 'out of time' in _text(watched), _text(watched)
-		assert took < 2.5, f'the watch took {took:.1f}s with a 1 s budget'
+		assert took < 3, f'the watch took {took:.1f}s with a 1 s budget'
 		started = time.monotonic()
 		stopped = await _call(server, 'retinat_explore', {'url': site.url_for('/spin'), 'max_pages': 3})
 		took = time.monotonic() - started
 		assert stopped.is_error and 'past its 1s budget' in _text(stopped), _text(stopped)
-		assert took < 3, f'the explore took {took:.1f}s'
+		assert took < 4.5, f'the explore took {took:.1f}s'
 		after = await _call(server, 'retinat_look', {})
 		assert not after.is_error, _text(after)
 	finally:
@@ -938,7 +938,7 @@ async def test_a_browser_slow_to_start_is_waited_for_across_calls_and_started_on
 
 	chrome = LocalBrowserWatchdog._find_installed_browser_path()
 	assert chrome
-	slow = tmp_path / 'slow-chrome.sh'
+	slow = tmp_path / 'slow-browser.sh'
 	# The profile asks this Chrome its version for the user agent: that is not a launch, and is not slow
 	slow.write_text(
 		f'#!/bin/sh\ncase "$1" in --version) exec "{chrome}" "$@";; esac\n'
@@ -970,3 +970,51 @@ async def test_a_browser_slow_to_start_is_waited_for_across_calls_and_started_on
 	assert not [
 		p for p in psutil.process_iter(['cmdline']) if any(str(tmp_path / 'profile') in a for a in p.info['cmdline'] or [])
 	], 'a browser was left running'
+
+
+async def test_a_browser_dropped_while_it_starts_or_after_is_started_afresh_and_none_is_left(tmp_path, monkeypatch, site):
+	"""A start goes on past the call that began it, so its browser can be dropped (a route change does) while it starts,
+	or after it started with no call waiting. Dropped while starting, its Chrome is ended, not left holding the profile;
+	dropped after, the next call starts another instead of failing on a browser that is gone."""
+	import asyncio
+
+	import psutil
+
+	from browser_use.browser.watchdogs.local_browser_watchdog import LocalBrowserWatchdog
+
+	chrome = LocalBrowserWatchdog._find_installed_browser_path()
+	assert chrome
+	slow = tmp_path / 'slow-browser.sh'
+	slow.write_text(f'#!/bin/sh\ncase "$1" in --version) exec "{chrome}" "$@";; esac\nsleep 3\nexec "{chrome}" "$@"\n')
+	slow.chmod(0o755)
+	profile = tmp_path / 'profile'
+
+	def running() -> list[int]:
+		return [p.pid for p in psutil.process_iter(['cmdline']) if any(str(profile) in a for a in p.info['cmdline'] or [])]
+
+	site.expect_request('/plain').respond_with_data('<!doctype html><title>Plain</title><body>plain', content_type='text/html')
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(call_budget_s=2)
+	server.config.setdefault('browser_profile', {}).update(
+		{'headless': True, 'user_data_dir': str(profile), 'executable_path': str(slow)}
+	)
+	try:
+		first = await _call(server, 'retinat_open', {'url': site.url_for('/plain')})
+		assert first.is_error and 'still starting' in _text(first), _text(first)
+		await server._drop_browser_session()
+		await asyncio.sleep(4)  # past the launcher's delay: a start left going would have its Chrome up by now
+		assert not running(), 'a browser dropped while it started was left running'
+
+		again = await _call(server, 'retinat_open', {'url': site.url_for('/plain')})
+		assert again.is_error and 'still starting' in _text(again), _text(again)
+		for _ in range(40):  # no call waits on this start: it ends by itself
+			await asyncio.sleep(0.5)
+			if server.browser_session is not None and server.browser_session.id in server.active_sessions:
+				break
+		await server._drop_browser_session()
+		opened = await _open_started(server, site.url_for('/plain'))
+		assert 'Opened "Plain"' in _text(opened), _text(opened)
+	finally:
+		await server._close_all_sessions()
+	await asyncio.sleep(1)
+	assert not running(), 'a browser was left running'

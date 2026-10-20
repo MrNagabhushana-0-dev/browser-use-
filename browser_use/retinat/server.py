@@ -80,7 +80,8 @@ BACKSTOP_GRACE_S = 6.0
 # disk, and went past the 30 s it was given. A call waits for a start only as long as its own budget allows, keeping
 # START_RESERVE_S of it for its own work once the browser is up.
 START_TIMEOUT_S = 120.0
-START_RESERVE_S = 10.0
+START_RESERVE_S = 15.0  # a first retinat_open after its launch took 13-15 s more (eyes, navigation, the wall check)
+_START_STOPPED = 'The browser start was stopped (the route changed, or the server is closing). Nothing was done; call again.'
 
 # What a click at (x, y) lands on: the topmost element there (into open shadow roots), lifted to the control that owns
 # it, described as role plus the text a person would read on it.
@@ -730,22 +731,49 @@ class RetinatServer(BrowserUseServer):
 			if self.browser_session:
 				return
 			self._starting = asyncio.create_task(self._start_session())
-			self._starting.add_done_callback(lambda t: t.cancelled() or t.exception())  # a failure is told to a later call
+			self._starting.add_done_callback(self._start_ended)
 			self._starting_since = time.monotonic()
 		starting = self._starting
 		wait = deadline.clamp(START_TIMEOUT_S, reserve=START_RESERVE_S) if deadline is not None and deadline.bounded else None
 		try:
 			await asyncio.wait_for(asyncio.shield(starting), wait)
 		except TimeoutError:
-			if starting.done():
-				raise  # the start itself timed out
-			raise RuntimeError(
-				f'The browser is still starting ({time.monotonic() - self._starting_since:.0f}s so far: Chrome read off a '
-				'cold disk, as after the machine boots, can take a minute). Nothing was done; call again.'
-			) from None
+			if not starting.done():
+				raise RuntimeError(
+					f'The browser is still starting ({time.monotonic() - self._starting_since:.0f}s so far: Chrome read off '
+					'a cold disk, as after the machine boots, can take a minute). Nothing was done; call again.'
+				) from None
+			if starting.cancelled():
+				raise RuntimeError(_START_STOPPED) from None
+			starting.result()  # it ended as the wait did: up (returns), or its own error (raises)
+		except asyncio.CancelledError:
+			task = asyncio.current_task()
+			if not starting.cancelled() or (task is not None and task.cancelling()):
+				raise  # this call was cancelled, not the start
+			raise RuntimeError(_START_STOPPED) from None
 		finally:
 			if starting.done() and self._starting is starting:
-				self._starting = None  # started, or failed and told: the next call starts afresh if it must
+				self._starting = None  # failed and told: the next call starts afresh
+
+	def _start_ended(self, starting: 'asyncio.Task[None]') -> None:
+		if starting.cancelled():
+			return
+		# A failure stays for the next call to be told; a browser that is up needs no start, and one dropped since (a
+		# route change) is started afresh by the next call rather than joined to this finished start
+		if starting.exception() is None and self._starting is starting:
+			self._starting = None
+
+	async def _stop_starting(self) -> None:
+		"""Stop a browser start in flight. Cancelling it ends the Chrome it waits on (BrowserSession.start), so this does
+		not wait for the launch to finish, and nothing is left holding the profile."""
+		starting, self._starting = self._starting, None
+		if starting is not None and not starting.done():
+			starting.cancel()
+			await asyncio.gather(starting, return_exceptions=True)
+
+	async def _drop_browser_session(self) -> None:
+		await self._stop_starting()  # a start in flight is for the old route
+		await super()._drop_browser_session()
 
 	async def _start_session(self) -> None:
 		if not self.browser_session:
@@ -1081,13 +1109,12 @@ class RetinatServer(BrowserUseServer):
 		return f'{count} reflex rule(s) running every frame on this tab. retinat_wait sleeps until one notifies.'
 
 	async def _close_all_sessions(self) -> str:
-		if self._starting is not None:
-			self._starting.cancel()  # a start cancelled part way kills what it had begun
-			await asyncio.gather(self._starting, return_exceptions=True)
-			self._starting = None
-		if self._control is not None:
-			self._control.close()
-			self._control = None
+		try:
+			await self._stop_starting()
+		finally:
+			if self._control is not None:
+				self._control.close()
+				self._control = None
 		return await super()._close_all_sessions()
 
 	def _desktop_control(self) -> 'DesktopControl':

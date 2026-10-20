@@ -916,7 +916,14 @@ class BrowserSession(BaseModel):
 		start_event = self.event_bus.dispatch(
 			BrowserStartEvent() if timeout is None else BrowserStartEvent(event_timeout=timeout)
 		)
-		await start_event
+		try:
+			await start_event
+		except asyncio.CancelledError:
+			# Cancelling this wait does not stop the start on the bus: end the Chrome it waits on, so it fails at once
+			# rather than at its limit, and a kill() queued behind it does not wait that long
+			if self._local_browser_watchdog is not None:
+				self._local_browser_watchdog.kill_launching()
+			raise
 		# Ensure any exceptions from the event handler are propagated
 		await start_event.event_result(raise_if_any=True, raise_if_none=False)
 
@@ -1005,9 +1012,12 @@ class BrowserSession(BaseModel):
 				elif self.is_local:
 					# Launch local browser using event-driven approach
 					launch = BrowserLaunchEvent()
-					if event.event_timeout and launch.event_timeout and event.event_timeout > launch.event_timeout:
-						# The launch is most of a start: it gets the time the start was given
-						launch = BrowserLaunchEvent(event_timeout=event.event_timeout)
+					given = event.event_timeout
+					usual = BrowserStartEvent().event_timeout
+					if given and usual and launch.event_timeout and given > usual and given > launch.event_timeout:
+						# A start given more time than usual (start(timeout=...)) passes it to its launch, which is most of
+						# a start; otherwise the launch keeps its own limit
+						launch = BrowserLaunchEvent(event_timeout=given)
 					launch_event = self.event_bus.dispatch(launch)
 					await launch_event
 

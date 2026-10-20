@@ -1039,6 +1039,39 @@ def test_a_browse_watches_an_item_only_with_time_for_what_comes_after_it():
 	assert browse_cap(left=12, more=False, max_s=15, min_s=3) == 7.5  # the last item needs no flick after it
 	assert browse_cap(left=10.5, more=True, max_s=15, min_s=3) is None  # not even min_s and a little
 	assert browse_cap(left=20, more=True, max_s=15, min_s=3, next_est=6, overhead_est=2) == 9  # what was measured
+	# An item asked to run no longer than min_s (max_seconds 3, min_seconds 3): it is watched for its max, not never
+	assert browse_cap(left=50, more=True, max_s=3, min_s=3) == 3
+	assert browse_cap(left=50, more=True, max_s=2, min_s=3) == 2
+	# With speech, the item's own words are transcribed at the end too: its time is shared with the speech model's
+	assert browse_cap(left=49.7, more=False, max_s=45, min_s=3, speech_rate=4) == pytest.approx((49.7 - 3 - 1.5) / 1.25)
+
+
+def test_a_watch_leaves_time_for_the_speech_model_to_transcribe_it():
+	"""How long a watch may watch before its tail of work. With speech, the speech model runs over all it heard
+	(backfill included) at some multiple of real time after the watching, so a long watch is cut to leave it time; a
+	watch of 40 s with 47 s of room heard nothing transcribed."""
+	from browser_use.eyes.views import watch_span
+
+	assert watch_span(room_s=47, seconds=45) == 45
+	assert watch_span(room_s=30, seconds=45) == 30
+	assert watch_span(room_s=47, seconds=20, speech_rate=4) == 20
+	assert watch_span(room_s=47, seconds=45, speech_rate=4) == pytest.approx((47 - 1.5) * 4 / 5)
+	assert watch_span(room_s=47, seconds=45, speech_rate=4, held_s=8) == pytest.approx((47 - 1.5 - 2) * 4 / 5)
+	assert watch_span(room_s=1, seconds=45, speech_rate=4) == 0  # no room: nothing, not a negative span
+
+
+async def test_a_browse_with_no_time_for_the_reel_on_screen_does_not_say_there_was_no_video(eyes, session, site):
+	"""A browse with too little time for even the first reel stops at once: the reel on screen is held over for the
+	next call, and the answer says so, not that no video was on screen."""
+	from browser_use.eyes.views import BROWSE_FINAL_RESERVE_S, BROWSE_OVERHEAD_EST_S, Deadline
+
+	await _open(eyes, session, site.url_for('/feed'))
+	p = await eyes.browse(
+		items=3, max_seconds=4.0, min_seconds=1.0, deadline=Deadline.after(BROWSE_FINAL_RESERVE_S + BROWSE_OVERHEAD_EST_S + 1)
+	)
+	assert p.stop_reason == 'time' and p.resume and p.resume['items'] == 3, (p.resume, p.text)
+	assert 'no video was on screen' not in p.text, p.text
+	assert 'none watched' in p.text and 'the next call begins with' in p.text, p.text
 
 
 async def test_a_browse_out_of_time_stops_on_the_next_reel_and_goes_on_from_it(eyes, session, site):
@@ -1564,6 +1597,11 @@ def test_a_scan_sheet_too_small_for_the_page_spreads_over_it_from_the_top():
 	# A page the frames can cover is still covered
 	chosen, shown = choose_page_frames(frames[:5], [], 6, vh, 3.4 * vh)
 	assert shown >= 0.99, shown
+	# A page six frames can just cover, scrolled in 100 px notches: frames 800 px apart cover it all; spread by distance
+	# alone, they split gaps and left three quarter-screen strips on none (88% shown)
+	notches = [PageFrame(i * 0.1, y, b'') for i, y in enumerate(range(0, 4001, 100))]
+	chosen, shown = choose_page_frames(notches, [], 6, 800.0, 4800.0)
+	assert shown >= 0.99, (shown, sorted(notches[i].scroll_y for i in chosen))
 
 
 async def test_a_scan_sheet_shows_the_whole_page_not_two_frames_of_its_top(eyes, session, site):
