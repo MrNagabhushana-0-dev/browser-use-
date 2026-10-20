@@ -3878,3 +3878,18 @@ Hands-on only, no library change (`docs/hands-on/2026-10-20/notes.md`).
     the next cold boot.
 
 **Next, in order:** as in Round 58, with "the slow connect after a boot" done if the next cold boot confirms it.
+
+## Round 60 (unattended loop, 2026-10-20 04:42): MR Racer 720, and the connect after a boot at 4.6 s
+
+Hands-on only (no library code changed); details in `docs/hands-on/2026-10-20/notes.md`.
+
+- **Measured:** with `uv run --no-sync` the Retinat MCP server connected in 4.6 s after the 04:42 boot (79.7 s at
+  03:36, 93.5 s before the front). That boot was only partly cold (the first open took 16 s).
+- **Measured:** MR Racer rule v7 (a symmetric lane keeper) scored 720 at 5.8 km in a clean run, stopped by hand;
+  the best before was 657. v6 pinned itself to the left barrier (86).
+- **Said plainly, since the owner asked:** the driving is a pixel-reading rule that Retinat runs every frame, which
+  reacts to the traffic on screen. The model writes the rule between runs; it does not see each frame.
+- **Not fixed:** a `retinat_record` stop and start sent in parallel refuse the start.
+
+**Next, in order:** confirm the connect on a fully cold boot; a racer rule that overtakes a slow vehicle instead
+of following it at 30 km/h (the score stops rising); then as in Round 58.

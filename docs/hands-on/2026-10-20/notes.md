@@ -42,6 +42,28 @@ saw no line under the car, so it did not steer; a car came up level with us on t
 116 -> 214 -> 536 -> 656 over ~1.5 s); the box above our roof crossed 15 with neither side clear, so it braked; ~1 s
 later the car on the left hit us. Not the swap: no rule acts on a car alongside.
 
+Later runs (04:45-05:01 UTC):
+
+| Run | Rule | Score | What happened |
+|---|---|---|---|
+| v6 | a keeper that steered towards the middle from any line under the car | 86 (0.4 km) | pinned against the left barrier: with the left road edge under the car it steered further left |
+| v7, swapped in live over v6 | a symmetric keeper (`mr-racer-rule-v7.js`): a line under the car with a lane line on one side only means the road edge is on the other, so it steers away from that edge | 221 (0.81 km) | crashed soon after the swap, from the bad spot v6 had left it in |
+| v7, clean run | the same | **720 at 5.8 km, new high score; stopped by hand, not crashed** | 160 at 0.6 km, 615 at 3.2, 686 at 4.4, 720 at 4.8, then 720 to 5.8 km: at 30-50 km/h behind a slow truck the score stopped rising, so points seem to need speed (`mr-racer-rule-v7-720-at-5.8km-6x.mp4`, 6x speed, 2,469 key actions) |
+
+**What this proves and what it does not.** The car is driven by a JavaScript rule that Retinat runs on every frame
+of the page. It reads pixel counts in fixed boxes of the screen and holds arrow keys through CDP `Input` events. It
+reacts to the traffic actually on screen; it is not a replayed key sequence. But it is **not** the model seeing
+each frame: a model turn takes seconds. I looked at frames between runs and rewrote the rule (v3 to v7). The score
+therefore measures that loop of reading pixels and rewriting rules, not frame-by-frame AI vision, and the inputs make
+no attempt to look human.
+
+**Boot of 04:42 UTC with `uv run --no-sync`:** the Retinat MCP server connected in **4.6 s** and browser-use in
+8.0 s. Python started within 1 s of `uv run`, against ~54 s at 03:36. That boot was only partly cold (the first
+`retinat_open` took 16 s), so a fully cold boot is still to be checked.
+
+Also seen: a `retinat_record` stop and start sent in one message run in parallel, and the start was refused
+("already in progress"). Sent one at a time, they work.
+
 **Next for the racer:**
 - a rule for a car alongside: speed up or brake to separate rather than hold;
 - the box above the roof also reads the barrier and trees, so the rules brake there for nothing (it held 30 km/h);
