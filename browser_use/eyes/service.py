@@ -1148,10 +1148,14 @@ class Eyes:
 					break
 		if hold:
 			await self._hold()
-		# Stopped for time after a flick: the item now on screen was not watched, and the next call begins with it
+		# Stopped for time after a flick: the item now on screen was not watched, and the next call begins with it. Nor
+		# was one glimpsed while a flick overshot: it would be told as watched now, and watched again by the next call
 		on_screen = self.retina.attended.get('vid', 0)
-		exclude = frozenset({on_screen}) if stopped and on_screen and on_screen not in watched else frozenset()
-		if exclude:
+		exclude: frozenset[int] = frozenset()
+		if stopped:
+			frames, hops, _ = self._since(start)
+			exclude = frozenset(x.vid for x in [*frames, *hops] if x.vid and x.vid not in watched)
+		if on_screen in exclude:
 			log.append('  -> the item on screen was not watched: the next call begins with it')
 		elif stopped and not watched:
 			log.append('  -> nothing was watched: the next call begins with what is on screen')

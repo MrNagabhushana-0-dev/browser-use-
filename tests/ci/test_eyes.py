@@ -1074,13 +1074,16 @@ async def test_a_browse_with_no_time_for_the_reel_on_screen_does_not_say_there_w
 	assert 'none watched' in p.text and 'the next call begins with' in p.text, p.text
 
 
-async def test_a_browse_out_of_time_stops_on_the_next_reel_and_goes_on_from_it(eyes, session, site):
+@pytest.mark.parametrize('feed', ['/feed', '/overshoot-feed'])
+async def test_a_browse_out_of_time_stops_on_the_next_reel_and_goes_on_from_it(eyes, session, site, feed):
 	"""A browse of many reels ran past the client's 60 s (30 items of up to 45 s are allowed). With a deadline it
 	watches what fits, flicks on, stops, and says how many are left; the next call watches from that reel on, and
-	each reel is watched once across the two."""
+	each reel is watched once across the two. On the overshoot feed the flick carries the third reel into view before
+	the correction: a reel glimpsed so is not one the browse watched (seen in a full run, where it was reported as
+	watched for 4.6 s, then due to be watched again by the next call)."""
 	from browser_use.eyes.views import BROWSE_FINAL_RESERVE_S, BROWSE_NEXT_EST_S, BROWSE_OVERHEAD_EST_S, Deadline
 
-	await _open(eyes, session, site.url_for('/feed'))
+	await _open(eyes, session, site.url_for(feed))
 	# Time for the first reel at its 4 s and not for a second: the plan sets aside the flick and the end each time
 	budget = BROWSE_FINAL_RESERVE_S + BROWSE_OVERHEAD_EST_S + BROWSE_NEXT_EST_S + 4.0 + 1.5
 	started = time.monotonic()
