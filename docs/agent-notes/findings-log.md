@@ -3777,7 +3777,25 @@ skeptics hit the usage limit). 10 confirmed, 0 refuted; fixed test-first (each n
   and probed past the deadline; a browse with no time to flick on is skipped past by the next browse; the 1 s-budget
   test's backstop grace is 2 s.
 
-ROUND57_CI
+**Test runs.**
+- Affected files on `f9f1735` (`test_eyes`, `test_retinat`, `test_browser_session`, launch cleanup, MCP lifecycle, page
+  tools and annotations, profile args): 163 passed, 0 failed (11m53s), no Chrome left running.
+- **Full `tests/ci` on `f9f1735`: red, 2 failed, 1,754 passed, 31 skipped** (40m38s):
+  - `test_screenrec.py::test_a_recording_is_finalized_into_a_playable_file` (asked ~2 s, got 0.9 s): the known
+    intermittent, not touched here; alone it then passed 6 of 6, three times over.
+  - `test_eyes.py::test_a_browse_out_of_time_stops_on_the_next_reel_and_goes_on_from_it`: **a real bug.** Under the
+    suite's load a flick overshot to the third reel and the correction took 7.6 s; the browse stopped for time and
+    reported the glimpsed third reel as watched (4.6 s), so the next call would have watched it again. Fixed in
+    `057031d`: a browse stopped for time leaves out every item it did not watch. The test now also runs on the
+    overshoot feed, where it failed the same way without load before the fix.
+- `test_eyes` + `test_retinat` on `057031d`: 137 passed, 0 failed (11m00s). The full suite was not rerun for that
+  one-path change.
+
+**Researched: can a long call outlive the client's 60 s?** MCP progress notifications reset a client's request
+timeout only where the client opts in (`resetTimeoutOnProgress` is off by default in the TypeScript SDK; Claude Code
+issue #58687 asked for it and is closed, with no shipped fix confirmed; Cursor's client has the same limit). The
+2025-11-25 spec's experimental Tasks ("call now, fetch later") are moving out of the core into an extension. So the
+50 s budget with a "call again" resume stays the portable answer; sending progress as well costs little.
 
 **Next, in order:**
 1. **Games** (the owner's test of real-time vision), as in Round 56's list: Temple Run 2 key timing and corners, MR
@@ -3795,3 +3813,8 @@ ROUND57_CI
    feed test, the region-runner test, the reflex speed test.
 7. **Carried over:** confine the AI's page script to the page's own world (Round 54); the sheet vs recall vs journal
    A/B with blind agents (Round 10).
+8. **Progress notifications** from Retinat's long tools (scan, browse, watch, explore), for clients that let them
+   extend a call.
+9. **A browse's glimpses in a finished browse:** an item glimpsed while a flick overshot is still listed after the
+   watched ones when the browse was not stopped for time (it was before this round too); decide whether a browse
+   should only ever list what it watched.

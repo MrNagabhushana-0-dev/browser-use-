@@ -92,3 +92,10 @@ top and spreads over the page.
 
 Not fixed (in the findings log's Next list): the flick inside a browse is not bounded by the deadline; a start
 cancelled before Chrome is spawned still waits for the spawn.
+
+## 4. Found by the full test run
+
+The full `tests/ci` on the review fixes failed one browse test under load: a flick overshot onto the third reel, the
+correction took 7.6 s, and the browse, stopped for time, listed the third reel as watched for 4.6 s though it had only
+been glimpsed. The next call would have watched it again. A browse stopped for time now leaves out every item it did
+not watch; the budget test also runs on the overshoot feed, where it failed the same way before the fix.
