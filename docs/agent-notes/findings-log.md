@@ -3893,3 +3893,25 @@ Hands-on only (no library code changed); details in `docs/hands-on/2026-10-20/no
 
 **Next, in order:** confirm the connect on a fully cold boot; a racer rule that overtakes a slow vehicle instead
 of following it at 30 km/h (the score stops rising); then as in Round 58.
+
+## Round 61 (unattended loop, 2026-10-20 05:42): step mode, so the model plays; a restarted server says its tools changed
+
+The owner asked whether the racer was really the model playing. It was not: rules the model wrote drove it. This
+round builds the honest alternative, as game benchmarks do it: the page's clock stops while the model thinks.
+
+- **Measured:** on a boot less than a minute old, with `uv run --no-sync`, Retinat connected in 6.3 s and browser-use
+  in 9.0 s (79.7 s and 93.5 s on earlier cold boots). The first open took 17 s, so the disk was only partly cold.
+- **Built test-first:** `retinat_step` and `browser_use/eyes/clock.py`. Measured on Chromium before building:
+  - CDP virtual time freezes performance.now, Date and timers, but not requestAnimationFrame. A game timed by rAF
+    timestamps or by counting frames ran on through a pause; it does not now.
+  - Frames stop for good once a paused page draws nothing; a 1 px canvas keeps them coming.
+  - A tab cannot leave virtual time, so resume pumps its clock with the real one.
+  - 30 steps of one frame play 500 ms in about 0.5 s of real time.
+- **Found and fixed:** Claude Code reconnected to a restarted Retinat but kept its first tool list, so a new tool could
+  not be called. Retinat now serves `subscriptions/listen` and says the list changed. Tested in both protocol eras
+  with the SDK's clients; **not yet seen** to make Claude Code re-list within a turn.
+- **Not done:** playing Subway Surfers with `retinat_step` (the tool was not callable in this session yet); a frame
+  from another site in its own process (cannot be tried while browser-use disables site isolation here).
+
+**Next, in order:** play Subway Surfers with `retinat_step` on video, turn-based and latency-charged, and report both
+scores; a strip of frames per step if one frame does not show speed; then as in Round 58.
