@@ -3915,3 +3915,23 @@ round builds the honest alternative, as game benchmarks do it: the page's clock 
 
 **Next, in order:** play Subway Surfers with `retinat_step` on video, turn-based and latency-charged, and report both
 scores; a strip of frames per step if one frame does not show speed; then as in Round 58.
+
+## Round 62 (unattended loop, 2026-10-21 16:00): a new container, work lost and re-applied, a launcher that cannot start empty
+
+The session sat idle for a day (33 hourly firings queued) and resumed in a new container. No hands-on this round: the
+Retinat and browser-use servers failed to start, so no MCP tool was available.
+
+- **Found, my regression:** the new container had no project virtualenv. `.mcp.json`'s `uv run --no-sync` (Round 59)
+  then made an empty one and ran both servers in it; they failed to import and the client gave up on them for the
+  session. Fixed with `bin/mcp-serve.sh`: `--no-sync` when the project is installed, plain `uv run` (which installs)
+  when not. Both paths checked by hand; a client starting through it is **not yet seen**. A first install took 2m20s,
+  more than a client's 120 s, so `uv sync` after cloning stays in AI.md.
+- **Corrected:** commit `588f302` says it carries the step-mode review fixes but holds only the `front.py` change; the
+  rest had not been committed when the old container was replaced. Re-applied in `94971d4` from the same patches.
+- **Corrected:** `43c9b8f` blamed a stopped clock for the step test's empty title in the file run. The cause was
+  another test's `/later` page on the shared test server (no title, no `fired`); the step test now opens its own path.
+  The pump changes in that commit stand: the review found the same weaknesses.
+- **Measured:** the affected files on `94971d4` (clock, MCP lifecycle, reflex, Retinat): 77 passed, 0 failed.
+
+**Next, in order:** confirm the servers start through the launcher on the next session; play Subway Surfers with
+`retinat_step` on video, turn-based and latency-charged; then as in Round 61.
