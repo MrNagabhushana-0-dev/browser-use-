@@ -44,8 +44,10 @@ FRAME_MS = 1000 / 60
 STEP_MAX_MS = 5000.0
 # The most thinking time `charge_thinking` plays before a step's keys
 CHARGE_MAX_MS = 10_000.0
-# How many frames a tap is down for: a game that reads keys on a fixed tick of its own (~50 Hz physics) can miss one
-TAP_FRAMES = 3
+# How long a tap is down for: a game that reads keys on a fixed tick of its own (~50 Hz physics) can miss a shorter one
+TAP_MS = 50.0
+# The fewest frames a step may draw per second of game time (frame skip, for pages slow to draw)
+FPS_MIN = 10.0
 # How long a frame's budget may take to be spent before the page is taken to be stuck
 _BUDGET_WAIT_S = 5.0
 # Virtual time moves only when the page has no task ready to run: after this many tasks run in a row it is moved on
@@ -202,18 +204,23 @@ class PageClock:
 		tap: list[str] | tuple[str, ...] = (),
 		charge_thinking: bool = False,
 		stop_at: float | None = None,
+		fps: float = 60.0,
 	) -> Stepped:
 		"""Play `ms` of game time a frame at a time with `hold` down throughout (and after, until a step leaves a key
-		out) and `tap` down for its first frames, then stand still again. `charge_thinking` first plays the time since
-		the last step ended with the last step's keys. `stop_at` (monotonic) ends the step after the frame playing then."""
+		out) and `tap` down for its first ~50 ms, then stand still again. `charge_thinking` first plays the time since
+		the last step ended with the last step's keys. `stop_at` (monotonic) ends the step after the frame playing then.
+		`fps` below 60 draws fewer frames per second of game time, each a longer tick (frame skip)."""
 		assert self.paused, 'pause() first'
 		assert 0 < ms <= STEP_MAX_MS, f'a step plays 1-{STEP_MAX_MS:.0f} ms'
+		assert FPS_MIN <= fps <= 60, f'fps is {FPS_MIN:.0f}-60'
+		frame_ms = 1000 / fps
 		began = time.monotonic()
 		self._waits = {'draw': 0.0, 'clock': 0.0}
 		charged = 0.0
 		if charge_thinking and self._last_step_end is not None:
 			thought_ms = min(CHARGE_MAX_MS, (began - self._last_step_end) * 1000)
-			charged = await self._play(max(1, round(thought_ms / FRAME_MS)), stop_at=stop_at) if thought_ms >= FRAME_MS else 0.0
+			if thought_ms >= frame_ms:
+				charged = await self._play(max(1, round(thought_ms / frame_ms)), stop_at=stop_at, frame_ms=frame_ms)
 		hold = list(dict.fromkeys(hold))
 		released = [k for k in self.held if k not in hold]
 		for key in released:
@@ -222,16 +229,23 @@ class PageClock:
 			await self._key(key, 'keyDown')
 		self.held = hold
 		taps = [k for k in dict.fromkeys(tap) if k not in hold]
-		frames = max(1, round(ms / FRAME_MS))
+		frames = max(1, round(ms / frame_ms))
+		tap_frames = max(1, round(TAP_MS / frame_ms))
 		played = 0.0
 		if any(k in released for k in taps) and frames > 1:
 			# a key let go and pressed again before the same frame is no new press to a game that polls keys each frame
-			played = await self._play(1, stop_at=stop_at)
+			played = await self._play(1, stop_at=stop_at, frame_ms=frame_ms)
 			frames -= 1
 		for key in taps:
 			await self._key(key, 'keyDown')
 		try:
-			played += await self._play(frames, stop_at=stop_at, release_after=(TAP_FRAMES, taps), first=round(played / FRAME_MS))
+			played += await self._play(
+				frames,
+				stop_at=stop_at,
+				release_after=(tap_frames, taps),
+				first=round(played / frame_ms),
+				frame_ms=frame_ms,
+			)
 		finally:
 			for key in taps:  # a step shorter than a tap still lets go of it
 				await self._key(key, 'keyUp')
@@ -239,7 +253,7 @@ class PageClock:
 		self._last_step_end = time.monotonic()
 		return Stepped(
 			game_ms=played,
-			frames=round(played / FRAME_MS),
+			frames=round(played / frame_ms),
 			real_s=self._last_step_end - began,
 			charged_ms=charged,
 			held=list(self.held),
@@ -283,16 +297,21 @@ class PageClock:
 			logger.debug(f'clock: could not {what}: {type(e).__name__}: {e}')
 
 	async def _play(
-		self, frames: int, stop_at: float | None = None, release_after: tuple[int, list[str]] | None = None, first: int = 0
+		self,
+		frames: int,
+		stop_at: float | None = None,
+		release_after: tuple[int, list[str]] | None = None,
+		first: int = 0,
+		frame_ms: float = FRAME_MS,
 	) -> float:
-		"""Move the clock `frames` frames, waiting for each to be drawn; the game time played. `first` is how many frames
-		of the same step came before, so the milliseconds keep adding up."""
+		"""Move the clock `frames` frames of `frame_ms` each, waiting for each to be drawn; the game time played. `first`
+		is how many frames of the same step came before, so the milliseconds keep adding up."""
 		after, keys = release_after or (0, [])
 		played = 0
 		for i in range(first, first + frames):
 			# whole milliseconds that add up over frames: 17, 16, 17, ... for 1/60 s
 			t0 = time.monotonic()
-			await self._advance(round((i + 1) * FRAME_MS) - round(i * FRAME_MS))
+			await self._advance(round((i + 1) * frame_ms) - round(i * frame_ms))
 			t1 = time.monotonic()
 			await self._next_frame()
 			self._waits['clock'] += t1 - t0
@@ -306,7 +325,7 @@ class PageClock:
 				break
 		if release_after is not None:
 			release_after[1][:] = keys  # what is still down is let go by the caller
-		return float(round((first + played) * FRAME_MS) - round(first * FRAME_MS))
+		return float(round((first + played) * frame_ms) - round(first * frame_ms))
 
 	def _on_expired(self, event: dict[str, Any], session_id: str | None = None) -> None:
 		if session_id == self._session_id:

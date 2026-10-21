@@ -539,6 +539,19 @@ def _browser_tools() -> list['types.Tool']:
 						'default': False,
 						'description': 'Play the time since the last step first (up to 10 s), with its keys still held.',
 					},
+					'frame': {
+						'description': 'What to show: "page" (the whole viewport), "game" (just the largest canvas, frame or '
+						'video in view, drawn larger), or [x, y, width, height] in CSS px.',
+						'default': 'page',
+					},
+					'fps': {
+						'type': 'number',
+						'default': 60,
+						'minimum': 10,
+						'maximum': 60,
+						'description': 'Frames drawn per second of game time. Lower (20-30) on pages slow to draw: same game '
+						'time, fewer frames, each a longer tick.',
+					},
 				},
 			},
 		),

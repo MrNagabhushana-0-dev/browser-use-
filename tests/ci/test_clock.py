@@ -110,7 +110,7 @@ def games():
 	full = (
 		'<!doctype html><title>Full</title><body style="margin:0">'
 		'<button id="go" style="position:fixed;left:0;top:0;width:200px;height:60px" '
-		"onclick=\"document.getElementById('g').requestFullscreen()\">Full screen</button>"
+		'onclick="document.getElementById(\'g\').requestFullscreen()">Full screen</button>'
 		f'<iframe id="g" src="{other.url_for("/runner")}" style="margin-top:80px" width="420" height="220"></iframe></body>'
 	)
 	main.expect_request('/full').respond_with_data(full, content_type='text/html')
@@ -371,7 +371,7 @@ async def test_a_game_frame_put_full_screen_is_stepped_as_fast_as_the_page(sessi
 			params={'type': kind, 'x': 100, 'y': 30, 'button': 'left', 'clickCount': 1}, session_id=cdp.session_id
 		)
 	await asyncio.sleep(0.5)
-	assert await _value(session, "document.fullscreenElement && document.fullscreenElement.id") == 'g'
+	assert await _value(session, 'document.fullscreenElement && document.fullscreenElement.id') == 'g'
 	pc = PageClock(session)
 	await _paused(pc)
 	await asyncio.sleep(0.5)  # nothing on screen changes while paused
@@ -380,4 +380,22 @@ async def test_a_game_frame_put_full_screen_is_stepped_as_fast_as_the_page(sessi
 	after = await _game(session, framed=True)
 	await asyncio.sleep(0.5)
 	assert (await _game(session, framed=True))['t'] == pytest.approx(after['t'], abs=0.5), 'still paused after the step'
+	await pc.resume()
+
+
+async def test_a_step_can_draw_fewer_frames_for_a_page_slow_to_draw(session, games):
+	"""Frame skip, as the Arcade Learning Environment's: on a page that takes long to draw (a 3D game without a GPU), a
+	step at 20 frames a game second draws a third of the frames and plays the same time; a tap still lasts ~50 ms."""
+	await _opened(session, games.url_for('/runner'))
+	pc = PageClock(session)
+	await _paused(pc)
+	before = await _game(session)
+	stepped = await pc.step(300, fps=20)
+	after = await _game(session)
+	assert stepped.frames == 6 and stepped.game_ms == pytest.approx(300, abs=1), stepped
+	assert after['t'] - before['t'] == pytest.approx(300, abs=51)
+	gaps = after['gaps'][len(before['gaps']) :]
+	assert len(gaps) <= 8 and max(gaps) == pytest.approx(50, abs=1.5), gaps
+	await pc.step(200, tap=['ArrowLeft'], fps=20)
+	assert (await _game(session))['lane'] == after['lane'] - 1, 'a tap at 20 fps is still one lane'
 	await pc.resume()

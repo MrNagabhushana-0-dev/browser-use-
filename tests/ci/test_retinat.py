@@ -1183,3 +1183,33 @@ async def test_on_a_paused_page_the_tools_that_need_its_time_say_so_and_explore_
 	assert not look.is_error, _text(look)
 	explored = await _call(retinat, 'retinat_explore', {'url': site.url_for('/'), 'max_pages': 1})
 	assert not explored.is_error and 'real time again' in _text(explored), _text(explored)[:300]
+
+
+async def test_a_step_can_show_just_the_game_and_draw_fewer_frames(retinat, site):
+	"""For a model that must read a small game inside a big page (Poki's frame is about a third of a look), a step can
+	return just the game, captured afresh at a readable size."""
+	import base64
+	import io
+
+	from PIL import Image
+
+	from tests.ci.test_clock import GAME
+
+	site.expect_request('/runner-inner').respond_with_data(GAME, content_type='text/html')
+	portal = (
+		'<!doctype html><title>Portal</title><body style="margin:0;background:#363">'
+		'<p style="height:150px">header</p>'
+		f'<iframe src="{site.url_for("/runner-inner")}" style="margin-left:200px;border:0" width="480" height="270"></iframe>'
+		'</body>'
+	)
+	site.expect_request('/game-portal').respond_with_data(portal, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/game-portal')})
+	stepped = await _call(retinat, 'retinat_step', {'ms': 100, 'frame': 'game'})
+	assert not stepped.is_error, _text(stepped)
+	image = next(b for b in stepped.content if isinstance(b, types.ImageContent))
+	with Image.open(io.BytesIO(base64.b64decode(image.data))) as img:
+		ratio = img.width / img.height
+	assert abs(ratio - 480 / 270) < 0.06, ratio
+	assert "the game's frame" in _text(stepped), _text(stepped)
+	slow = await _call(retinat, 'retinat_step', {'ms': 200, 'fps': 20})
+	assert 'Played 200 ms (4 frames)' in _text(slow), _text(slow)

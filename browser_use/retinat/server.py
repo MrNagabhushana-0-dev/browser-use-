@@ -113,6 +113,20 @@ BACKSTOP_GRACE_S = 6.0
 START_TIMEOUT_S = 120.0
 # What a step keeps of its call to capture and send the frame it ended on
 STEP_ANSWER_S = 2.0
+# How wide (and tall, at most) a step's frame of just the game is drawn: readable without costing a full-page look's worth
+STEP_GAME_WIDTH = 800
+# The largest canvas, frame or video in view (its visible part), where a game is drawn, as [x, y, width, height]
+_GAME_REGION_JS = r"""(() => {
+	let best = null, bestArea = 0;
+	for (const el of document.querySelectorAll('canvas, iframe, video')) {
+		const r = el.getBoundingClientRect();
+		const x = Math.max(0, r.left), y = Math.max(0, r.top);
+		const w = Math.min(innerWidth, r.right) - x, h = Math.min(innerHeight, r.bottom) - y;
+		if (w < 50 || h < 50 || getComputedStyle(el).visibility === 'hidden') continue;
+		if (w * h > bestArea) { bestArea = w * h; best = [x, y, w, h]; }
+	}
+	return best;
+})()"""
 START_RESERVE_S = 15.0  # a first retinat_open after its launch took 13-15 s more (eyes, navigation, the wall check)
 _START_STOPPED = 'The browser start was stopped (the route changed, or the server is closing). Nothing was done; call again.'
 
@@ -644,7 +658,7 @@ class RetinatServer(BrowserUseServer):
 
 		from PIL import Image
 
-		from browser_use.eyes.clock import FRAME_MS, STEP_MAX_MS
+		from browser_use.eyes.clock import FPS_MIN, FRAME_MS, STEP_MAX_MS
 		from browser_use.mcp.effects import Refused, act
 
 		action = str(args.get('action') or 'step')
@@ -664,6 +678,17 @@ class RetinatServer(BrowserUseServer):
 		for field, value in keys.items():
 			if not isinstance(value, list) or not all(isinstance(k, str) and k for k in value):
 				raise Refused(f'{field} is a list of key names, like ["ArrowLeft"]')
+		fps = float(args.get('fps') or 60)
+		if not FPS_MIN <= fps <= 60:
+			raise Refused(f'fps is frames drawn per second of game time, {FPS_MIN:.0f}-60')
+		frame = args.get('frame') or 'page'
+		if not (
+			frame in ('page', 'game')
+			or (isinstance(frame, list) and len(frame) == 4 and all(isinstance(v, int | float) for v in frame))
+		):
+			raise Refused(
+				'frame is "page", "game" (the largest canvas, frame or video in view), or [x, y, width, height] in CSS px'
+			)
 		clock = await self._clock()
 		assert clock is not None
 		if not clock.paused:
@@ -673,9 +698,9 @@ class RetinatServer(BrowserUseServer):
 		# a step is played at about real speed: within the call it plays what fits and keeps time to answer
 		stop_at = deadline.at - STEP_ANSWER_S if deadline is not None and deadline.bounded else None
 		charge = bool(args.get('charge_thinking'))
-		stepped = await act(clock.step(ms, hold=keys['hold'], tap=keys['tap'], charge_thinking=charge, stop_at=stop_at))
+		stepped = await act(clock.step(ms, hold=keys['hold'], tap=keys['tap'], charge_thinking=charge, stop_at=stop_at, fps=fps))
 		eyes = await self._eyes()
-		jpeg, how = await eyes._page_now()
+		region = await self._game_region() if frame == 'game' else (frame if isinstance(frame, list) else None)
 		cut = f' of the {ms:.0f} asked (the call had no time for more)' if stepped.game_ms < ms - FRAME_MS else ''
 		thought = f'First played your {stepped.charged_ms / 1000:.1f}s of thinking with the last keys held. ' if charge else ''
 		held = f'holding {", ".join(stepped.held)}' if stepped.held else 'no keys held'
@@ -685,15 +710,41 @@ class RetinatServer(BrowserUseServer):
 			f'{held}. Turn-based so far: {clock.played_ms / 1000:.1f}s of game time took {clock.slowdown:.0f}x as long '
 			'in real time.'
 		)
-		if not jpeg:
-			return text + ' No frame could be captured.'
-		with Image.open(io.BytesIO(jpeg)) as img:
-			size = img.size
-		text += f' The frame it ended on ({how}), {size[0]}x{size[1]}{eyes._click_scale(size)}.'
+		if region is not None:
+			x, y, w, h = (float(v) for v in region)
+			zoomed = await eyes.zoom(x, y, w, h, max_width=STEP_GAME_WIDTH, max_height=STEP_GAME_WIDTH)
+			jpeg = zoomed.image
+			if not jpeg:
+				return text + ' No frame could be captured.'
+			size = zoomed.image_size or (0, 0)
+			where = "the game's frame" if frame == 'game' else 'the region asked'
+			text += (
+				f' The frame it ended on, {where} only: ({x:.0f}, {y:.0f}) {w:.0f}x{h:.0f} CSS px, drawn afresh at '
+				f'{size[0]}x{size[1]}: to click, multiply its pixels by {w / max(1, size[0]):.2f} and add ({x:.0f}, {y:.0f}).'
+			)
+		else:
+			if frame == 'game':
+				text += ' (No canvas, frame or video was in view: the whole page is shown.)'
+			jpeg, how = await eyes._page_now()
+			if not jpeg:
+				return text + ' No frame could be captured.'
+			with Image.open(io.BytesIO(jpeg)) as img:
+				size = img.size
+			text += f' The frame it ended on ({how}), {size[0]}x{size[1]}{eyes._click_scale(size)}.'
 		return [
 			types.TextContent(type='text', text=text),
 			types.ImageContent(type='image', data=base64.b64encode(jpeg).decode(), mime_type='image/jpeg'),
 		]
+
+	async def _game_region(self) -> list[float] | None:
+		"""The largest canvas, frame or video in view, in viewport CSS px: where a game is drawn."""
+		assert self.browser_session is not None
+		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		r = await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': _GAME_REGION_JS, 'returnByValue': True}, session_id=cdp.session_id
+		)
+		value = (r.get('result') or {}).get('value')
+		return [float(v) for v in value] if isinstance(value, list) and len(value) == 4 else None
 
 	async def _resume_paused_tab(self) -> str:
 		"""Give a tab paused by retinat_step its clock back before it is navigated (a paused page commits no new one),
