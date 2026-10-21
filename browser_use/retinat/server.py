@@ -680,7 +680,8 @@ class RetinatServer(BrowserUseServer):
 		thought = f'First played your {stepped.charged_ms / 1000:.1f}s of thinking with the last keys held. ' if charge else ''
 		held = f'holding {", ".join(stepped.held)}' if stepped.held else 'no keys held'
 		text = (
-			f'{thought}Played {stepped.game_ms:.0f} ms{cut} ({stepped.frames} frames) in {stepped.real_s:.1f}s; paused again, '
+			f'{thought}Played {stepped.game_ms:.0f} ms{cut} ({stepped.frames} frames) in {stepped.real_s:.1f}s ({stepped.draw_s:.1f}s '
+			f'waiting for the page to draw, {stepped.clock_s:.1f}s for its clock); paused again, '
 			f'{held}. Turn-based so far: {clock.played_ms / 1000:.1f}s of game time took {clock.slowdown:.0f}x as long '
 			'in real time.'
 		)

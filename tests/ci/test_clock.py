@@ -63,6 +63,30 @@ requestAnimationFrame(a); requestAnimationFrame(b);
 addEventListener('keydown', () => { const t0 = performance.now(); while (performance.now() - t0 < 1000) {} });
 </script></body>"""
 
+# A page slow to draw: every frame does a fixed amount of work (counted, not timed: the clock stands still)
+SLOW = """<!doctype html><title>Slow</title><body><canvas id="c" width="300" height="100"></canvas><script>
+const g = document.getElementById('c').getContext('2d');
+window.drawn = 0;
+function frame() {
+  let x = 0;
+  for (let i = 0; i < 3e7; i++) x += i % 7;
+  g.fillStyle = drawn++ % 2 ? '#f00' : '#00f'; g.fillRect(0, 0, 300, 100 + (x % 1));
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body>"""
+
+# A page that always has work queued, as pages full of ads and trackers do: a message loop that never ends
+BUSY = """<!doctype html><title>Busy</title><body><canvas id="c" width="200" height="100"></canvas><script>
+const g = document.getElementById('c').getContext('2d');
+const channel = new MessageChannel();
+window.messages = 0;
+channel.port1.onmessage = () => { messages++; let x = 0; for (let i = 0; i < 2e5; i++) x += i; channel.port2.postMessage(x % 1); };
+channel.port2.postMessage(0);
+function frame() { g.fillStyle = messages % 2 ? '#f00' : '#0f0'; g.fillRect(0, 0, 200, 100); requestAnimationFrame(frame); }
+requestAnimationFrame(frame);
+</script></body>"""
+
 LATER = """<!doctype html><title>Later</title><body><script>
 window.fired = false; setTimeout(() => { window.fired = true; }, 300);
 </script></body>"""
@@ -76,6 +100,8 @@ def games():
 	main.expect_request('/runner').respond_with_data(GAME, content_type='text/html')
 	main.expect_request('/later').respond_with_data(LATER, content_type='text/html')
 	main.expect_request('/loops').respond_with_data(LOOPS, content_type='text/html')
+	main.expect_request('/slow').respond_with_data(SLOW, content_type='text/html')
+	main.expect_request('/busy').respond_with_data(BUSY, content_type='text/html')
 	other.expect_request('/runner').respond_with_data(GAME, content_type='text/html')
 	# the game in a frame from another origin of the same site, as poki.com hosts its games on *.gdn.poki.com
 	framed = f'<!doctype html><title>Portal</title><body><iframe id="g" src="{other.url_for("/runner")}" width="420" height="220"></iframe></body>'
@@ -300,3 +326,27 @@ async def test_closing_does_not_wait_on_a_page_that_hangs(session, games):
 	await asyncio.wait_for(pc.close(), 10)
 	assert time.monotonic() - began < 5, f'close took {time.monotonic() - began:.1f}s'
 	pressing.cancel()
+
+
+async def test_a_step_says_how_much_of_its_time_went_to_drawing(session, games):
+	"""Found playing Subway Surfers on Poki: a step took 0.25-0.5 s a frame against 17 ms on test pages. Where that time
+	goes decides the fix, so each step says it: waiting for the page to draw, or for its clock to move."""
+	await _opened(session, games.url_for('/slow'))
+	pc = PageClock(session)
+	await _paused(pc)
+	stepped = await pc.step(200)
+	assert stepped.draw_s > 0.2 and stepped.draw_s >= 0.6 * stepped.real_s, stepped
+	assert stepped.clock_s < stepped.draw_s, stepped
+	await pc.resume()
+
+
+async def test_a_page_that_always_has_work_queued_does_not_hold_its_clock_back(session, games):
+	"""Found on Poki: of a 300 ms step's 3.5 s, 2.7 s went waiting for the clock. Virtual time moves only when the page
+	has nothing ready to run, or after a number of tasks in a row; a page that always has work queued held each frame
+	for that many of its tasks."""
+	await _opened(session, games.url_for('/busy'))
+	pc = PageClock(session)
+	await _paused(pc)
+	stepped = await pc.step(300)
+	assert stepped.clock_s < 0.4 * stepped.real_s, stepped
+	await pc.resume()

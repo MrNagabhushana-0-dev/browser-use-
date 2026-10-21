@@ -49,8 +49,9 @@ TAP_FRAMES = 3
 # How long a frame's budget may take to be spent before the page is taken to be stuck
 _BUDGET_WAIT_S = 5.0
 # Virtual time moves only when the page has no task ready to run: after this many tasks run in a row it is moved on
-# anyway, so a page that keeps posting work (messages, a busy loop of promises) cannot hold the clock back
-_STARVATION_TASKS = 100
+# anyway, so a page that keeps posting work cannot hold the clock back. Real time does not wait for a page either. At
+# 100 a page full of ads and trackers (Poki) held each 17 ms frame ~150 ms; a local message loop, 23 ms (5: 3 ms).
+_STARVATION_TASKS = 5
 # How long letting go of keys or stopping the beat may take: a page that busy-waits on its stopped clock never answers
 _POLITE_S = 1.0
 # How long a frame is waited for before our world is made again: a page left for another one sits frozen in the
@@ -132,6 +133,8 @@ class Stepped(BaseModel):
 	real_s: float
 	charged_ms: float = 0.0  # the agent's thinking time played before the step, with charge_thinking
 	held: list[str] = Field(default_factory=list)  # keys still down after the step
+	draw_s: float = 0.0  # of real_s, waiting for the page to draw each frame
+	clock_s: float = 0.0  # of real_s, waiting for the page's clock to take each frame's time
 
 
 class PageClock:
@@ -153,6 +156,7 @@ class PageClock:
 		self._incumbent: Any = None
 		self._pump: asyncio.Task | None = None
 		self._world: tuple[str, int] | None = None  # (frame id, context id) of our own world in the top frame
+		self._waits = {'draw': 0.0, 'clock': 0.0}  # where the current step's real time went
 
 	@property
 	def virtual(self) -> bool:
@@ -205,6 +209,7 @@ class PageClock:
 		assert self.paused, 'pause() first'
 		assert 0 < ms <= STEP_MAX_MS, f'a step plays 1-{STEP_MAX_MS:.0f} ms'
 		began = time.monotonic()
+		self._waits = {'draw': 0.0, 'clock': 0.0}
 		charged = 0.0
 		if charge_thinking and self._last_step_end is not None:
 			thought_ms = min(CHARGE_MAX_MS, (began - self._last_step_end) * 1000)
@@ -238,6 +243,8 @@ class PageClock:
 			real_s=self._last_step_end - began,
 			charged_ms=charged,
 			held=list(self.held),
+			draw_s=self._waits['draw'],
+			clock_s=self._waits['clock'],
 		)
 
 	async def resume(self) -> None:
@@ -284,8 +291,12 @@ class PageClock:
 		played = 0
 		for i in range(first, first + frames):
 			# whole milliseconds that add up over frames: 17, 16, 17, ... for 1/60 s
+			t0 = time.monotonic()
 			await self._advance(round((i + 1) * FRAME_MS) - round(i * FRAME_MS))
+			t1 = time.monotonic()
 			await self._next_frame()
+			self._waits['clock'] += t1 - t0
+			self._waits['draw'] += time.monotonic() - t1
 			played = i + 1 - first
 			if played == after:
 				for key in keys:
