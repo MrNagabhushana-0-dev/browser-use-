@@ -102,6 +102,9 @@ def games():
 	main.expect_request('/loops').respond_with_data(LOOPS, content_type='text/html')
 	main.expect_request('/slow').respond_with_data(SLOW, content_type='text/html')
 	main.expect_request('/busy').respond_with_data(BUSY, content_type='text/html')
+	main.expect_request('/still').respond_with_data(
+		'<!doctype html><title>Still</title><p>Nothing here moves.</p>', content_type='text/html'
+	)
 	other.expect_request('/runner').respond_with_data(GAME, content_type='text/html')
 	# the game in a frame from another origin of the same site, as poki.com hosts its games on *.gdn.poki.com
 	framed = f'<!doctype html><title>Portal</title><body><iframe id="g" src="{other.url_for("/runner")}" width="420" height="220"></iframe></body>'
@@ -278,6 +281,62 @@ async def test_after_resume_the_page_runs_on_real_time_and_a_new_page_works(sess
 		params={'expression': 'fired', 'returnByValue': True}, session_id=cdp.session_id
 	)
 	assert r['result']['value'] is True, "the next page's 300 ms timer did not fire"
+
+
+async def test_a_new_page_in_a_tab_on_our_clock_is_drawn_from_its_first_moment(session, games):
+	"""Found when a model played Poki games one after another: after the first was played turn by turn and resumed, the
+	next one, opened in the same tab, was never drawn again, and every look waited for a frame until the client gave up.
+	The tab stays on our clock, and the old page's beat (what keeps a page that draws nothing drawing while the clock
+	stands still) went with the old page. Until the pump gave the new page one, a capture made while the clock stood
+	still waited for a frame that never came, and from then on the tab drew nothing at all; and pausing it again kept
+	the old page's world, so the new page had no beat at all. Each new page now has its beat from its first moment.
+
+	The pump is stopped here so that only the page itself can have its beat."""
+	from browser_use.browser.capture import capture_screenshot
+
+	await _opened(session, games.url_for('/runner'))
+	pc = PageClock(session)
+	await pc.pause()
+	await pc.step(100)
+	await pc.resume()
+	await pc._stop_pump()
+	try:
+		cdp = await session.get_or_create_cdp_session(focus=False)
+		await session.navigate_to(games.url_for('/still'))
+		await pc.pause()  # the next game, played turn by turn: its clock stands still and it draws nothing itself
+		beat = await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'typeof window.__browserUseBeat', 'contextId': await pc._world_id(), 'returnByValue': True},
+			session_id=cdp.session_id,
+		)
+		assert beat['result'].get('value') == 'function', f'the new page was paused without a beat: {beat}'
+		stepped = await asyncio.wait_for(pc.step(100), 10)
+		assert stepped.game_ms == pytest.approx(100, abs=1) and stepped.draw_s < 2, stepped
+		shot = await asyncio.wait_for(capture_screenshot(cdp.cdp_client, {'format': 'jpeg'}, cdp.session_id), 10)
+		assert shot['data']
+		stepped = await asyncio.wait_for(pc.step(100), 10)
+		assert stepped.game_ms == pytest.approx(100, abs=1) and stepped.draw_s < 2, stepped
+	finally:
+		await pc.close()
+
+
+async def test_a_capture_that_gets_no_frame_gives_up_and_does_not_hold_up_the_next(session, games):
+	"""Found when a model played Poki games: a capture waits for the compositor's next frame while holding the lock that
+	every other capture through the connection waits on. In a tab that drew no frame, the first look's capture never
+	answered, and every look, zoom and step after it waited behind it until the client gave up on each after 60 s. A
+	page whose main thread never yields draws no frame either. A capture now gives up, and frees the next one."""
+	from browser_use.browser.capture import CaptureTimeout, capture_screenshot
+
+	await session.navigate_to(games.url_for('/still'))
+	cdp = await session.get_or_create_cdp_session(focus=False)
+	await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'setTimeout(() => { for (;;) {} }, 50); 1'}, session_id=cdp.session_id
+	)
+	await asyncio.sleep(0.5)
+	for _ in range(2):  # the second is not held up behind the first
+		began = time.monotonic()
+		with pytest.raises(CaptureTimeout):
+			await capture_screenshot(cdp.cdp_client, {'format': 'jpeg'}, cdp.session_id, timeout=2)
+		assert time.monotonic() - began < 4
 
 
 async def _value(session: BrowserSession, expression: str):

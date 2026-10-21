@@ -105,13 +105,13 @@ _RAF_ON_PAGE_CLOCK = r"""(() => {
 # Frames keep coming while the clock stands still only if something keeps drawing: once a paused page draws nothing (the
 # requestAnimationFrame above holds the game back), Chrome stops making frames, and neither a style change nor a
 # screenshot starts them again (measured), so no step could be played. A 1 px canvas, 1% opaque, drawn every frame from
-# a world of our own, keeps them coming for as long as the tab is on our clock.
+# a world of our own, keeps them coming for as long as the tab is on our clock: in the top frame, on each new page from
+# its first moment (a capture made before then waited for good, and the tab drew nothing after it).
 _BEAT = r"""(() => {
-	if (window.__browserUseBeat) return;
+	if (window.__browserUseBeat || window !== window.top) return;
 	const canvas = document.createElement('canvas');
 	canvas.width = canvas.height = 1;
 	canvas.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:2147483647';
-	document.documentElement.append(canvas);
 	const g = canvas.getContext('2d');
 	let on = true, n = 0;
 	const beat = () => {
@@ -120,7 +120,9 @@ _BEAT = r"""(() => {
 		g.fillRect(0, 0, 1, 1);
 		requestAnimationFrame(beat);
 	};
-	requestAnimationFrame(beat);
+	const start = () => { document.documentElement.append(canvas); requestAnimationFrame(beat); };
+	if (document.documentElement) start();
+	else new MutationObserver((_, seen) => { if (document.documentElement) { seen.disconnect(); start(); } }).observe(document, {childList: true});
 	window.__browserUseBeat = () => { on = false; canvas.remove(); delete window.__browserUseBeat; };
 })()"""
 
@@ -188,10 +190,11 @@ class PageClock:
 				await self._send(
 					'Page', 'addScriptToEvaluateOnNewDocument', {'source': _RAF_ON_PAGE_CLOCK, 'runImmediately': True}
 				)
+				await self._send('Page', 'addScriptToEvaluateOnNewDocument', {'source': _BEAT, 'worldName': _WORLD})
 			except BaseException:
 				self._session_id = None  # set up again by the next pause
 				raise
-		await self._world_id()  # the beat starts while frames still come
+		await self._check_beat()  # the beat starts while frames still come; the page may be new since the last pause
 		await self._send('Emulation', 'setVirtualTimePolicy', {'policy': 'pause'})
 		self.paused = True
 		self._since = time.monotonic()

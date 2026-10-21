@@ -33,6 +33,15 @@ CROP_SOURCE_QUALITY = 90
 # Captures taken through `capture_screenshot` in this process: what a caller can read to see what its work costs.
 captures_taken = 0
 
+# A capture waits for the compositor's next frame, and a tab that draws none never gives one. Found when a model played
+# Poki games: the first look's capture never answered, and every capture after it waited behind it for the lock until
+# the client gave up on each. No capture takes this long while frames come.
+CAPTURE_WAIT_S = 20.0
+
+
+class CaptureTimeout(TimeoutError):
+	"""No frame came to capture in time: the tab draws none."""
+
 
 def capture_lock(client: 'CDPClient') -> asyncio.Lock:
 	"""The lock every capture through this client holds."""
@@ -42,18 +51,24 @@ def capture_lock(client: 'CDPClient') -> asyncio.Lock:
 	return lock
 
 
-async def capture_screenshot(client: 'CDPClient', params: Any, session_id: str | None) -> Any:
+async def capture_screenshot(client: 'CDPClient', params: Any, session_id: str | None, timeout: float = CAPTURE_WAIT_S) -> Any:
 	"""`Page.captureScreenshot` with `params` on `session_id`, never overlapping another capture through `client`, and
-	without a clip where cropping a capture of the viewport gives the same picture (see the module docstring)."""
+	without a clip where cropping a capture of the viewport gives the same picture (see the module docstring). Raises
+	`CaptureTimeout` if no picture comes within `timeout` seconds, the wait for the lock included."""
 	global captures_taken
-	async with capture_lock(client):
-		captures_taken += 1
-		clip = params.get('clip') if isinstance(params, dict) else None
-		if clip and float(clip.get('scale') or 1) <= 1 and not params.get('captureBeyondViewport'):
-			shot = await _cropped(client, params, clip, session_id)
-			if shot is not None:
-				return shot
-		return await client.send.Page.captureScreenshot(params=cast('CaptureScreenshotParameters', params), session_id=session_id)
+	try:
+		async with asyncio.timeout(timeout), capture_lock(client):
+			captures_taken += 1
+			clip = params.get('clip') if isinstance(params, dict) else None
+			if clip and float(clip.get('scale') or 1) <= 1 and not params.get('captureBeyondViewport'):
+				shot = await _cropped(client, params, clip, session_id)
+				if shot is not None:
+					return shot
+			return await client.send.Page.captureScreenshot(
+				params=cast('CaptureScreenshotParameters', params), session_id=session_id
+			)
+	except TimeoutError as e:
+		raise CaptureTimeout(f'no frame came to capture in {timeout:.0f}s: the tab draws none') from e
 
 
 async def _cropped(client: 'CDPClient', params: dict, clip: dict, session_id: str | None) -> dict | None:
