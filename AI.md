@@ -19,9 +19,10 @@ you what it *is made of*. Use whichever answers the question for fewer tokens:
 ### Register them
 
 **Claude Code.** This repository ships `.mcp.json`, so opening the repository in Claude Code offers both servers. It
-starts them with `uv run --no-sync`, so run `uv sync` once after cloning or changing dependencies: after a machine
-boots, uv's check of the environment against the lockfile read every installed package's metadata off a cold disk and
-took ~50 s of the 120 s a client gives a server to connect. Or add them by hand:
+starts them through `bin/mcp-serve.sh`: with the project installed it skips uv's check of the environment against the
+lockfile (after a machine boots that check read every installed package's metadata off a cold disk, ~50 s of the 120 s
+a client gives a server to connect), and in a fresh checkout it installs first. A first install takes minutes, more
+than a client waits, so run `uv sync` once after cloning or changing dependencies. Or add them by hand:
 ```bash
 claude mcp add retinat -- uv run --directory /path/to/browser-use- python -m browser_use.retinat
 claude mcp add browser-use -- uv run --directory /path/to/browser-use- python -m browser_use.mcp
