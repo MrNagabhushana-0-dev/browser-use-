@@ -1118,11 +1118,11 @@ async def test_step_plays_a_game_turn_by_turn_and_shows_the_frame_each_turn_ends
 	assert c['boosted'] > b['boosted'] and c['up'] is True, 'held until a step leaves it out'
 	assert 'holding ArrowUp' in _text(second) and 'Turn-based' in _text(second), _text(second)
 	# a page opened from a paused tab loads: its clock is given back first
-	site.expect_request('/later').respond_with_data(
+	site.expect_request('/after-step').respond_with_data(
 		'<!doctype html><title>Later</title><body><script>window.fired = false; setTimeout(() => { window.fired = true; }, 300);</script></body>',
 		content_type='text/html',
 	)
-	opened = await _call(retinat, 'retinat_open', {'url': site.url_for('/later')})
+	opened = await _call(retinat, 'retinat_open', {'url': site.url_for('/after-step')})
 	assert not opened.is_error and 'Later' in _text(opened), _text(opened)
 	assert 'real time' in _text(opened), _text(opened)
 	await asyncio.sleep(1.0)
@@ -1133,3 +1133,53 @@ async def test_step_plays_a_game_turn_by_turn_and_shows_the_frame_each_turn_ends
 	assert r['result']['value'] is True
 	resumed = await _call(retinat, 'retinat_step', {'action': 'resume'})
 	assert not resumed.is_error and 'real time' in _text(resumed), _text(resumed)
+
+
+async def test_step_mode_is_only_for_a_browser_retinat_started_itself(tmp_path, monkeypatch):
+	"""A tab cannot leave step mode (Chrome has no way back), so the person's own browser, reached through the bridge
+	or --cdp-url, is never put in it: their tab would be left with its clock stopped for good."""
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(cdp_url='http://127.0.0.1:9')  # nothing listens there: it must not even try to connect
+	try:
+		refused = await _call(server, 'retinat_step', {'ms': 200})
+		assert refused.is_error and 'your own browser' in _text(refused), _text(refused)
+		assert 'effect: none' in _text(refused)
+	finally:
+		await server._close_all_sessions()
+
+
+async def test_a_step_out_of_range_is_refused_before_the_page_is_paused(retinat, site):
+	import asyncio
+
+	from tests.ci.test_clock import GAME
+
+	site.expect_request('/runner-range').respond_with_data(GAME, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/runner-range')})
+	for ms in (8000, 5):
+		refused = await _call(retinat, 'retinat_step', {'ms': ms})
+		assert refused.is_error and 'effect: none' in _text(refused), _text(refused)
+	a = await _runner(retinat)
+	await asyncio.sleep(0.5)
+	b = await _runner(retinat)
+	assert b['t'] - a['t'] > 300, 'the page was paused by a refused step'
+
+
+async def test_on_a_paused_page_the_tools_that_need_its_time_say_so_and_explore_gives_it_back(retinat, site):
+	"""Between steps the page's timers stand still, so the eyes that run on them see nothing new: a watch is refused
+	with the reason rather than reporting a frozen page, a look still works, and exploring gives the clock back first."""
+	from tests.ci.test_clock import GAME
+
+	site.expect_request('/runner-paused').respond_with_data(GAME, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/runner-paused')})
+	await _call(retinat, 'retinat_step', {'ms': 100})
+	for tool, args in (
+		('retinat_watch', {'seconds': 2}),
+		('retinat_now', {}),
+		('retinat_reflex', {'rules': [{'when': 'true', 'notify': 'x'}]}),
+	):
+		refused = await _call(retinat, tool, args)
+		assert refused.is_error and 'paused by retinat_step' in _text(refused), (tool, _text(refused))
+	look = await _call(retinat, 'retinat_look', {})
+	assert not look.is_error, _text(look)
+	explored = await _call(retinat, 'retinat_explore', {'url': site.url_for('/'), 'max_pages': 1})
+	assert not explored.is_error and 'real time again' in _text(explored), _text(explored)[:300]

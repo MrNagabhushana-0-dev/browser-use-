@@ -113,6 +113,9 @@ async def test_a_restarted_retinat_tells_a_listening_client_to_list_the_tools_ag
 	params = StdioServerParameters(command=sys.executable, args=['-m', 'browser_use.retinat', '--network', 'off'], env=env)
 	async with Client(params) as client:
 		assert client.session.protocol_version == '2026-07-28', client.session.protocol_version
+		# a stream opened first for something else does not use up the notice
+		async with client.listen(resources_list_changed=True):
+			await asyncio.sleep(1.0)
 		async with client.listen(tools_list_changed=True) as sub:
 			event = await asyncio.wait_for(anext(sub), 10)
 			assert isinstance(event, ToolsListChanged), event

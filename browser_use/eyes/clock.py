@@ -51,6 +51,8 @@ _BUDGET_WAIT_S = 5.0
 # Virtual time moves only when the page has no task ready to run: after this many tasks run in a row it is moved on
 # anyway, so a page that keeps posting work (messages, a busy loop of promises) cannot hold the clock back
 _STARVATION_TASKS = 100
+# How long letting go of keys or stopping the beat may take: a page that busy-waits on its stopped clock never answers
+_POLITE_S = 1.0
 # How long a frame is waited for before our world is made again: a page left for another one sits frozen in the
 # back-forward cache, and a frame asked of its world never comes
 _FRAME_WAIT_S = 1.0
@@ -64,21 +66,24 @@ _EXPIRED_EVENT = 'Emulation.virtualTimeBudgetExpired'
 _WORLD = 'browser_use_clock'
 # requestAnimationFrame on the page's clock, in every frame of the tab, now and on each new document: a callback runs
 # only once the clock has moved since the last batch, and is handed the clock's time. CDP does not hold frames back while
-# virtual time stands still, and their own timestamps keep real time. Ids are kept clear of the browser's own, so a
-# frame asked for before this was installed can still be cancelled.
+# virtual time stands still, and their own timestamps keep real time. As in browsers, a batch is the callbacks asked for
+# before it began, and one cancelled by an earlier callback of the same batch is skipped. Ids are kept clear of the
+# browser's own, so a frame asked for before this was installed can still be cancelled.
 _RAF_ON_PAGE_CLOCK = r"""(() => {
 	if (window.__browserUseRaf) return;
 	const raf = window.requestAnimationFrame.bind(window), caf = window.cancelAnimationFrame.bind(window);
 	window.__browserUseRaf = raf;
-	let queue = new Map(), next = 1e9, ticking = false, last = NaN;
+	const queue = new Map();
+	let next = 1e9, ticking = false, last = NaN;
 	const tick = () => {
 		ticking = false;
 		const now = performance.now();
 		if (now !== last && queue.size) {
 			last = now;
-			const batch = queue;
-			queue = new Map();
-			for (const callback of batch.values()) {
+			for (const id of [...queue.keys()]) {
+				const callback = queue.get(id);
+				if (!callback) continue;
+				queue.delete(id);
 				try { callback(now); } catch (e) { reportError(e); }
 			}
 		}
@@ -166,12 +171,20 @@ class PageClock:
 		if self._session_id is None:
 			cdp = await self.session.get_or_create_cdp_session(focus=False)
 			self._cdp, self._session_id, self.target_id = cdp, cdp.session_id, cdp.target_id
-			registry = getattr(self.session.cdp_client, '_event_registry', None)
-			handlers = getattr(registry, '_handlers', None)
-			self._incumbent = handlers.get(_EXPIRED_EVENT) if isinstance(handlers, dict) else None
-			self._handler = self._on_expired
-			self.session.cdp_client.register.Emulation.virtualTimeBudgetExpired(self._handler)
-			await self._send('Page', 'addScriptToEvaluateOnNewDocument', {'source': _RAF_ON_PAGE_CLOCK, 'runImmediately': True})
+			try:
+				if self._handler is None:
+					registry = getattr(self.session.cdp_client, '_event_registry', None)
+					handlers = getattr(registry, '_handlers', None)
+					incumbent = handlers.get(_EXPIRED_EVENT) if isinstance(handlers, dict) else None
+					self._incumbent = incumbent if getattr(incumbent, '__self__', None) is not self else None
+					self._handler = self._on_expired
+					self.session.cdp_client.register.Emulation.virtualTimeBudgetExpired(self._handler)
+				await self._send(
+					'Page', 'addScriptToEvaluateOnNewDocument', {'source': _RAF_ON_PAGE_CLOCK, 'runImmediately': True}
+				)
+			except BaseException:
+				self._session_id = None  # set up again by the next pause
+				raise
 		await self._world_id()  # the beat starts while frames still come
 		await self._send('Emulation', 'setVirtualTimePolicy', {'policy': 'pause'})
 		self.paused = True
@@ -197,17 +210,23 @@ class PageClock:
 			thought_ms = min(CHARGE_MAX_MS, (began - self._last_step_end) * 1000)
 			charged = await self._play(max(1, round(thought_ms / FRAME_MS)), stop_at=stop_at) if thought_ms >= FRAME_MS else 0.0
 		hold = list(dict.fromkeys(hold))
-		for key in [k for k in self.held if k not in hold]:
+		released = [k for k in self.held if k not in hold]
+		for key in released:
 			await self._key(key, 'keyUp')
 		for key in [k for k in hold if k not in self.held]:
 			await self._key(key, 'keyDown')
 		self.held = hold
 		taps = [k for k in dict.fromkeys(tap) if k not in hold]
+		frames = max(1, round(ms / FRAME_MS))
+		played = 0.0
+		if any(k in released for k in taps) and frames > 1:
+			# a key let go and pressed again before the same frame is no new press to a game that polls keys each frame
+			played = await self._play(1, stop_at=stop_at)
+			frames -= 1
 		for key in taps:
 			await self._key(key, 'keyDown')
-		frames = max(1, round(ms / FRAME_MS))
 		try:
-			played = await self._play(frames, stop_at=stop_at, release_after=(TAP_FRAMES, taps))
+			played += await self._play(frames, stop_at=stop_at, release_after=(TAP_FRAMES, taps), first=round(played / FRAME_MS))
 		finally:
 			for key in taps:  # a step shorter than a tap still lets go of it
 				await self._key(key, 'keyUp')
@@ -222,24 +241,22 @@ class PageClock:
 		)
 
 	async def resume(self) -> None:
-		"""Back to real time: held keys go up, and from now on the clock moves with the real one."""
-		await self._release_all()
+		"""Back to real time: held keys go up, and from now on the clock moves with the real one. Also starts the pump
+		again if it ever stopped while the tab lived on."""
+		await self._politely(self._release_all(), 'let go of held keys')
 		if self._since is not None:
 			self.paused_s += time.monotonic() - self._since
 			self._since = None
 		self.paused = False
-		if self.virtual and self._pump is None:
+		if self.virtual and (self._pump is None or self._pump.done()):
 			self._pump = asyncio.create_task(self._run_pump(), name='page-clock-pump')
 
 	async def close(self) -> None:
 		"""Let go of held keys, stop the pump and the event handler (the tab, if it lives on, keeps the clock where it
 		stands)."""
-		try:
-			await self._release_all()
-		except Exception as e:
-			logger.debug(f'clock: could not let go of held keys: {type(e).__name__}: {e}')
+		await self._politely(self._release_all(), 'let go of held keys')
 		await self._stop_pump()
-		await self._stop_beat()
+		await self._politely(self._stop_beat(), 'stop the beat')
 		registry = getattr(self.session.cdp_client, '_event_registry', None) if self._handler is not None else None
 		handlers = getattr(registry, '_handlers', None)
 		if isinstance(handlers, dict) and handlers.get(_EXPIRED_EVENT) is self._handler:
@@ -251,23 +268,34 @@ class PageClock:
 
 	# -- internals ---------------------------------------------------------------------------------------------------
 
-	async def _play(self, frames: int, stop_at: float | None = None, release_after: tuple[int, list[str]] = (0, [])) -> float:
-		"""Move the clock `frames` frames, waiting for each to be drawn; the game time played."""
-		after, keys = release_after
+	async def _politely(self, coro: Any, what: str) -> None:
+		"""Cleanup a hung page cannot hold up."""
+		try:
+			await asyncio.wait_for(coro, _POLITE_S)
+		except Exception as e:
+			logger.debug(f'clock: could not {what}: {type(e).__name__}: {e}')
+
+	async def _play(
+		self, frames: int, stop_at: float | None = None, release_after: tuple[int, list[str]] | None = None, first: int = 0
+	) -> float:
+		"""Move the clock `frames` frames, waiting for each to be drawn; the game time played. `first` is how many frames
+		of the same step came before, so the milliseconds keep adding up."""
+		after, keys = release_after or (0, [])
 		played = 0
-		for i in range(frames):
+		for i in range(first, first + frames):
 			# whole milliseconds that add up over frames: 17, 16, 17, ... for 1/60 s
 			await self._advance(round((i + 1) * FRAME_MS) - round(i * FRAME_MS))
 			await self._next_frame()
-			played = i + 1
+			played = i + 1 - first
 			if played == after:
 				for key in keys:
 					await self._key(key, 'keyUp')
 				keys = []
 			if stop_at is not None and time.monotonic() >= stop_at:
 				break
-		release_after[1][:] = keys  # what is still down is let go by the caller
-		return float(round(played * FRAME_MS))
+		if release_after is not None:
+			release_after[1][:] = keys  # what is still down is let go by the caller
+		return float(round((first + played) * FRAME_MS) - round(first * FRAME_MS))
 
 	def _on_expired(self, event: dict[str, Any], session_id: str | None = None) -> None:
 		if session_id == self._session_id:
@@ -384,9 +412,10 @@ class PageClock:
 					if moves % _PUMP_BEAT_CHECK == 0:
 						await self._check_beat()
 					failing_since = None
-				except Exception as e:  # a page being replaced, or the tab gone
+				except Exception as e:  # a page being replaced, input refused while the person drives, or the tab gone
 					failing_since = failing_since or time.monotonic()
 					logger.debug(f'clock: the pump missed a move: {type(e).__name__}: {e}')
+					await asyncio.sleep(min(1.0, 0.05 * (1 + time.monotonic() - failing_since)))
 			logger.debug('clock: the pump stopped: the tab is gone')
 		except asyncio.CancelledError:
 			raise

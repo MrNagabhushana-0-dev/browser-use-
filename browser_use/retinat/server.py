@@ -84,7 +84,28 @@ ACTING = frozenset(
 
 # Tools that can run long (a count of screens, items, pages or seconds): each is held to the call's budget, and a hard
 # stop BACKSTOP_GRACE_S after it if it does not stop by itself (the client's 60 s minus room for the answer)
-LONG_TOOLS = frozenset({'retinat_scan', 'retinat_browse', 'retinat_watch', 'retinat_explore', 'retinat_desktop_watch'})
+LONG_TOOLS = frozenset(
+	{'retinat_scan', 'retinat_browse', 'retinat_watch', 'retinat_explore', 'retinat_desktop_watch', 'retinat_step'}
+)
+# Tools whose eyes run on the page's own timers, which stand still on a page paused by retinat_step: they would report
+# a frozen page as it is, so they are refused there with the reason
+NEEDS_PAGE_TIME = frozenset(
+	{
+		'retinat_watch',
+		'retinat_browse',
+		'retinat_next',
+		'retinat_scan',
+		'retinat_now',
+		'retinat_changes',
+		'retinat_reflex',
+		'retinat_wait',
+	}
+)
+_PAUSED = 'The page is paused by retinat_step: step it on, or give it real time back with retinat_step action=resume.'
+_NOT_OURS = (
+	"Step mode takes a tab's clock over for good (Chrome has no way to give it back), so Retinat uses it only in a "
+	'browser it started itself, never in your own browser (--bridge or --cdp-url).'
+)
 BACKSTOP_GRACE_S = 6.0
 # What a browser start may take in all, across calls: the first start after a machine boots reads Chrome off a cold
 # disk, and went past the 30 s it was given. A call waits for a start only as long as its own budget allows, keeping
@@ -371,17 +392,18 @@ class RetinatServer(BrowserUseServer):
 			return self._content(await desktop.watch(seconds=float(args.get('seconds', 8))))
 		if name.startswith('retinat_desktop_'):
 			return await self._call_control(name, args)
+		if name == 'retinat_step' and (self.bridge is not None or self.cdp_url):
+			raise Refused(_NOT_OURS)
 		await self._ensure_session(deadline)
 		assert self.browser_session is not None
 		if self.bridge is not None and name in ACTING:
 			self._check_wheel()
-		if name == 'retinat_open':
-			# a paused tab would not commit the new page: its clock is given back first
+		if name in NEEDS_PAGE_TIME:
 			clock = await self._clock(create=False)
-			resumed = ''
 			if clock is not None and clock.paused:
-				await clock.resume()
-				resumed = ' (the page was paused by retinat_step: it runs on real time again)'
+				raise Refused(_PAUSED)
+		if name == 'retinat_open':
+			resumed = await self._resume_paused_tab()
 			if not args.get('new_tab'):
 				await self._eyes()  # watch from the page's first moment: what appears right after load counts
 			note = await act(self._navigate_routed(args['url'], bool(args.get('new_tab')), strict=True))
@@ -390,9 +412,10 @@ class RetinatServer(BrowserUseServer):
 		if name == 'retinat_explore':
 			from browser_use.explore import Explorer, render_markdown, render_sheet
 
+			resumed = await self._resume_paused_tab()
 			explorer = Explorer(self.browser_session, max_pages=int(args.get('max_pages', 25)))
 			report = await act(explorer.run(args['url']))
-			blocks: list[types.ContentBlock] = [types.TextContent(type='text', text=render_markdown(report))]
+			blocks: list[types.ContentBlock] = [types.TextContent(type='text', text=render_markdown(report) + resumed)]
 			sheet = render_sheet(explorer.looks)
 			if sheet:
 				blocks.append(types.ImageContent(type='image', data=base64.b64encode(sheet).decode(), mime_type='image/jpeg'))
@@ -631,21 +654,26 @@ class RetinatServer(BrowserUseServer):
 				return 'The page already runs on real time.'
 			await clock.resume()
 			return 'The page runs on real time again (Retinat moves its clock with the real one from now on).'
+		if action not in ('step', 'pause'):
+			raise Refused(f'action is step, pause or resume, not {action!r}')
+		# all checked before the page is paused: a pause cannot be taken back
+		ms = float(args.get('ms', 250))
+		if not FRAME_MS <= ms <= STEP_MAX_MS:
+			raise Refused(f'ms is game time to play, {FRAME_MS:.0f}-{STEP_MAX_MS:.0f}')
+		keys = {'hold': args.get('hold') or [], 'tap': args.get('tap') or []}
+		for field, value in keys.items():
+			if not isinstance(value, list) or not all(isinstance(k, str) and k for k in value):
+				raise Refused(f'{field} is a list of key names, like ["ArrowLeft"]')
 		clock = await self._clock()
 		assert clock is not None
 		if not clock.paused:
 			await act(clock.pause())
 		if action == 'pause':
 			return 'Paused: the page stands still until a step plays it, or action=resume.'
-		ms = float(args.get('ms', 250))
-		if not FRAME_MS <= ms <= STEP_MAX_MS:
-			raise Refused(f'ms is game time to play, {FRAME_MS:.0f}-{STEP_MAX_MS:.0f}')
 		# a step is played at about real speed: within the call it plays what fits and keeps time to answer
 		stop_at = deadline.at - STEP_ANSWER_S if deadline is not None and deadline.bounded else None
-		hold = [str(k) for k in args.get('hold') or []]
-		tap = [str(k) for k in args.get('tap') or []]
 		charge = bool(args.get('charge_thinking'))
-		stepped = await act(clock.step(ms, hold=hold, tap=tap, charge_thinking=charge, stop_at=stop_at))
+		stepped = await act(clock.step(ms, hold=keys['hold'], tap=keys['tap'], charge_thinking=charge, stop_at=stop_at))
 		eyes = await self._eyes()
 		jpeg, how = await eyes._page_now()
 		cut = f' of the {ms:.0f} asked (the call had no time for more)' if stepped.game_ms < ms - FRAME_MS else ''
@@ -665,6 +693,16 @@ class RetinatServer(BrowserUseServer):
 			types.TextContent(type='text', text=text),
 			types.ImageContent(type='image', data=base64.b64encode(jpeg).decode(), mime_type='image/jpeg'),
 		]
+
+	async def _resume_paused_tab(self) -> str:
+		"""Give a tab paused by retinat_step its clock back before it is navigated (a paused page commits no new one),
+		and a note saying so."""
+		clock = await self._clock(create=False)
+		if clock is None or not clock.virtual:
+			return ''
+		was_paused = clock.paused
+		await clock.resume()  # also starts the pump again if it stopped
+		return ' (the page was paused by retinat_step: it runs on real time again)' if was_paused else ''
 
 	async def _clock(self, create: bool = True) -> 'PageClock | None':
 		"""The focused tab's clock, made on first use."""
