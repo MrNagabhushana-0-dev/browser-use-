@@ -16,9 +16,13 @@ no script. Clip: `subway-surfers-step-mode-turn-by-turn.mp4` (1.7 MB, frames whe
 
 **Bugs found:**
 1. **Slow on a real page.** Each frame took 0.25-0.5 s of real time against 17 ms on test pages, so play ran ~40x
-   slower than live. Poki's page is busy (ads, analytics, the game); virtual time moves only when the page is idle.
-   Not yet measured which part waits.
-2. **Full screen made it ~1 s a frame** (500 ms took 28.3 s). With the game frame full screen, the 1 px canvas that
-   keeps frames coming is hidden behind it, so each frame wait ran to its 1 s limit. Escape left full screen.
+   slower than live. Measured afterwards (each step now says it): of a 300 ms step's 3.5 s, 2.7 s went waiting for the
+   page's clock. Virtual time moved on only after 100 of the page's tasks in a row; at 5 the clock part fell to
+   2.1-2.3 s, and a local page with an endless message loop steps twice as fast. What is left looks like the game's
+   own work in this GPU-less container.
+2. **Full screen made it ~1 s a frame** (500 ms took 28.3 s). My first explanation, that the full-screen frame hid
+   the 1 px canvas that keeps frames coming, was wrong: a test with a full-screen game frame steps at full speed. Full
+   screen drew 1920x1080 against ~1028x580, 3.4x the pixels without a GPU, which fits ~0.94 s against ~0.3 s a frame.
+   Escape left full screen.
 3. A click with `expect` cannot read buttons drawn on a canvas ("RESUME" refused; plain click worked). That is as
    designed, but the refusal could say the text may be drawn on a canvas.

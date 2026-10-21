@@ -3953,3 +3953,17 @@ checked by eye, as its README says); look into the two failures that are red on 
 
 **Next, in order:** measure where a step's time goes on a busy page (budget expiry vs frame wait) and fix it
 test-first; draw the keep-alive where the full-screen element is; play past the tutorial; then as in Round 62.
+
+## Round 64 (unattended loop, 2026-10-21 17:42): where a step's time goes
+
+- **Built:** every step now says how much of its real time went waiting for the page to draw, and for its clock.
+- **Measured on Poki:** of a 300 ms step's 3.5 s, 2.7 s waited for the clock and 0.8 s for drawing. Virtual time
+  moved on only after 100 of the page's tasks in a row. Lowered to 5: a local page with an endless message loop steps
+  300 ms in 0.30 s against 0.61 s, and on Poki the clock part fell to 2.1-2.3 s (0.8-1.3 s drawing). The rest looks
+  like the game's own work in this GPU-less container; not yet measured.
+- **Corrected:** full screen on Poki (0.94 s a frame) was not the keep-alive canvas being covered, as I wrote in
+  Round 63. A test with a full-screen game frame steps at full speed. Full screen drew 3.4x the pixels without a GPU,
+  which fits.
+
+**Next, in order:** a frame-skip option (fewer drawn frames per game second, as the ALE's frame skip) for pages this
+slow to draw; play Subway Surfers past the tutorial; then as in Round 62.

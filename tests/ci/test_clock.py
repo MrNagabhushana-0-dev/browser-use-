@@ -106,6 +106,14 @@ def games():
 	# the game in a frame from another origin of the same site, as poki.com hosts its games on *.gdn.poki.com
 	framed = f'<!doctype html><title>Portal</title><body><iframe id="g" src="{other.url_for("/runner")}" width="420" height="220"></iframe></body>'
 	main.expect_request('/portal').respond_with_data(framed, content_type='text/html')
+	# the same, with a button that puts the game's frame full screen, as Poki's does
+	full = (
+		'<!doctype html><title>Full</title><body style="margin:0">'
+		'<button id="go" style="position:fixed;left:0;top:0;width:200px;height:60px" '
+		"onclick=\"document.getElementById('g').requestFullscreen()\">Full screen</button>"
+		f'<iframe id="g" src="{other.url_for("/runner")}" style="margin-top:80px" width="420" height="220"></iframe></body>'
+	)
+	main.expect_request('/full').respond_with_data(full, content_type='text/html')
 	yield main
 	for s in (main, other):
 		s.clear()
@@ -349,4 +357,27 @@ async def test_a_page_that_always_has_work_queued_does_not_hold_its_clock_back(s
 	await _paused(pc)
 	stepped = await pc.step(300)
 	assert stepped.clock_s < 0.4 * stepped.real_s, stepped
+	await pc.resume()
+
+
+async def test_a_game_frame_put_full_screen_is_stepped_as_fast_as_the_page(session, games):
+	"""On Poki a 500 ms step took 28 s with the game's frame full screen, ~0.94 s a frame against ~0.3 s. The guess was
+	that the frame covered the 1 px canvas that keeps frames coming; this test showed it does not (it passed before any
+	change). Full screen there drew 3.4x the pixels without a GPU, which fits the slowdown."""
+	await _opened(session, games.url_for('/full'))
+	cdp = await session.get_or_create_cdp_session(focus=False)
+	for kind in ('mousePressed', 'mouseReleased'):  # a real click: full screen needs the person's gesture
+		await cdp.cdp_client.send.Input.dispatchMouseEvent(
+			params={'type': kind, 'x': 100, 'y': 30, 'button': 'left', 'clickCount': 1}, session_id=cdp.session_id
+		)
+	await asyncio.sleep(0.5)
+	assert await _value(session, "document.fullscreenElement && document.fullscreenElement.id") == 'g'
+	pc = PageClock(session)
+	await _paused(pc)
+	await asyncio.sleep(0.5)  # nothing on screen changes while paused
+	stepped = await pc.step(200)
+	assert stepped.real_s < 2.0, stepped
+	after = await _game(session, framed=True)
+	await asyncio.sleep(0.5)
+	assert (await _game(session, framed=True))['t'] == pytest.approx(after['t'], abs=0.5), 'still paused after the step'
 	await pc.resume()
