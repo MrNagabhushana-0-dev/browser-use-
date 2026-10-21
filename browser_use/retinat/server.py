@@ -624,12 +624,14 @@ class RetinatServer(BrowserUseServer):
 		if reflexes is None or reflexes.session is not self.browser_session:
 			reflexes = self._reflexes = Reflexes(self.browser_session)
 		if name == 'retinat_wait':
-			if not reflexes.installed:
-				raise Refused('no reflexes are installed: install rules with retinat_reflex first')
 			timeout = float(args.get('timeout', 30))
 			if deadline is not None and deadline.bounded:
 				# Within the call's budget: opening the browser first spends the same time the client counts
 				timeout = max(0.1, min(timeout, deadline.left() - 0.5))
+			if not reflexes.installed:
+				# A plain wait, as for a loader to finish (agents reached for this and were refused)
+				await asyncio.sleep(timeout)
+				return f'Waited {timeout:.1f}s; nothing was watched (no reflex rules are installed: retinat_reflex adds some).'
 			event = await reflexes.wait(timeout=timeout)
 			stats = reflexes.stats()
 			done = f'{stats["actions"]} input actions so far, decision to input p50 {stats["latency_ms_p50"]} ms'

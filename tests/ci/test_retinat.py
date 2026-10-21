@@ -1213,3 +1213,18 @@ async def test_a_step_can_show_just_the_game_and_draw_fewer_frames(retinat, site
 	assert "the game's frame" in _text(stepped), _text(stepped)
 	slow = await _call(retinat, 'retinat_step', {'ms': 200, 'fps': 20})
 	assert 'Played 200 ms (4 frames)' in _text(slow), _text(slow)
+
+
+
+async def test_wait_with_no_reflexes_installed_just_waits_and_says_nothing_was_watched(retinat, site):
+	"""Found when models played Poki games: each reached for retinat_wait to let a loader finish and was refused, since it
+	only waited for reflex rules. With none installed it now waits the time asked, and says nothing was watched."""
+	import time
+
+	await _open_started(retinat, site.url_for('/'))
+	began = time.monotonic()
+	waited = await _call(retinat, 'retinat_wait', {'timeout': 1.5})
+	took = time.monotonic() - began
+	assert not waited.is_error, _text(waited)
+	assert 1.4 <= took < 4, f'waited {took:.1f}s for 1.5'
+	assert 'nothing was watched' in _text(waited), _text(waited)

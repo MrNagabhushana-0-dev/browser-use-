@@ -495,9 +495,9 @@ def _browser_tools() -> list['types.Tool']:
 			name='retinat_wait',
 			description=(
 				'Sleep until a reflex rule with "notify" fires (or timeout), then say which, when, and what the '
-				'reflexes did meanwhile. Costs nothing while waiting: no images, no polling. Look after it returns, '
-				'not alongside it: a look sent with it runs at once. Up to 50 s (clients stop a call at 60 s): to '
-				'wait longer, call it again.'
+				'reflexes did meanwhile. With no rules installed, just sleep `timeout` seconds (e.g. for a loader). '
+				'Costs nothing while waiting: no images, no polling. Look after it returns, not alongside it: a look '
+				'sent with it runs at once. Up to 50 s (clients stop a call at 60 s): to wait longer, call it again.'
 			),
 			input_schema={
 				'type': 'object',
