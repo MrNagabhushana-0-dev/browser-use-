@@ -3941,3 +3941,15 @@ Retinat and browser-use servers failed to start, so no MCP tool was available.
 **Next, in order:** confirm the servers start through the launcher on the next session; play Subway Surfers with
 `retinat_step` on video, turn-based and latency-charged; rebuild and commit the film's edit list (ffmpeg scene scores,
 checked by eye, as its README says); look into the two failures that are red on `main` in this container.
+
+## Round 63 (owner reconnected the servers, 2026-10-21 17:30): Subway Surfers played turn by turn
+
+- **Seen:** the servers started through `bin/mcp-serve.sh`, and `retinat_step` showed up after the reconnect.
+- **Played:** Subway Surfers, every move decided by the model from the frame it saw, the game paused in between.
+  Score 61 (turn-based) in 12.4 s of game time; stopped at a tutorial barrier that rewound three times.
+  Clip and notes: `docs/hands-on/2026-10-21/`.
+- **Found, not fixed:** stepping a busy real page costs 0.25-0.5 s a frame (~40x slower than live); in full screen
+  the keep-alive canvas is hidden and each frame waits its 1 s limit.
+
+**Next, in order:** measure where a step's time goes on a busy page (budget expiry vs frame wait) and fix it
+test-first; draw the keep-alive where the full-screen element is; play past the tutorial; then as in Round 62.
