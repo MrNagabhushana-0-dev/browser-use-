@@ -73,7 +73,7 @@ def _run_mcp_stdio_server(module_name: str) -> None:
 
 
 def _run_mcp_server() -> None:
-	_run_mcp_stdio_server('browser_use.mcp.server')
+	_run_mcp_stdio_server('browser_use.mcp.front')
 
 
 def _run_cli_mcp_server() -> None:

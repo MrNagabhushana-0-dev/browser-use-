@@ -40,7 +40,6 @@ from typing import TYPE_CHECKING, Any
 from browser_use.eyes.views import CALL_BUDGET_S, Deadline
 from browser_use.mcp.server import MCP_AVAILABLE, TEXT_FAILURES, BrowserUseServer, serve_until_stopped, types
 from browser_use.net import NetworkMode, NetworkRouter
-from browser_use.retinat.front import CALL_STARTED
 from browser_use.retinat.tools import (  # noqa: F401  (the tool lists are imported from here too)
 	_browser_tools,
 	_control_allowed,
@@ -49,6 +48,7 @@ from browser_use.retinat.tools import (  # noqa: F401  (the tool lists are impor
 	_desktop_tools,
 	_tools,
 )
+from browser_use.serving import CALL_STARTED
 
 if TYPE_CHECKING:
 	from browser_use.bridge import BridgeRelay

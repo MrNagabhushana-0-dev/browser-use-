@@ -121,3 +121,67 @@ async def test_a_restarted_retinat_tells_a_listening_client_to_list_the_tools_ag
 			assert isinstance(event, ToolsListChanged), event
 		listed = await client.list_tools()
 		assert 'retinat_step' in {t.name for t in listed.tools}
+
+
+async def test_browser_use_answers_the_handshake_and_tool_list_without_loading_anything_heavy():
+	"""Found when the session's machine was replaced: Retinat connected and browser-use did not (Claude Code gives a
+	server 30 s). browser-use imported all ~2,100 of its modules before it answered, each read off a cold disk after
+	the boot; Retinat answers from ~900 and loads the rest meanwhile. `python -m browser_use.mcp` now does the same, and
+	the list it answers with is the one the server proper serves."""
+	import mcp.types as types
+
+	from browser_use.mcp.server import BrowserUseServer
+
+	probe = (
+		'import sys\n'
+		'import browser_use.mcp.__main__\n'
+		'from browser_use.mcp.tools import browser_tools\n'
+		"heavy = ('browser_use.mcp.server', 'browser_use.mcp.client', 'browser_use.agent.views', 'lmnr', 'openai',\n"
+		"         'browser_use.browser.session', 'browser_use.tools.service')\n"
+		"print(','.join(t.name for t in browser_tools())); print(','.join(m for m in heavy if m in sys.modules))\n"
+	)
+	proc = await asyncio.create_subprocess_exec(
+		sys.executable, '-c', probe, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+	)
+	stdout, stderr = await asyncio.wait_for(proc.communicate(), 120)
+	assert proc.returncode == 0, stderr.decode()
+	names_line, heavy_line = stdout.decode().split('\n')[:2]
+	assert heavy_line == '', f'the handshake path imported {heavy_line}'
+
+	server = BrowserUseServer()
+	listed = await server.server.get_request_handler('tools/list').handler(None, types.PaginatedRequestParams())  # type: ignore[arg-type]
+	assert names_line.split(',') == [t.name for t in listed.tools]
+	from browser_use.mcp.tools import browser_tools
+
+	assert [t.model_dump() for t in browser_tools()] == [t.model_dump() for t in listed.tools]
+
+
+async def test_browser_use_over_stdio_takes_a_call_that_arrives_while_it_loads(tmp_path):
+	"""The front answers the handshake and the list itself; the first call waits for the server proper and is answered
+	by it, and the client is told once to list the tools again, as Retinat tells it."""
+	import mcp.types as types
+	from mcp import ClientSession, StdioServerParameters
+	from mcp.client.stdio import stdio_client
+
+	told: list[str] = []
+
+	async def on_message(message) -> None:
+		note = getattr(message, 'root', message)
+		if isinstance(note, types.ToolListChangedNotification):
+			told.append(note.method)
+
+	env = {**os.environ, 'BROWSER_USE_CONFIG_DIR': str(tmp_path / 'config'), 'ANONYMIZED_TELEMETRY': 'false'}
+	params = StdioServerParameters(command=sys.executable, args=['-m', 'browser_use.mcp'], env=env)
+	async with stdio_client(params) as (read, write):
+		async with ClientSession(read, write, message_handler=on_message) as client:
+			init = await client.initialize()
+			assert init.server_info.name == 'browser-use', init.server_info
+			assert init.capabilities.tools is not None and init.capabilities.tools.list_changed, init.capabilities
+			listed = await client.list_tools()
+			assert {'browser_navigate', 'browser_list_sessions'} <= {t.name for t in listed.tools}
+			for _ in range(2):
+				sessions = await client.call_tool('browser_list_sessions', {})
+				assert not sessions.is_error, sessions
+			assert 'No active browser sessions' in sessions.content[0].text, sessions  # type: ignore[union-attr]
+			await asyncio.sleep(0.5)
+			assert told == ['notifications/tools/list_changed'], told

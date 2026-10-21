@@ -1057,7 +1057,7 @@ async def test_a_call_that_waited_for_the_server_to_load_counts_that_wait(tmp_pa
 	when the front took it, so the time spent loading is not given twice and the answer still comes inside 60 s."""
 	import time
 
-	from browser_use.retinat.front import CALL_STARTED
+	from browser_use.serving import CALL_STARTED
 
 	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
 	server = RetinatServer(call_budget_s=5)
