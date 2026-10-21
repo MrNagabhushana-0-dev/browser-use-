@@ -33,9 +33,6 @@ if TYPE_CHECKING:
 CALL_STARTED: ContextVar[float | None] = ContextVar('retinat_call_started', default=None)
 # Of a call's budget, what is kept for the call itself once the server has loaded
 LOAD_RESERVE_S = 15.0
-# How long after a listen stream is opened the tool-list notice goes out on it: the stream is subscribed to the bus once
-# it is acknowledged, and a notice published before that is lost (no replay)
-LISTEN_NOTICE_DELAY_S = 0.5
 
 
 def tool_list() -> list[types.Tool]:
@@ -69,15 +66,12 @@ class RetinatFront:
 		self._setup_handlers()
 
 	async def _listen(self, context: Any, params: Any) -> Any:
-		"""Serve a subscriptions/listen stream; the first one opened is told the tool list changed."""
-		if not self._told_tools:
+		"""Serve a subscriptions/listen stream; one that asks for tool changes is told the tool list changed. The handler
+		subscribes the stream before it first waits, so a notice published from a task started here reaches it."""
+		notifications = getattr(params, 'notifications', None)
+		if getattr(notifications, 'tools_list_changed', False):
 			self._told_tools = True
-
-			async def tell() -> None:
-				await asyncio.sleep(LISTEN_NOTICE_DELAY_S)
-				await self._bus.publish(ToolsListChanged())
-
-			self._notice = asyncio.create_task(tell())
+			self._notice = asyncio.create_task(self._bus.publish(ToolsListChanged()))
 		return await self._listen_handler(context, params)
 
 	def start_loading(self) -> None:
