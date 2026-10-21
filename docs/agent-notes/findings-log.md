@@ -3933,5 +3933,11 @@ Retinat and browser-use servers failed to start, so no MCP tool was available.
   The pump changes in that commit stand: the review found the same weaknesses.
 - **Measured:** the affected files on `94971d4` (clock, MCP lifecycle, reflex, Retinat): 77 passed, 0 failed.
 
+- **Full `tests/ci` on `94971d4`: red, 5 failed, 1 error, 1,771 passed.** Two (cobrowse login persistence, live-view
+  keyframes) fail on `main` in this container too; three pass alone; and the film edit-list test needs
+  `tests/ci/assets/big_buck_bunny/edits.json`, which `*.json` in `.gitignore` kept out of git in Round 60, so it existed
+  only in the old container. Test assets are now exempt from that rule.
+
 **Next, in order:** confirm the servers start through the launcher on the next session; play Subway Surfers with
-`retinat_step` on video, turn-based and latency-charged; then as in Round 61.
+`retinat_step` on video, turn-based and latency-charged; rebuild and commit the film's edit list (ffmpeg scene scores,
+checked by eye, as its README says); look into the two failures that are red on `main` in this container.
