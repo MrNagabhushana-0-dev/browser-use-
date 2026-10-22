@@ -28,3 +28,9 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   https://www.youtube.com/watch?v=aqz-KE-bpKQ -> "BLOCKED: google-unusual-traffic (google.com/sorry/)". Not bypassed (no
   bot-block evasion). Milestone-1 runs on the same film from Wikimedia Commons as a stand-in until the owner's own
   network is available (P2 / cobrowse).
+- 2026-10-22 CORRECTION (METRIC-B definition, before any comparison): the formula t_result - (t_call + (v - v0))
+  assumed the video showed v0 at t_call and was written as "can only overstate". MEASURED in E0: each watch covers from
+  the previous call's end (coverage 0.6-11.2 s, 11.6-28.2 s, 28.4-45.0 s ...), about 5 s before the call, so it can
+  understate. METRIC-B is now v1 - v per event: a lower bound (the model sees nothing of a window until it closes at v1;
+  the time to build the result after that is not in it). Also fixed: the parser read only "12.3s" times, not "1:02.3",
+  and first reported 43.8 s covered and 6 events for E0; the corrected parse reads 180.8 s and 33.

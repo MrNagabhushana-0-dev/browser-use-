@@ -16,6 +16,17 @@ def _ts(s: str) -> float:
 	return datetime.fromisoformat(s.replace('Z', '+00:00')).timestamp()
 
 
+# a time as the watch writes it: 12.3s, or 1:02.3 past a minute
+_T = r'(\d+:\d+(?:\.\d+)?|\d+(?:\.\d+)?s)'
+
+
+def _seconds(t: str) -> float:
+	if ':' in t:
+		minutes, seconds = t.split(':')
+		return int(minutes) * 60 + float(seconds)
+	return float(t.rstrip('s'))
+
+
 def _text(content) -> str:
 	if isinstance(content, str):
 		return content
@@ -53,15 +64,17 @@ def measure(path: str, tool: str) -> dict:
 	latencies, delays, video = [], [], 0.0
 	for issued, received, text in results:
 		delays.append(received - issued)
-		covering = re.search(r'covering ([\d.]+)s-([\d.]+)s', text)
+		covering = re.search(rf'covering {_T}-{_T}', text)
 		if not covering:
 			continue
-		v0, v1 = float(covering[1]), float(covering[2])
+		v0, v1 = _seconds(covering[1]), _seconds(covering[2])
 		video += v1 - v0
 		# each timeline row after the first starts an event (a cut, a fade, motion starting or stopping)
-		rows = [float(m[1]) for m in re.finditer(r'^\s+([\d.]+)s-[\d.]+s\s', text, re.M)]
+		rows = [_seconds(m[1]) for m in re.finditer(rf'^\s+{_T}-{_T}\s', text, re.M)]
+		# the model sees nothing of a window before it closes at v1: an event at v waited at least v1 - v (the time
+		# the result took to build after the window closed comes on top, unseen here)
 		for v in rows[1:]:
-			latencies.append(received - (issued + (v - v0)))
+			latencies.append(v1 - v)
 	return {
 		'calls': len(results),
 		'window_s': round(end - start, 1),
@@ -70,7 +83,7 @@ def measure(path: str, tool: str) -> dict:
 		'A_processed_per_min': round(processed / minutes),
 		'A_added_per_video_min': round(added / (video / 60)) if video else None,
 		'B_result_delay_s': {'median': round(statistics.median(delays), 2), 'max': round(max(delays), 2)},
-		'B_event_latency_s': (
+		'B_event_latency_lower_bound_s': (
 			{
 				'n': len(latencies),
 				'median': round(statistics.median(latencies), 2),
