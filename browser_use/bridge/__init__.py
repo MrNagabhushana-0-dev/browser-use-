@@ -43,12 +43,15 @@ def write_extension(
 	always_allow: list[str] | None = None,
 	ask_every_time: list[str] | None = None,
 	resume_after_ms: int | None = None,
+	selftest: bool | None = None,
 ) -> Path:
 	"""Copy the extension to `out`, ready for "Load unpacked".
 
 	`relay` overrides the WebSocket address it dials (default ws://127.0.0.1:9333/extension); `always_share` lists
 	URL globs the person has decided to share without asking each time; `always_allow` lists sites (origins, `https://*.example.com` for subdomains, `*` for all) the AI may use without asking; `ask_every_time` lists sites asked about on every visit, with no Always (it wins over `always_allow`); `resume_after_ms` is how long after the
-	person's last click or key in a shared tab the AI may carry on (0: only when handed back). `manifest_version=2` writes the variant for
+	person's last click or key in a shared tab the AI may carry on (0: only when handed back). `selftest=True` has the
+	extension open the relay's self-test page in one tab after an install or update, once per version, and share just
+	that tab (`setup` writes it so; off by default). `manifest_version=2` writes the variant for
 	Chromium older than 88, which has no Manifest V3.
 	"""
 	assert manifest_version in (2, 3), manifest_version
@@ -65,6 +68,8 @@ def write_extension(
 		settings['askEveryTime'] = list(ask_every_time)
 	if resume_after_ms is not None:
 		settings['resumeAfterMs'] = resume_after_ms
+	if selftest is not None:
+		settings['selftest'] = selftest
 	(out / 'settings.json').write_text(json.dumps(settings, indent=2) + '\n')
 	if manifest_version == 2:
 		manifest = json.loads((out / 'manifest.json').read_text())

@@ -24,7 +24,8 @@ const state = {
 	// resumeAfterMs: after the person's last input in a shared tab, how long until the AI may carry on (0: never)
 	// alwaysAllow: sites (origin globs, like https://*.example.com) the person lets the AI use without asking
 	// askEveryTime: sites (same patterns) the person wants asked about on every visit, with no Always: a bank, say
-	settings: { relay: 'ws://127.0.0.1:9333/extension', alwaysShare: [], alwaysAllow: [], askEveryTime: [], resumeAfterMs: 8000 },
+	// selftest: open the install self-test tab (see openSelftest); `python -m browser_use.bridge setup` turns it on
+	settings: { relay: 'ws://127.0.0.1:9333/extension', alwaysShare: [], alwaysAllow: [], askEveryTime: [], resumeAfterMs: 8000, selftest: false },
 	shared: new Set(), // tab ids the person shared, or the AI opened
 	offered: new Set(), // tabs the person (or a page) opened from a shared tab: unshared until they press Share
 	moved: new Map(), // tab id -> {site, byAi}: a shared tab that moved to a site not allowed, unshared and offered back
@@ -51,6 +52,7 @@ const state = {
 	aiInputAt: new Map(), // tab id -> when the AI last sent input there
 	aiActAt: new Map(), // tab id -> when the AI last sent anything but looking there (input, script, navigation)
 	aiWindow: null,
+	selftestTab: null, // the one tab opened for the install self-test (see openSelftest)
 	ws: null,
 	backoff: 500,
 	ready: null,
@@ -89,6 +91,7 @@ function asksEveryTime(site) {
 // Whether the AI may use `url`, in tab `tabId` when it is about a tab. A site the person wants asked about every time
 // is allowed only for the visit they allowed, in that tab; their list wins over Always, "*" included.
 function allowedUrl(url, tabId) {
+	if (tabId !== undefined && tabId === state.selftestTab && isSelftest(url)) return true; // that tab, on that one page
 	const site = siteOf(url);
 	if (site === '') return true;
 	if (site === 'null') return false;
@@ -458,6 +461,53 @@ function alwaysShared(url) {
 	return !!url && state.settings.alwaysShare.some((g) => globToRegExp(g).test(url));
 }
 
+// -- Install self-test -------------------------------------------------------------------------------------------------
+// After an install or update, once per version, the first time the relay answers (at once if it already does), one tab
+// opens at the relay's own self-test page, http://<relay host:port>/selftest, and only that tab is shared, without
+// asking: the relay looks, clicks its grey button, looks again, and gives the tab back. The page says PASS or FAIL.
+// Only that exact address, in that one tab, while it is shared that once, is allowed this way (unshare ends it, so a
+// reload does not share it again); no other tab or site gets anything new. Off unless settings.selftest is on.
+function selftestUrl() {
+	try {
+		const u = new URL(state.settings.relay);
+		if (u.protocol !== 'ws:' || !['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) return null;
+		return `http://${u.host}/selftest`;
+	} catch (e) {
+		return null;
+	}
+}
+
+function isSelftest(url) {
+	const want = selftestUrl();
+	if (!want || !url) return false;
+	try {
+		return new URL(url).href === want;
+	} catch (e) {
+		return false;
+	}
+}
+
+let selftestChain = Promise.resolve(); // install and connect can both ask at once: one tab, not two
+function maybeSelftest() {
+	selftestChain = selftestChain.then(openSelftest).catch(() => {});
+	return selftestChain;
+}
+
+async function openSelftest() {
+	const url = selftestUrl();
+	if (!state.settings.selftest || !url) return;
+	if (!state.ws || state.ws.readyState !== 1 || state.stopped) return; // the next connection opens it
+	const version = C.runtime.getManifest().version;
+	const kept = await call(C.storage.local, 'get', ['selftestDue', 'selftestOpened']);
+	if (kept.selftestDue !== version || kept.selftestOpened === version) return;
+	await call(C.storage.local, 'set', { selftestOpened: version }); // once per version, even if what follows fails
+	const tab = await call(C.tabs, 'create', { url, active: true });
+	state.selftestTab = tab.id;
+	await save();
+	const now = await call(C.tabs, 'get', tab.id).catch(() => null); // it may have loaded already
+	if (now && now.status === 'complete' && isSelftest(now.url)) await share(tab.id, 'self-test');
+}
+
 function emit(msg) {
 	if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(msg));
 }
@@ -468,6 +518,7 @@ async function save() {
 		holder: state.holder,
 		aiWindow: state.aiWindow,
 		stopped: state.stopped,
+		selftestTab: state.selftestTab,
 		// grants for this browser session only: without session storage (old Chromium) they are kept in memory
 		...(C.storage.session ? { allowed: [...state.allowed], declined: [...state.declined], asking: state.asking } : {}),
 	});
@@ -549,6 +600,7 @@ async function share(tabId, why) {
 
 async function unshare(tabId, why) {
 	if (!state.shared.delete(tabId)) return;
+	if (tabId === state.selftestTab) state.selftestTab = null; // shared once without asking; from now on only by the person
 	for (const [sid, child] of state.children) if (child.tabId === tabId) state.children.delete(sid);
 	if (state.attached.delete(tabId)) await call(C.debugger, 'detach', { tabId }).catch(() => {});
 	await save();
@@ -603,7 +655,7 @@ function needShared(tabId) {
 
 async function handle(msg) {
 	// forgetting a site and marking one to be asked about every time only take access away
-	if (state.stopped && !['ping', 'tabs', 'forget', 'everyTime'].includes(msg.op)) throw new Error(STOPPED);
+	if (state.stopped && !['ping', 'tabs', 'forget', 'everyTime', 'unshare'].includes(msg.op)) throw new Error(STOPPED);
 	switch (msg.op) {
 		case 'ping':
 			return { sites: sitesNow() };
@@ -613,6 +665,10 @@ async function handle(msg) {
 		case 'everyTime':
 			await everyTime(String(msg.site || ''), true); // the relay may only mark a site, never stop asking
 			return { sites: sitesNow() };
+		case 'unshare':
+			// only takes access away, so the relay may ask: it gives the self-test tab back when its test is done
+			if (state.shared.has(msg.tabId)) await unshare(msg.tabId, String(msg.why || 'unshared by the relay'));
+			return {};
 		case 'reload': {
 			// The relay saw an older copy running: Chrome keeps the old service worker after the files change until
 			// the extension is reloaded. Reload only if the files on disk differ from the code running: otherwise it
@@ -731,6 +787,7 @@ function connect() {
 				.then((tab) => emit({ event: 'shared', why: 'already shared', tab }))
 				.catch(() => unshare(tabId, 'gone'));
 		}
+		maybeSelftest(); // the first connection after an install or update opens the self-test tab
 	};
 	ws.onmessage = (m) => onRelay(JSON.parse(m.data));
 	ws.onclose = () => {
@@ -816,7 +873,7 @@ async function boot() {
 	}
 	const local = await call(C.storage.local, 'get', 'settings');
 	Object.assign(state.settings, local.settings || {});
-	const kept = await call(store, 'get', ['shared', 'holder', 'aiWindow', 'stopped', 'allowed', 'declined', 'asking']);
+	const kept = await call(store, 'get', ['shared', 'holder', 'aiWindow', 'stopped', 'allowed', 'declined', 'asking', 'selftestTab']);
 	state.asking = kept.asking || null; // an ask still open after a worker restart is still answered
 	for (const site of kept.allowed || []) state.allowed.add(site);
 	for (const site of kept.declined || []) state.declined.add(site);
@@ -825,6 +882,7 @@ async function boot() {
 	state.aiWindow = kept.aiWindow ?? null;
 	const tabs = await call(C.tabs, 'query', {});
 	const live = new Set(tabs.map((t) => t.id));
+	state.selftestTab = live.has(kept.selftestTab) ? kept.selftestTab : null;
 	for (const t of tabs) {
 		if (!(kept.shared || []).includes(t.id)) continue;
 		if (allowedUrl(t.url, t.id)) state.shared.add(t.id);
@@ -918,6 +976,7 @@ C.debugger.onDetach.addListener(async (source, reason) => {
 });
 
 C.tabs.onRemoved.addListener((tabId) => {
+	if (tabId === state.selftestTab) state.selftestTab = null;
 	state.offered.delete(tabId);
 	state.moved.delete(tabId);
 	state.urls.delete(tabId);
@@ -958,7 +1017,7 @@ async function adoptOrOffer(tabId, opener, created, ai) {
 	emit({ event: 'offered', tabId, why });
 }
 
-C.tabs.onUpdated.addListener(async (tabId, change) => {
+C.tabs.onUpdated.addListener(async (tabId, change, tab) => {
 	await state.ready;
 	if (state.shared.has(tabId)) {
 		if (change.url) {
@@ -970,6 +1029,8 @@ C.tabs.onUpdated.addListener(async (tabId, change) => {
 			targetInfo(tabId).then((tab) => emit({ event: 'changed', tab })).catch(() => {});
 		}
 		badge(tabId);
+	} else if (tabId === state.selftestTab && change.status === 'complete' && isSelftest(tab && tab.url)) {
+		share(tabId, 'self-test').catch(() => {});
 	} else if (change.url && alwaysShared(change.url)) {
 		share(tabId, 'always shared site').catch(() => {});
 	}
@@ -1057,8 +1118,16 @@ if (C.alarms) {
 	C.alarms.onAlarm.addListener(() => connect());
 }
 // These wake the worker straight after an install, an update or a reload (the relay may have asked for one) and when
-// the browser starts, rather than at the next alarm.
-C.runtime.onInstalled.addListener(() => state.ready.then(connect));
+// the browser starts, rather than at the next alarm. An install or update also makes the self-test due for this version.
+C.runtime.onInstalled.addListener((details) => {
+	state.ready.then(async () => {
+		if (details.reason === 'install' || details.reason === 'update') {
+			await call(C.storage.local, 'set', { selftestDue: C.runtime.getManifest().version });
+			maybeSelftest();
+		}
+		connect();
+	});
+});
 if (C.runtime.onStartup) C.runtime.onStartup.addListener(() => state.ready.then(connect));
 
 state.ready = boot();

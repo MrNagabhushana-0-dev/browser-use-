@@ -19,7 +19,9 @@ from urllib.parse import urlparse
 
 from aiohttp import WSMsgType, web
 
+from browser_use.bridge import selftest
 from browser_use.bridge.policy import FILES, PASSIVE_GLOBS, POLICY_FILE, refusal
+from browser_use.bridge.selftest import SelfTest
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,15 @@ COOKIE_LISTS = ('associatedCookies', 'blockedCookies', 'exemptedCookies')
 SITE_DATA_DOMAINS = frozenset({'DOMStorage', 'IndexedDB', 'CacheStorage', 'Storage'})
 SITE_KEYS = ('securityOrigin', 'storageKey', 'origin', 'ownerOrigin')
 BROWSER_TARGET = {'targetId': 'browser', 'type': 'browser', 'title': '', 'url': '', 'attached': True, 'canAccessOpener': False}
+# The self-test page and its state: static, nothing in them comes from a request, and they are never framed.
+SELFTEST_HEADERS = {
+	'Cache-Control': 'no-store',
+	'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+	"connect-src 'self'; frame-ancestors 'none'",
+	'X-Frame-Options': 'DENY',
+	'Referrer-Policy': 'no-referrer',
+	'X-Content-Type-Options': 'nosniff',
+}
 
 
 class BridgeError(Exception):
@@ -94,6 +105,12 @@ class BridgeRelay:
 		self._runner: web.AppRunner | None = None
 		self._tasks: set[asyncio.Task] = set()
 		self._reload_asked: set[tuple[str, str]] = set()  # (version, policy) an extension was asked to reload from
+		self.selftest = SelfTest()  # the latest install self-test (see selftest.py)
+		self.selftest_click_offset = 0.0  # CSS px the self-test's click lands right of the button: a FAIL on purpose
+		self._selftest_done = asyncio.Event()
+		self._selftest_shown = asyncio.Event()  # the self-test page has read the outcome of the latest run
+		self._selftest_runs = itertools.count(1)
+		self._selftest_tabs: set[int] = set()  # self-test tabs whose current sharing already started a run
 
 	# -- lifecycle ---------------------------------------------------------------------------------
 
@@ -115,6 +132,8 @@ class BridgeRelay:
 		app.router.add_get('/bridge/status', self._status)
 		app.router.add_get('/extension', self._extension_socket)
 		app.router.add_get(f'/cdp/{self._token}', self._client_socket)
+		app.router.add_get(selftest.PATH, self._selftest_page)
+		app.router.add_get(selftest.STATE_PATH, self._selftest_state)
 		self._runner = web.AppRunner(app, access_log=None)
 		await self._runner.setup()
 		site = web.TCPSite(self._runner, self.host, self.port)
@@ -139,6 +158,25 @@ class BridgeRelay:
 		"""Wait until the extension in the person's browser has dialled in; returns its hello."""
 		await asyncio.wait_for(self._ext_ready.wait(), timeout)
 		return self.hello
+
+	async def wait_for_selftest(self, timeout: float = 60.0) -> SelfTest:
+		"""Wait until a self-test run has finished (and its tab was given back); returns its outcome."""
+		await asyncio.wait_for(self._selftest_done.wait(), timeout)
+		assert self.selftest.state in ('pass', 'fail'), self.selftest.state
+		return self.selftest
+
+	async def wait_selftest_shown(self, timeout: float = 5.0) -> bool:
+		"""Wait until the self-test page has read the latest outcome (it polls), so stopping the relay right after
+		does not leave it saying 'running'. False if it did not within `timeout` (e.g. the tab was closed)."""
+		try:
+			await asyncio.wait_for(self._selftest_shown.wait(), timeout)
+			return True
+		except TimeoutError:
+			return False
+
+	@property
+	def extension_connected(self) -> bool:
+		return self._ext is not None and not self._ext.closed
 
 	async def wait_for_tab(self, timeout: float = 60.0) -> dict[str, Any]:
 		"""Wait until the person has shared at least one tab; returns its TargetInfo."""
@@ -174,6 +212,7 @@ class BridgeRelay:
 			'holder': self.holder,
 			'stopped': self.stopped,
 			'tabs': [{'title': t.get('title', ''), 'url': t.get('url', '')} for t in self.tabs.values()],
+			'selftest': self.selftest.model_dump(),
 		}
 
 	async def forget(self, site: str) -> dict[str, Any]:
@@ -222,6 +261,72 @@ class BridgeRelay:
 	async def _list(self, request: web.Request) -> web.Response:
 		self._local_only(request)
 		return web.json_response([{**info, 'id': info['targetId']} for info in self.tabs.values()])
+
+	# -- install self-test -------------------------------------------------------------------------
+
+	def _own_page_only(self, request: web.Request, page: bool) -> None:
+		"""The self-test page loads in a tab like any page (its address is the relay's, on loopback). Its state
+		answers only the page itself: loopback Host, and a fetch from this origin, never another site's."""
+		host = (request.host or '').rsplit(':', 1)[0]
+		if host not in LOCAL_HOSTS:
+			raise web.HTTPForbidden(text='the bridge only answers on loopback')
+		if page:
+			return
+		origin = request.headers.get('Origin')
+		if origin and origin not in {f'http://{h}:{self.port}' for h in LOCAL_HOSTS}:
+			raise web.HTTPForbidden(text='only the self-test page may read its state')
+		if request.headers.get('Sec-Fetch-Site', 'same-origin') not in ('same-origin', 'none'):
+			raise web.HTTPForbidden(text='only the self-test page may read its state')
+
+	async def _selftest_page(self, request: web.Request) -> web.Response:
+		self._own_page_only(request, page=True)
+		return web.Response(text=selftest.PAGE, content_type='text/html', headers=SELFTEST_HEADERS)
+
+	async def _selftest_state(self, request: web.Request) -> web.Response:
+		self._own_page_only(request, page=False)
+		if self._selftest_done.is_set():
+			self._selftest_shown.set()
+		return web.json_response(self.selftest.model_dump(), headers=SELFTEST_HEADERS)
+
+	def _is_selftest(self, url: str) -> bool:
+		u = urlparse(url)
+		local = u.hostname in ('127.0.0.1', 'localhost', '::1')
+		return u.scheme == 'http' and local and u.port == self.port and u.path == selftest.PATH and not u.query
+
+	def _maybe_selftest(self, tab_id: int) -> None:
+		"""Run the self-test once each time its tab becomes shared on its page (the extension opens and shares it after
+		an install or update; the person may share it again to retry). One run at a time."""
+		info = self.tabs.get(tab_id)
+		if info is None or tab_id in self._selftest_tabs or not self._is_selftest(info['url']):
+			return
+		if self.selftest.state == 'running':
+			return
+		self._selftest_tabs.add(tab_id)
+		self.selftest = SelfTest(state='running', run=next(self._selftest_runs), extension=str(self.hello.get('extension', '')))
+		self._selftest_done.clear()
+		self._selftest_shown.clear()
+		task = asyncio.create_task(self._run_selftest(tab_id, self.selftest))
+		self._tasks.add(task)
+		task.add_done_callback(self._tasks.discard)
+
+	async def _run_selftest(self, tab_id: int, t: SelfTest) -> None:
+		async def send(method: str, **params: Any) -> dict[str, Any]:
+			return await self._ext_call('send', tabId=tab_id, method=method, params=params)
+
+		self._log_selftest_start(tab_id)
+		try:
+			await selftest.measure(send, t, self.selftest_click_offset)
+		except (BridgeError, TimeoutError) as e:
+			t.state, t.reason = 'fail', str(e) or type(e).__name__
+		except Exception as e:  # a background task: whatever went wrong is the outcome, said plainly
+			t.state, t.reason = 'fail', f'{type(e).__name__}: {e}'
+		self._log_selftest(t)
+		try:
+			# give the tab back: its pill goes and the debugging bar with it. Only takes access away.
+			await asyncio.wait_for(self._ext_call('unshare', tabId=tab_id, why='the self-test is done'), 5)
+		except (BridgeError, TimeoutError):
+			pass  # the extension went away; nothing stays shared without it
+		self._selftest_done.set()
 
 	# -- extension side ----------------------------------------------------------------------------
 
@@ -333,6 +438,7 @@ class BridgeRelay:
 		known = tab_id in self.tabs
 		self.tabs[tab_id] = _target_info(info)
 		self._some_tab.set()
+		self._maybe_selftest(tab_id)
 		if known:
 			return
 		for client in self._clients:
@@ -342,6 +448,7 @@ class BridgeRelay:
 				self._attach(client, tab_id)
 
 	def _on_unshared(self, tab_id: int, why: str) -> None:
+		self._selftest_tabs.discard(tab_id)
 		info = self.tabs.pop(tab_id, None)
 		if info is None:
 			return
@@ -361,6 +468,7 @@ class BridgeRelay:
 		if info['tabId'] not in self.tabs:
 			return
 		self.tabs[info['tabId']] = _target_info(info)
+		self._maybe_selftest(info['tabId'])
 		for client in self._clients:
 			if client.discover:
 				self._emit(client, 'Target.targetInfoChanged', {'targetInfo': self.tabs[info['tabId']]})
@@ -621,6 +729,15 @@ class BridgeRelay:
 				f'🔗 The extension runs older code ({hello.get("extension")}) and cannot reload itself ({error}); '
 				'press the reload arrow on its card at chrome://extensions once'
 			)
+
+	def _log_selftest_start(self, tab_id: int) -> None:
+		logger.info(f'🔗 Self-test {self.selftest.run}: look, click, look in the self-test tab ({tab_id})')
+
+	def _log_selftest(self, t: SelfTest) -> None:
+		logger.info(
+			f'🔗 Self-test {t.run} {t.state.upper()}: look 1 {t.look1_ms} ms, click {t.click_ms} ms, look 2 {t.look2_ms} ms, '
+			f'button rgb {t.before} -> {t.after}' + (f'; {t.reason}' if t.reason else '')
+		)
 
 	def _log_extension(self, hello: dict[str, Any]) -> None:
 		logger.info(f'🔗 Bridge extension connected from {_product(hello.get("userAgent", ""))} (MV{hello.get("manifest")})')

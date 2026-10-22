@@ -3,5 +3,6 @@
   "alwaysShare": [],
   "alwaysAllow": [],
   "askEveryTime": [],
-  "resumeAfterMs": 8000
+  "resumeAfterMs": 8000,
+  "selftest": false
 }
