@@ -101,3 +101,11 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   "stopped: cut at") within 0.7 s. Objective, no judgement; C2 (verifier's labels, incl. actions) stays the primary.
   On E1 (Commons copy, timing approximate): 31 of 32, missed 39.77 s. (The B1 entry above means: eyes/service.py as in
   d3a6df1's parent.)
+- 2026-10-22 B1 MEASURED (measure_watch.py --edits, subagents/agent-a2ddffde6832e7aad.jsonl; recording
+  retinat-20261022-154352.mp4): 21 calls, window 181.2 s, film covered 154.1 s; gaps between windows 12 totalling
+  27.0 s (max 16.0 s); cuts_reached_model 29/32 (missed 39.77, 104.17, 131.3); A_unique 9,865/min; B lower bound
+  median 3.7 s, p90 6.44 s (n=37); call->answer median 3.55 s, max 18.59 s. No narration text between calls (0 text
+  blocks) despite the firmer instruction. Cause of the 16 s gap (MEASURED from the call log): a call stopped watching at
+  film 34.3 s but answered 18.6 s after it was issued (with the film's sound readable here, the percept's speech model
+  ran on CPU), and the next watch started from when that percept was done (film 50.3 s). E2 runs next: fresh Retinat on
+  d3a6df1, the same prompt.
