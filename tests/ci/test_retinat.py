@@ -1215,7 +1215,6 @@ async def test_a_step_can_show_just_the_game_and_draw_fewer_frames(retinat, site
 	assert 'Played 200 ms (4 frames)' in _text(slow), _text(slow)
 
 
-
 async def test_wait_with_no_reflexes_installed_just_waits_and_says_nothing_was_watched(retinat, site):
 	"""Found when models played Poki games: each reached for retinat_wait to let a loader finish and was refused, since it
 	only waited for reflex rules. With none installed it now waits the time asked, and says nothing was watched."""
@@ -1228,3 +1227,70 @@ async def test_wait_with_no_reflexes_installed_just_waits_and_says_nothing_was_w
 	assert not waited.is_error, _text(waited)
 	assert 1.4 <= took < 4, f'waited {took:.1f}s for 1.5'
 	assert 'nothing was watched' in _text(waited), _text(waited)
+
+
+# Three things on a still background, placed by the page's clock: a red square going right at 120 px/s, a blue dot
+# going down at 60 px/s, and a green block that never moves.
+MOVERS = """<!doctype html><title>Movers</title><body style="margin:0;background:#fff">
+<canvas id="c" width="600" height="300" style="display:block;margin:20px"></canvas><script>
+const g = document.getElementById('c').getContext('2d'), t0 = performance.now();
+function frame() {
+  const s = (performance.now() - t0) / 1000;
+  g.fillStyle = '#ddd'; g.fillRect(0, 0, 600, 300);
+  g.fillStyle = '#0a0'; g.fillRect(250, 200, 30, 30);
+  g.fillStyle = '#d00'; g.fillRect(50 + (120 * s) % 450, 100, 16, 16);
+  g.fillStyle = '#00d'; g.beginPath(); g.arc(450, 30 + (60 * s) % 240, 8, 0, 7); g.fill();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body>"""
+
+
+async def test_a_step_says_what_moved_how_fast_and_which_way_as_eyes_see_it(retinat, site):
+	"""The owner's ask: play with the eyes, not by screenshots. A step showed one still frame, and a still frame cannot
+	show which way anything moves (the World's Hardest Game player's own complaint). The eyes now read the frames the
+	page drew during the step and say what moved, which way and how fast in game time, and draw where each went."""
+	import re
+
+	site.expect_request('/movers').respond_with_data(MOVERS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/movers'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	stepped = await _call(retinat, 'retinat_step', {'ms': 500, 'frame': 'game'})
+	text = _text(stepped)
+	assert not stepped.is_error, text
+	assert '2 things moved' in text, text
+	speeds = {d: float(v) for d, v in re.findall(r'moving (\w+) at (\d+) px/s', text)}
+	assert speeds.get('right', 0) == pytest.approx(120, rel=0.2), text
+	assert speeds.get('down', 0) == pytest.approx(60, rel=0.25), text
+	assert any(isinstance(b, types.ImageContent) for b in stepped.content), 'the picture with where each went'
+
+
+# A side-scroller: the world (blocks of many greys) goes left at 150 px/s under a player that stays in the middle.
+SCROLLER = """<!doctype html><title>Scroller</title><body style="margin:0;background:#fff">
+<canvas id="c" width="600" height="300" style="display:block;margin:20px"></canvas><script>
+const g = document.getElementById('c').getContext('2d'), t0 = performance.now();
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const blocks = Array.from({length: 400}, () => [rnd() * 3000, rnd() * 300, 20 + rnd() * 60, 20 + rnd() * 60, Math.floor(40 + rnd() * 180)]);
+function frame() {
+  const off = ((performance.now() - t0) / 1000) * 150;
+  g.fillStyle = '#888'; g.fillRect(0, 0, 600, 300);
+  for (const [x, y, w, h, c] of blocks) { g.fillStyle = `rgb(${c},${c},${c})`; g.fillRect(x - off, y, w, h); }
+  g.fillStyle = '#d00'; g.fillRect(290, 140, 20, 20);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body>"""
+
+
+async def test_a_step_says_when_the_whole_view_scrolls(retinat, site):
+	"""In a side-scroller the camera follows the player, so the player stands still on screen and the world moves: the
+	eyes say the view scrolled, which way and how fast, rather than calling the whole picture a crowd of movers."""
+	import re
+
+	site.expect_request('/scroller').respond_with_data(SCROLLER, content_type='text/html')
+	await _open_started(retinat, site.url_for('/scroller'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	stepped = await _call(retinat, 'retinat_step', {'ms': 400, 'frame': 'game'})
+	text = _text(stepped)
+	scrolled = re.search(r'the whole view scrolled (\w+) at (\d+) px/s', text)
+	assert scrolled and scrolled[1] == 'right' and float(scrolled[2]) == pytest.approx(150, rel=0.2), text

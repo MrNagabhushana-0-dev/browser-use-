@@ -510,7 +510,9 @@ def _browser_tools() -> list['types.Tool']:
 			description=(
 				'Play a real-time page (a game) yourself, turn by turn: its clock stands still while you think, and '
 				'each step plays `ms` of game time a frame at a time, then stands still again and shows you the frame '
-				'it ended on. `tap` keys are down for the first ~50 ms; `hold` keys stay down through this step and the '
+				'it ended on. The eyes watch the frames the step draws and say what moved, which way and how fast in '
+				'game time (and whether the whole view scrolled), and draw the trail and heading of each mover on that '
+				'frame: the motion a still frame cannot show. `tap` keys are down for the first ~50 ms; `hold` keys stay down through this step and the '
 				'next ones until a step leaves them out. The first step pauses the page: timers, performance.now(), Date '
 				'and animation frames stop with it; sound does not. A score made this way is not real-time play: the '
 				'game waited for every decision. charge_thinking=true first plays the time you took to decide, with the '
@@ -543,6 +545,11 @@ def _browser_tools() -> list['types.Tool']:
 						'description': 'What to show: "page" (the whole viewport), "game" (just the largest canvas, frame or '
 						'video in view, drawn larger), or [x, y, width, height] in CSS px.',
 						'default': 'page',
+					},
+					'motion': {
+						'type': 'boolean',
+						'default': True,
+						'description': 'Have the eyes say what moved during the step (about 1 s more per step).',
 					},
 					'fps': {
 						'type': 'number',

@@ -35,6 +35,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from browser_use.eyes.views import CALL_BUDGET_S, Deadline
@@ -115,6 +116,10 @@ START_TIMEOUT_S = 120.0
 STEP_ANSWER_S = 2.0
 # How wide (and tall, at most) a step's frame of just the game is drawn: readable without costing a full-page look's worth
 STEP_GAME_WIDTH = 800
+# What the eyes read a step's movement from: a picture of the region this wide, before the step and at up to this
+# many of its frames (spread over it, the last included)
+MOTION_WIDTH = 400
+MOTION_LOOKS = 8
 # The largest canvas, frame or video in view (its visible part), where a game is drawn, as [x, y, width, height]
 _GAME_REGION_JS = r"""(() => {
 	let best = null, bestArea = 0;
@@ -691,6 +696,9 @@ class RetinatServer(BrowserUseServer):
 			raise Refused(
 				'frame is "page", "game" (the largest canvas, frame or video in view), or [x, y, width, height] in CSS px'
 			)
+		motion = args.get('motion', True)
+		if not isinstance(motion, bool):
+			raise Refused('motion is true (the eyes say what moved during the step) or false')
 		clock = await self._clock()
 		assert clock is not None
 		if not clock.paused:
@@ -700,9 +708,26 @@ class RetinatServer(BrowserUseServer):
 		# a step is played at about real speed: within the call it plays what fits and keeps time to answer
 		stop_at = deadline.at - STEP_ANSWER_S if deadline is not None and deadline.bounded else None
 		charge = bool(args.get('charge_thinking'))
-		stepped = await act(clock.step(ms, hold=keys['hold'], tap=keys['tap'], charge_thinking=charge, stop_at=stop_at, fps=fps))
-		eyes = await self._eyes()
 		region = await self._game_region() if frame == 'game' else (frame if isinstance(frame, list) else None)
+		looks: list[tuple[float, Any]] = []  # (game ms into the step, grey picture): what the eyes saw during it
+		seen: Callable[[int, float], Awaitable[None]] | None = None
+		if motion:
+			area = region or await self._viewport_area()
+			total = max(1, round(ms / (1000 / fps)))
+			picks = {round(k * (total - 1) / (MOTION_LOOKS - 1)) for k in range(MOTION_LOOKS)} if total > 1 else {0}
+
+			async def look_at(i: int, game_ms: float) -> None:
+				if i in picks:
+					looks.append((game_ms, await self._grey_look(area)))
+
+			seen = look_at
+			looks.append((0.0, await self._grey_look(area)))  # as it stands before the step
+		stepped = await act(
+			clock.step(ms, hold=keys['hold'], tap=keys['tap'], charge_thinking=charge, stop_at=stop_at, fps=fps, seen=seen)
+		)
+		if motion and looks[-1][0] < stepped.game_ms:  # the step ended early: the eyes see where it ended too
+			looks.append((stepped.game_ms, await self._grey_look(area)))
+		eyes = await self._eyes()
 		cut = f' of the {ms:.0f} asked (the call had no time for more)' if stepped.game_ms < ms - FRAME_MS else ''
 		thought = f'First played your {stepped.charged_ms / 1000:.1f}s of thinking with the last keys held. ' if charge else ''
 		held = f'holding {", ".join(stepped.held)}' if stepped.held else 'no keys held'
@@ -719,6 +744,9 @@ class RetinatServer(BrowserUseServer):
 			if not jpeg:
 				return text + ' No frame could be captured.'
 			size = zoomed.image_size or (0, 0)
+			if motion:
+				jpeg, said = self._motion_on(jpeg, looks, size[0], w)
+				text += ' ' + said
 			where = "the game's frame" if frame == 'game' else 'the region asked'
 			text += (
 				f' The frame it ended on, {where} only: ({x:.0f}, {y:.0f}) {w:.0f}x{h:.0f} CSS px, drawn afresh at '
@@ -733,10 +761,58 @@ class RetinatServer(BrowserUseServer):
 			with Image.open(io.BytesIO(jpeg)) as img:
 				size = img.size
 			text += f' The frame it ended on ({how}), {size[0]}x{size[1]}{eyes._click_scale(size)}.'
+			if motion:
+				jpeg, said = self._motion_on(jpeg, looks, size[0], (await self._viewport_area())[2])
+				text += ' ' + said
 		return [
 			types.TextContent(type='text', text=text),
 			types.ImageContent(type='image', data=base64.b64encode(jpeg).decode(), mime_type='image/jpeg'),
 		]
+
+	async def _viewport_area(self) -> list[float]:
+		"""The whole viewport, in CSS px, as a region."""
+		assert self.browser_session is not None
+		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		metrics = await cdp.cdp_client.send.Page.getLayoutMetrics(session_id=cdp.session_id)
+		view = metrics['cssLayoutViewport']
+		return [0.0, 0.0, float(view['clientWidth']), float(view['clientHeight'])]
+
+	async def _grey_look(self, area: list[float]) -> Any:
+		"""`area` (viewport CSS px) as the compositor draws it now, grey, MOTION_WIDTH px wide: what the eyes read
+		movement from."""
+		import io
+
+		import numpy as np
+		from PIL import Image
+
+		from browser_use.browser.capture import capture_screenshot
+
+		assert self.browser_session is not None
+		x, y, w, h = area
+		cdp = await self.browser_session.get_or_create_cdp_session(focus=False)
+		clip = {'x': x, 'y': y, 'width': w, 'height': h, 'scale': min(1.0, MOTION_WIDTH / max(1.0, w))}
+		shot = await capture_screenshot(cdp.cdp_client, {'format': 'jpeg', 'quality': 85, 'clip': clip}, cdp.session_id)
+		with Image.open(io.BytesIO(base64.b64decode(shot['data']))) as img:
+			grey = img.convert('L')
+			if grey.width != MOTION_WIDTH:  # the same size every time, whatever the capture came back at
+				grey = grey.resize((MOTION_WIDTH, max(1, round(grey.height * MOTION_WIDTH / grey.width))))
+			return np.asarray(grey)
+
+	def _motion_on(self, jpeg: bytes, looks: list[tuple[float, Any]], picture_width: int, css_width: float) -> tuple[bytes, str]:
+		"""What moved during the step, read by the eyes from `looks`, drawn on the picture (`jpeg`) and said in words."""
+		import io
+
+		from PIL import Image
+
+		from browser_use.eyes import moving
+
+		movement = moving.read(looks)
+		with Image.open(io.BytesIO(jpeg)) as img:
+			picture = img.convert('RGB')
+		moving.draw(picture, movement, picture_width / MOTION_WIDTH)
+		out = io.BytesIO()
+		picture.save(out, format='JPEG', quality=85)
+		return out.getvalue(), moving.describe(movement, picture_width / MOTION_WIDTH, css_width / MOTION_WIDTH)
 
 	async def _game_region(self) -> list[float] | None:
 		"""The largest canvas, frame or video in view, in viewport CSS px: where a game is drawn."""

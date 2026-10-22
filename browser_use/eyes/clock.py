@@ -28,6 +28,7 @@ A score made in step mode is not real-time play: the game waited for every decis
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -232,11 +233,13 @@ class PageClock:
 		charge_thinking: bool = False,
 		stop_at: float | None = None,
 		fps: float = 60.0,
+		seen: Callable[[int, float], Awaitable[None]] | None = None,
 	) -> Stepped:
 		"""Play `ms` of game time a frame at a time with `hold` down throughout (and after, until a step leaves a key
 		out) and `tap` down for its first ~50 ms, then stand still again. `charge_thinking` first plays the time since
 		the last step ended with the last step's keys. `stop_at` (monotonic) ends the step after the frame playing then.
-		`fps` below 60 draws fewer frames per second of game time, each a longer tick (frame skip)."""
+		`fps` below 60 draws fewer frames per second of game time, each a longer tick (frame skip). `seen(i, game_ms)` is
+		awaited once each of the step's frames is drawn, with the frame's index and its game time into the step."""
 		assert self.paused, 'pause() first'
 		assert 0 < ms <= STEP_MAX_MS, f'a step plays 1-{STEP_MAX_MS:.0f} ms'
 		assert FPS_MIN <= fps <= 60, f'fps is {FPS_MIN:.0f}-60'
@@ -261,7 +264,7 @@ class PageClock:
 		played = 0.0
 		if any(k in released for k in taps) and frames > 1:
 			# a key let go and pressed again before the same frame is no new press to a game that polls keys each frame
-			played = await self._play(1, stop_at=stop_at, frame_ms=frame_ms)
+			played = await self._play(1, stop_at=stop_at, frame_ms=frame_ms, seen=seen)
 			frames -= 1
 		for key in taps:
 			await self._key(key, 'keyDown')
@@ -272,6 +275,7 @@ class PageClock:
 				release_after=(tap_frames, taps),
 				first=round(played / frame_ms),
 				frame_ms=frame_ms,
+				seen=seen,
 			)
 		finally:
 			for key in taps:  # a step shorter than a tap still lets go of it
@@ -330,9 +334,10 @@ class PageClock:
 		release_after: tuple[int, list[str]] | None = None,
 		first: int = 0,
 		frame_ms: float = FRAME_MS,
+		seen: Callable[[int, float], Awaitable[None]] | None = None,
 	) -> float:
 		"""Move the clock `frames` frames of `frame_ms` each, waiting for each to be drawn; the game time played. `first`
-		is how many frames of the same step came before, so the milliseconds keep adding up."""
+		is how many frames of the same step came before, so the milliseconds keep adding up. `seen` as in step()."""
 		after, keys = release_after or (0, [])
 		played = 0
 		for i in range(first, first + frames):
@@ -344,6 +349,8 @@ class PageClock:
 			self._waits['clock'] += t1 - t0
 			self._waits['draw'] += time.monotonic() - t1
 			played = i + 1 - first
+			if seen is not None:
+				await seen(i, float(round((i + 1) * frame_ms)))
 			if played == after:
 				for key in keys:
 					await self._key(key, 'keyUp')
