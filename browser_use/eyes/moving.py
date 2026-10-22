@@ -5,7 +5,7 @@ not which way they go or how fast (found when a model played The World's Hardest
 and it died crossing them). The eyes take frames across the step instead, and from them say what moved, which way and
 how fast in game time, and whether the whole view scrolled (a side-scroller's camera following the player).
 
-How. Frames are grey pictures of the game's region, a few hundred px wide, each with the game time it was drawn at,
+How (OpenCV's primitives, numpy for the rest). Frames are grey pictures of the game's region, a few hundred px wide, each with the game time it was drawn at,
 in order, the first from before the step. The view's own movement is found by phase correlation of the first and the
 last frame and taken out. What stands still is the per-pixel median of the frames; what differs from it is grouped
 into blobs, and each blob is followed from frame to frame by its nearest successor. What is said is what is there as
@@ -175,17 +175,14 @@ def _scrolled(first: np.ndarray, last: np.ndarray) -> tuple[float, float] | None
 
 
 def _shift(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
-	"""How far b's content sits from a's, (dx, dy) in px, by phase correlation; (0, 0) if no shift is believable."""
-	h, w = a.shape
-	window = np.outer(np.hanning(h), np.hanning(w)).astype(np.float32)
-	fa, fb = np.fft.fft2((a - a.mean()) * window), np.fft.fft2((b - b.mean()) * window)
-	cross = fb * np.conj(fa)
-	cross /= np.abs(cross) + 1e-6
-	surface = np.fft.ifft2(cross).real
-	peak = np.unravel_index(int(np.argmax(surface)), surface.shape)
-	if surface[peak] < SCROLL_PEAK or surface[0, 0] >= surface[peak] * 0.9:
+	"""How far b's content sits from a's, (dx, dy) in px, by phase correlation (OpenCV's, Hanning-windowed); (0, 0)
+	if no shift is believable."""
+	import cv2
+
+	window = cv2.createHanningWindow((a.shape[1], a.shape[0]), cv2.CV_32F)
+	(dx, dy), response = cv2.phaseCorrelate(a.astype(np.float32), b.astype(np.float32), window)
+	if response < SCROLL_PEAK:
 		return (0.0, 0.0)
-	dy, dx = (p if p <= n // 2 else p - n for p, n in zip(peak, surface.shape))
 	return (float(dx), float(dy))
 
 
@@ -202,33 +199,24 @@ def _aligned(frames: list[np.ndarray]) -> list[np.ndarray]:
 
 
 def _blobs(mask: np.ndarray) -> list[tuple[float, float, float]]:
-	"""(x, y, area) of each connected group of what differs, its cells CELL px square."""
+	"""(x, y, area) of each connected group of what differs, on a grid of CELL px cells (OpenCV's connected
+	components), its centre weighted by how much of each cell differs."""
+	import cv2
+
 	h, w = mask.shape
 	gh, gw = h // CELL, w // CELL
-	cells = mask[: gh * CELL, : gw * CELL].reshape(gh, CELL, gw, CELL).sum(axis=(1, 3))
-	on = cells > 0
-	seen = np.zeros_like(on)
-	blobs = []
-	for start in zip(*np.nonzero(on)):
-		if seen[start]:
-			continue
-		seen[start] = True
-		stack, members = [start], []
-		while stack:
-			cy, cx = stack.pop()
-			members.append((cy, cx))
-			for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
-				if 0 <= ny < gh and 0 <= nx < gw and on[ny, nx] and not seen[ny, nx]:
-					seen[ny, nx] = True
-					stack.append((ny, nx))
-		if len(members) < MIN_BLOB_CELLS:
-			continue
-		weights = np.array([cells[c] for c in members], dtype=np.float32)
-		ys = (np.array([c[0] for c in members]) + 0.5) * CELL
-		xs = (np.array([c[1] for c in members]) + 0.5) * CELL
-		blobs.append(
-			(float((xs * weights).sum() / weights.sum()), float((ys * weights).sum() / weights.sum()), float(weights.sum()))
-		)
+	cells = mask[: gh * CELL, : gw * CELL].reshape(gh, CELL, gw, CELL).sum(axis=(1, 3)).astype(np.float32)
+	count, labels, stats, _ = cv2.connectedComponentsWithStats((cells > 0).astype(np.uint8), connectivity=4)
+	ys, xs = np.indices(cells.shape)
+	flat, weights = labels.ravel(), cells.ravel()
+	mass = np.bincount(flat, weights=weights, minlength=count)
+	sum_x = np.bincount(flat, weights=weights * (xs.ravel() + 0.5), minlength=count)
+	sum_y = np.bincount(flat, weights=weights * (ys.ravel() + 0.5), minlength=count)
+	blobs = [
+		(float(sum_x[i] / mass[i] * CELL), float(sum_y[i] / mass[i] * CELL), float(mass[i]))
+		for i in range(1, count)
+		if stats[i, cv2.CC_STAT_AREA] >= MIN_BLOB_CELLS
+	]
 	return blobs
 
 
@@ -238,13 +226,15 @@ def _matched(
 	"""The track with each look's position found by matching the thing's look at the end (a patch of the last picture
 	around it) near where its blob was: a blob is only what differs from the still picture, and for a thing slower than
 	its own size that is a fragment whose centre lags behind it."""
+	import cv2
+
 	_, xe, ye, area = track[-1]
 	h, w = pictures[-1].shape
 	r = int(max(3, math.sqrt(area) / 2 + 2))
 	cx, cy = int(round(xe)), int(round(ye))
 	if cx - r < 0 or cy - r < 0 or cx + r >= w or cy + r >= h:
 		return track
-	template = pictures[-1][cy - r : cy + r + 1, cx - r : cx + r + 1]
+	template = np.ascontiguousarray(pictures[-1][cy - r : cy + r + 1, cx - r : cx + r + 1], dtype=np.float32)
 	out = []
 	for t, x, y, a in track:
 		picture = pictures[at[t]]
@@ -255,9 +245,8 @@ def _matched(
 		if window.shape[0] < 2 * r + 1 or window.shape[1] < 2 * r + 1:
 			out.append((t, x, y, a))
 			continue
-		views = np.lib.stride_tricks.sliding_window_view(window, template.shape)
-		cost = ((views - template) ** 2).sum(axis=(2, 3))
-		by, bx = np.unravel_index(int(np.argmin(cost)), cost.shape)
+		cost = cv2.matchTemplate(np.ascontiguousarray(window, dtype=np.float32), template, cv2.TM_SQDIFF)
+		_, _, (bx, by), _ = cv2.minMaxLoc(cost)
 		out.append((t, float(x0 + bx + r), float(y0 + by + r), a))
 	return out
 
