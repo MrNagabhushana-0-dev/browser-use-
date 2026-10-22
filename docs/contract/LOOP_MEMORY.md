@@ -46,3 +46,7 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   calls retinat_watch until=event (stop at the first cut or sound change) instead of until=time 12 s; seconds=12 stays as
   the cap. Target: B (event lower bound median). Keep if B median strictly drops AND C2 does not worsen; A is recorded
   as the trade-off (a later product change targets it).
+- 2026-10-22 E1 attempt 1 VOID (MEASURED from its report, recording retinat-20261022-150817.mp4): the film never played,
+  both watches said MEDIA_ERR_SRC_NOT_SUPPORTED, so there is nothing to measure. The same page played on a probe right
+  after (covering 0.7-2.5 s). Cause not proven; suspect: E0's tab still playing the same stream (its last watch did not
+  pause). Protocol addition for every run from here: a fresh browser (Retinat restarted) before the watcher starts.
