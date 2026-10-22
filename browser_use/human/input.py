@@ -64,6 +64,19 @@ NAMED_KEYS: dict[str, tuple[str, int, str | None]] = {
 	'Space': ('Space', 32, ' '),
 }
 
+
+def _key_fields(key: str) -> tuple[str | None, int | None, str | None]:
+	"""(code, key code, text) a keyboard sends for a key: the named ones above, and a single letter or digit as its
+	key (KeyQ and 81 for q) — games read e.code and e.keyCode, not only e.key."""
+	if key in NAMED_KEYS:
+		return NAMED_KEYS[key]
+	if len(key) == 1 and key.isascii() and key.isalpha():
+		return f'Key{key.upper()}', ord(key.upper()), key
+	if len(key) == 1 and key.isdigit():
+		return f'Digit{key}', ord(key), key
+	return None, None, None
+
+
 # Characters inside a typed string that are really key presses.
 _CHAR_KEYS = {'\n': 'Enter', '\r': 'Enter', '\t': 'Tab'}
 
@@ -245,7 +258,7 @@ class HumanInput:
 	async def press(self, key: str, code: str | None = None, key_code: int | None = None, target_id=None) -> None:
 		"""Press and release a named key such as Enter, Tab, ArrowDown or Escape."""
 		cdp = await self._session(target_id)
-		known_code, known_key_code, text = NAMED_KEYS.get(key, (None, None, None))
+		known_code, known_key_code, text = _key_fields(key)
 		params: dict[str, Any] = {'key': key}
 		if code or known_code:
 			params['code'] = code or known_code
@@ -276,8 +289,9 @@ class HumanInput:
 				),
 			)
 
-	async def hold(self, key: str, seconds: float, target_id=None) -> None:
-		"""Hold a key down for a while, then release it.
+	async def hold(self, key: str, seconds: float, target_id=None, also: list[str] | tuple[str, ...] = ()) -> None:
+		"""Hold a key down for a while, then release it; keys in `also` are held down with it (pressed just before it,
+		as a run key is down before the jump key of a running jump).
 
 		A tap and a hold are different inputs, and games are where the difference shows:
 		accelerating, charging a jump and steering through a corner are all "the key is
@@ -286,45 +300,47 @@ class HumanInput:
 
 		Auto-repeat is part of it. A real keyboard re-sends keyDown while a key is held,
 		and code that counts those events rather than tracking state will otherwise see a
-		single frame of input.
+		single frame of input. Only the key pressed last repeats, as on a keyboard.
 		"""
 		assert seconds >= 0, 'hold() needs a non-negative duration'
 		cdp = await self._session(target_id)
-		code, key_code, text = NAMED_KEYS.get(key, (None, None, None))
-
-		params: dict[str, Any] = {'key': key}
-		if code:
-			params['code'] = code
-		if key_code is not None:
-			params['windowsVirtualKeyCode'] = key_code
-			params['nativeVirtualKeyCode'] = key_code
-		if text is not None:
-			params['text'] = text
-			params['unmodifiedText'] = text
-		up = {k: v for k, v in params.items() if k not in ('text', 'unmodifiedText')}
-
-		await cdp.cdp_client.send.Input.dispatchKeyEvent(
-			params={'type': 'keyDown', **params},  # type: ignore[arg-type]
-			session_id=cdp.session_id,
-		)
+		pressed: list[dict[str, Any]] = []
 		try:
+			for name in [*also, key]:
+				code, key_code, text = _key_fields(name)
+				params: dict[str, Any] = {'key': name}
+				if code:
+					params['code'] = code
+				if key_code is not None:
+					params['windowsVirtualKeyCode'] = key_code
+					params['nativeVirtualKeyCode'] = key_code
+				if text is not None:
+					params['text'] = text
+					params['unmodifiedText'] = text
+				pressed.append(params)
+				await cdp.cdp_client.send.Input.dispatchKeyEvent(
+					params={'type': 'keyDown', **params},  # type: ignore[arg-type]
+					session_id=cdp.session_id,
+				)
 			deadline = time.monotonic() + seconds
 			while time.monotonic() < deadline:
 				# ~30Hz, which is roughly what a held key repeats at once the initial delay has
 				# passed. Jittered, because a machine-perfect interval is itself a signal.
 				await asyncio.sleep(min(self.rng.uniform(0.028, 0.038), max(0.0, deadline - time.monotonic())))
 				await cdp.cdp_client.send.Input.dispatchKeyEvent(
-					params={'type': 'keyDown', 'autoRepeat': True, **params},  # type: ignore[arg-type]
+					params={'type': 'keyDown', 'autoRepeat': True, **pressed[-1]},  # type: ignore[arg-type]
 					session_id=cdp.session_id,
 				)
 		finally:
-			await self._release(
-				'keyUp',
-				cdp.cdp_client.send.Input.dispatchKeyEvent(
-					params={'type': 'keyUp', **up},  # type: ignore[arg-type]
-					session_id=cdp.session_id,
-				),
-			)
+			for params in reversed(pressed):
+				up = {k: v for k, v in params.items() if k not in ('text', 'unmodifiedText')}
+				await self._release(
+					'keyUp',
+					cdp.cdp_client.send.Input.dispatchKeyEvent(
+						params={'type': 'keyUp', **up},  # type: ignore[arg-type]
+						session_id=cdp.session_id,
+					),
+				)
 
 	async def press_and_hold(self, box: tuple[float, float, float, float], seconds: float, target_id=None) -> None:
 		"""Press the mouse inside a box, keep it down, then release where it went.

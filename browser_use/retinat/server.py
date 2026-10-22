@@ -32,6 +32,7 @@ Chrome with `--cdp-url`.
 import asyncio
 import base64
 import json
+import math
 import os
 import sys
 import time
@@ -121,6 +122,10 @@ STEP_GAME_WIDTH = 800
 # frames, or this many spread over it (the last included): things must not go far between two looks to be followed
 MOTION_WIDTH = 400
 MOTION_LOOKS = 24
+MOTION_SETTLE_S = 0.15  # after a step, for the stream's last frames of it to arrive
+KEY_HOLD_MAX_MS = 5000.0  # the longest retinat_key holds keys down (a step plays at most as long)
+KEY_WITH_MAX = 4  # keys held down along with the key
+KEY_ANSWER_S = 1.0  # what a key hold keeps of its call to let the keys go and answer
 # The largest canvas, frame or video in view (its visible part), where a game is drawn, as [x, y, width, height]
 _GAME_REGION_JS = r"""(() => {
 	let best = null, bestArea = 0;
@@ -560,8 +565,20 @@ class RetinatServer(BrowserUseServer):
 			await act(eyes.hand.type_text(str(args['text'])))
 			return f'Typed {len(str(args["text"]))} characters.'
 		if name == 'retinat_key':
-			await act(eyes.hand.press(str(args['key'])))
-			return f'Pressed {args["key"]}.'
+			key, hold_ms, also = str(args['key']), args.get('hold_ms'), args.get('with') or []
+			if hold_ms is None and not also:
+				await act(eyes.hand.press(key))
+				return f'Pressed {key}.'
+			if not isinstance(also, list) or len(also) > KEY_WITH_MAX or not all(isinstance(k, str) and k for k in also):
+				raise Refused(f'with is a list of up to {KEY_WITH_MAX} key names held down along with key')
+			hold_ms = 100.0 if hold_ms is None else hold_ms
+			fits = KEY_HOLD_MAX_MS
+			if deadline is not None and deadline.bounded:
+				fits = min(fits, (deadline.left() - KEY_ANSWER_S) * 1000)
+			if not isinstance(hold_ms, int | float) or not 0 < hold_ms <= fits:
+				raise Refused(f'hold_ms is how long to hold the keys down, more than 0 and at most {max(0.0, fits):.0f} ms')
+			await act(eyes.hand.hold(key, hold_ms / 1000, also=also))
+			return f'Held {" + ".join([*also, key])} down for {hold_ms:.0f} ms, then let go.'
 		if name == 'retinat_recall':
 			t0, t1 = float(args['t0']), float(args['t1'])
 			if t1 < t0:
@@ -709,25 +726,50 @@ class RetinatServer(BrowserUseServer):
 		stop_at = deadline.at - STEP_ANSWER_S if deadline is not None and deadline.bounded else None
 		charge = bool(args.get('charge_thinking'))
 		region = await self._game_region() if frame == 'game' else (frame if isinstance(frame, list) else None)
+		eyes = await self._eyes()
 		looks: list[tuple[float, Any]] = []  # (game ms into the step, grey picture): what the eyes saw during it
 		seen: Callable[[int, float], Awaitable[None]] | None = None
+		live = None
+		drawn: list[tuple[float, float]] = []  # the stream's clock as each of the step's frames was drawn, its game ms
+		began = 0.0
 		if motion:
-			area = region or await self._viewport_area()
-			total = max(1, round(ms / (1000 / fps)))
-			picks = {round(k * (total - 1) / (MOTION_LOOKS - 1)) for k in range(MOTION_LOOKS)} if total > 1 else {0}
+			view = await self._viewport_area()
+			area = region or view
+			try:  # the eyes watch the compositor's stream of what the page draws, as they watch any video
+				watcher = eyes._page_watcher()
+				# wide enough that the region comes through at least MOTION_WIDTH px wide (a 600 px game was 200 px of
+				# a 640 px stream, and its motion read wrong)
+				await watcher.start(min_width=min(round(view[2]), math.ceil(view[2] * MOTION_WIDTH / max(1.0, area[2]))))
+				live = watcher.live
+			except Exception as e:
+				assert self.browser_session is not None
+				self.browser_session.logger.debug(f'retinat_step: no stream to watch the step on: {type(e).__name__}: {e}')
+			if live is not None:
+				began = live.clock()
+				stream = live
 
-			async def look_at(i: int, game_ms: float) -> None:
-				if i in picks:
-					looks.append((game_ms, await self._grey_look(area)))
+				async def note(i: int, game_ms: float) -> None:
+					drawn.append((stream.clock(), game_ms))
 
-			seen = look_at
-			looks.append((0.0, await self._grey_look(area)))  # as it stands before the step
+				seen = note
+			else:
+				total = max(1, round(ms / (1000 / fps)))
+				picks = {round(k * (total - 1) / (MOTION_LOOKS - 1)) for k in range(MOTION_LOOKS)} if total > 1 else {0}
+
+				async def look_at(i: int, game_ms: float) -> None:
+					if i in picks:
+						looks.append((game_ms, await self._grey_look(area)))
+
+				seen = look_at
+				looks.append((0.0, await self._grey_look(area)))  # as it stands before the step
 		stepped = await act(
 			clock.step(ms, hold=keys['hold'], tap=keys['tap'], charge_thinking=charge, stop_at=stop_at, fps=fps, seen=seen)
 		)
-		if motion and looks[-1][0] < stepped.game_ms:  # the step ended early: the eyes see where it ended too
+		if motion and live is not None:
+			await asyncio.sleep(MOTION_SETTLE_S)  # the stream's last frames of the step arrive
+			looks = self._stream_looks(live, began, drawn, area, view)
+		elif motion and looks[-1][0] < stepped.game_ms:  # the step ended early: the eyes see where it ended too
 			looks.append((stepped.game_ms, await self._grey_look(area)))
-		eyes = await self._eyes()
 		cut = f' of the {ms:.0f} asked (the call had no time for more)' if stepped.game_ms < ms - FRAME_MS else ''
 		thought = f'First played your {stepped.charged_ms / 1000:.1f}s of thinking with the last keys held. ' if charge else ''
 		held = f'holding {", ".join(stepped.held)}' if stepped.held else 'no keys held'
@@ -745,7 +787,7 @@ class RetinatServer(BrowserUseServer):
 				return text + ' No frame could be captured.'
 			size = zoomed.image_size or (0, 0)
 			if motion:
-				jpeg, said = self._motion_on(jpeg, looks, size[0], w)
+				jpeg, said = self._motion_on(jpeg, looks, size[0])
 				text += ' ' + said
 			where = "the game's frame" if frame == 'game' else 'the region asked'
 			text += (
@@ -762,7 +804,7 @@ class RetinatServer(BrowserUseServer):
 				size = img.size
 			text += f' The frame it ended on ({how}), {size[0]}x{size[1]}{eyes._click_scale(size)}.'
 			if motion:
-				jpeg, said = self._motion_on(jpeg, looks, size[0], (await self._viewport_area())[2])
+				jpeg, said = self._motion_on(jpeg, looks, size[0])
 				text += ' ' + said
 		return [
 			types.TextContent(type='text', text=text),
@@ -776,6 +818,46 @@ class RetinatServer(BrowserUseServer):
 		metrics = await cdp.cdp_client.send.Page.getLayoutMetrics(session_id=cdp.session_id)
 		view = metrics['cssLayoutViewport']
 		return [0.0, 0.0, float(view['clientWidth']), float(view['clientHeight'])]
+
+	def _stream_looks(
+		self, live: Any, began: float, drawn: list[tuple[float, float]], area: list[float], view: list[float]
+	) -> list[tuple[float, Any]]:
+		"""The step as the compositor's stream showed it: the newest frame shown before it (game time 0), then those
+		shown during it, each at the game time of the last of the step's frames drawn before Chrome showed it (the
+		stream runs a frame or two behind the drawing, so a frame's time is good to a frame or so; the first and last
+		are exact, the page standing still before and after a step), the latest frame for each time kept, each cut to
+		`area` and made grey, MOTION_WIDTH px wide. Only frames of the stream's own size (the most common) are read: a
+		capture taken meanwhile shows up in the stream too, of the part of the page it took and at its own size."""
+		import io
+		from collections import Counter
+
+		import numpy as np
+		from PIL import Image
+
+		def size(data: bytes) -> tuple[int, int]:
+			with Image.open(io.BytesIO(data)) as img:  # reads the header only
+				return img.size
+
+		frames = [(f, size(f.data)) for f in live.frames]
+		own = Counter(s for _, s in frames).most_common(1)[0][0] if frames else (0, 0)
+		shown = sorted(
+			((f.swapped_at if f.swapped_at is not None else f.at, f) for f, s in frames if s == own), key=lambda pair: pair[0]
+		)
+		before = [f for at, f in shown if at < began]
+		first_ms = drawn[0][1] if drawn else 0.0
+		by_time: dict[float, Any] = {0.0: before[-1]} if before else {}
+		for at, f in shown:
+			if at >= began:
+				by_time[max([first_ms] + [g for drawn_at, g in drawn if drawn_at <= at])] = f
+		x, y, w, h = area
+		looks = []
+		for game_ms in sorted(by_time)[-MOTION_LOOKS - 1 :]:
+			with Image.open(io.BytesIO(by_time[game_ms].data)) as img:
+				scale = img.width / max(1.0, view[2])
+				grey = img.convert('L').crop((round(x * scale), round(y * scale), round((x + w) * scale), round((y + h) * scale)))
+				grey = grey.resize((MOTION_WIDTH, max(1, round(h * MOTION_WIDTH / max(1.0, w)))))
+				looks.append((game_ms, np.asarray(grey)))
+		return looks
 
 	async def _grey_look(self, area: list[float]) -> Any:
 		"""`area` (viewport CSS px) as the compositor draws it now, grey, MOTION_WIDTH px wide: what the eyes read
@@ -798,7 +880,7 @@ class RetinatServer(BrowserUseServer):
 				grey = grey.resize((MOTION_WIDTH, max(1, round(grey.height * MOTION_WIDTH / grey.width))))
 			return np.asarray(grey)
 
-	def _motion_on(self, jpeg: bytes, looks: list[tuple[float, Any]], picture_width: int, css_width: float) -> tuple[bytes, str]:
+	def _motion_on(self, jpeg: bytes, looks: list[tuple[float, Any]], picture_width: int) -> tuple[bytes, str]:
 		"""What moved during the step, read by the eyes from `looks`, drawn on the picture (`jpeg`) and said in words."""
 		import io
 
@@ -812,7 +894,7 @@ class RetinatServer(BrowserUseServer):
 		moving.draw(picture, movement, picture_width / MOTION_WIDTH)
 		out = io.BytesIO()
 		picture.save(out, format='JPEG', quality=85)
-		return out.getvalue(), moving.describe(movement, picture_width / MOTION_WIDTH, css_width / MOTION_WIDTH)
+		return out.getvalue(), moving.describe(movement, picture_width / MOTION_WIDTH)
 
 	async def _game_region(self) -> list[float] | None:
 		"""The largest canvas, frame or video in view, in viewport CSS px: where a game is drawn."""

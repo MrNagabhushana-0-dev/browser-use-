@@ -1249,7 +1249,9 @@ requestAnimationFrame(frame);
 async def test_a_step_says_what_moved_how_fast_and_which_way_as_eyes_see_it(retinat, site):
 	"""The owner's ask: play with the eyes, not by screenshots. A step showed one still frame, and a still frame cannot
 	show which way anything moves (the World's Hardest Game player's own complaint). The eyes now read the frames the
-	page drew during the step and say what moved, which way and how fast in game time, and draw where each went."""
+	page drew during the step and say what moved, which way and how fast in game time, and draw where each went. Speeds
+	are in the picture's px, as its positions are: in page px, a player that went by the picture misjudged every move by
+	the picture's scale (0.76 on The World's Hardest Game)."""
 	import re
 
 	site.expect_request('/movers').respond_with_data(MOVERS, content_type='text/html')
@@ -1260,8 +1262,9 @@ async def test_a_step_says_what_moved_how_fast_and_which_way_as_eyes_see_it(reti
 	assert not stepped.is_error, text
 	assert '2 things moved' in text, text
 	speeds = {d: float(v) for d, v in re.findall(r'moving (\w+) at (\d+) px/s', text)}
-	assert speeds.get('right', 0) == pytest.approx(120, rel=0.2), text
-	assert speeds.get('down', 0) == pytest.approx(60, rel=0.25), text
+	# in the picture's px, as its positions are: the 600 px canvas is drawn 800 px wide, so 120 and 60 page px/s
+	assert speeds.get('right', 0) == pytest.approx(160, rel=0.2), text
+	assert speeds.get('down', 0) == pytest.approx(80, rel=0.25), text
 	assert any(isinstance(b, types.ImageContent) for b in stepped.content), 'the picture with where each went'
 
 
@@ -1293,7 +1296,25 @@ async def test_a_step_says_when_the_whole_view_scrolls(retinat, site):
 	stepped = await _call(retinat, 'retinat_step', {'ms': 400, 'frame': 'game'})
 	text = _text(stepped)
 	scrolled = re.search(r'the whole view scrolled (\w+) at (\d+) px/s', text)
-	assert scrolled and scrolled[1] == 'right' and float(scrolled[2]) == pytest.approx(150, rel=0.2), text
+	assert scrolled and scrolled[1] == 'right' and float(scrolled[2]) == pytest.approx(200, rel=0.1), text
+
+
+def test_a_world_that_repeats_is_not_read_at_the_wrong_shift():
+	"""A tiled floor lines up again every tile, so the shift between the first and last frame of a step has many
+	answers; the eyes follow it frame by frame and still read how fast the view scrolled."""
+	import numpy as np
+
+	from browser_use.eyes import moving
+
+	def world(off: float) -> np.ndarray:
+		x = np.arange(400) + off
+		floor = np.where(x % 24 < 12, 70.0, 180.0)[None, :].repeat(200, 0)
+		floor[:40] = 120 + 40 * np.sin(x / 37.0)[None, :]  # a little sky that does not repeat
+		return floor.astype(np.float32)
+
+	movement = moving.read([(i * 1000 / 60, world(100 * i / 60)) for i in range(25)])  # 100 px/s for 0.4 s
+	assert movement.scroll is not None and movement.scroll[0] == pytest.approx(-100, rel=0.15), movement.scroll
+	assert abs(movement.scroll[1]) < 5, movement.scroll
 
 
 # A dot that sets off right at 150 px/s when a key goes down, and bounces back left after 0.3 s of game time.
@@ -1325,7 +1346,7 @@ async def test_a_step_says_which_way_a_thing_goes_at_its_end_not_on_average(reti
 	stepped = await _call(retinat, 'retinat_step', {'ms': 500, 'frame': 'game', 'tap': ['ArrowRight']})
 	text = _text(stepped)
 	moved = re.findall(r'moving (\w+) at (\d+) px/s', text)
-	assert len(moved) == 1 and moved[0][0] == 'left' and float(moved[0][1]) == pytest.approx(150, rel=0.25), text
+	assert len(moved) == 1 and moved[0][0] == 'left' and float(moved[0][1]) == pytest.approx(200, rel=0.25), text
 
 
 async def test_a_hung_tab_does_not_hold_up_the_eyes_in_the_next_one(retinat, site):
@@ -1376,3 +1397,155 @@ async def test_no_call_outlives_its_budget_on_a_page_that_hangs(retinat_short, s
 	took = time.monotonic() - began
 	assert took < retinat_short.call_budget_s + retinat_short.backstop_grace_s + 3, f'the look took {took:.0f}s'
 	assert look.is_error, _text(look)
+
+
+# A row of coins drifting left together over a flat dark sky (too plain for the view's scroll to be found from it),
+# and a player rising through them, from the first key press on.
+TOGETHER = """<!doctype html><title>Together</title><body style="margin:0;background:#fff">
+<canvas id="c" width="600" height="300" style="display:block;margin:20px"></canvas><script>
+const g = document.getElementById('c').getContext('2d');
+let go = null;
+addEventListener('keydown', () => { if (go === null) go = performance.now(); });
+function frame() {
+  const s = go === null ? 0 : (performance.now() - go) / 1000;
+  g.fillStyle = '#112'; g.fillRect(0, 0, 600, 300);
+  g.fillStyle = '#fc0';
+  for (let i = 0; i < 8; i++) { g.beginPath(); g.arc(100 + i * 60 - 90 * s, 80 + (i % 2) * 40, 8, 0, 7); g.fill(); }
+  g.fillStyle = '#0f8'; g.fillRect(120, 260 - 60 * s, 18, 18);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body>"""
+
+
+async def test_things_moving_together_are_told_as_one_group(retinat, site):
+	"""Found when a model played Neon Challenge Legends: coins and scenery drifting with the world were each listed as a
+	mover, and the list was noise. Things going the same way at the same speed are now told as one group, with where
+	each is, and what moves on its own is told apart."""
+	import re
+
+	site.expect_request('/together').respond_with_data(TOGETHER, content_type='text/html')
+	await _open_started(retinat, site.url_for('/together'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	text = _text(await _call(retinat, 'retinat_step', {'ms': 400, 'frame': 'game', 'tap': ['ArrowUp']}))
+	group = re.search(r'(\d+) things moving together (\w+) at (\d+) px/s', text)
+	assert group and int(group[1]) >= 5 and group[2] == 'left', text
+	alone = re.findall(r'#\d+ at \(\d+, \d+\) moving (\w+) at (\d+) px/s', text)
+	assert [d for d, _ in alone] == ['up'], text
+
+
+async def test_a_step_too_short_to_see_motion_says_so(retinat, site):
+	"""Found when a model played The World's Hardest Game: after very short steps the eyes' trails jumped and named the
+	wrong movers, from two or three frames. A step with too few frames to follow anything now says so instead."""
+	site.expect_request('/movers').respond_with_data(MOVERS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/movers'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	text = _text(await _call(retinat, 'retinat_step', {'ms': 33, 'frame': 'game', 'fps': 30}))
+	assert 'too short to see what moves' in text and 'moving' not in text.split('too short')[1][:200], text
+
+
+async def test_the_eyes_read_a_step_from_the_video_stream_not_from_screenshots(retinat, site):
+	"""The owner's ask, and what the players measured: a step's eyes took a screenshot at every frame (~166 ms each, 4-10
+	s a step, so one player turned motion off). The eyes now read the compositor's own stream of the frames the page
+	drew, as they watch any video; the step takes one picture, the one it shows."""
+	import re
+
+	from browser_use.browser import capture
+
+	site.expect_request('/movers').respond_with_data(MOVERS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/movers'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	sent = capture.captures_taken
+	text = _text(await _call(retinat, 'retinat_step', {'ms': 500, 'frame': 'game'}))
+	assert capture.captures_taken - sent <= 1, f'{capture.captures_taken - sent} screenshots for one step'
+	speeds = {d: float(v) for d, v in re.findall(r'moving (\w+) at (\d+) px/s', text)}
+	assert speeds.get('right', 0) == pytest.approx(160, rel=0.2) and speeds.get('down', 0) == pytest.approx(80, rel=0.25), text
+
+
+KEYS = """<!doctype html><title>Keys</title><body><script>
+window.seen = [];
+for (const type of ['keydown', 'keyup']) addEventListener(type, (e) => seen.push([type, e.key, performance.now(), e.repeat, e.code, e.keyCode]));
+</script></body>"""
+
+
+async def _keys_seen(retinat) -> list:
+	assert retinat.browser_session is not None
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	got = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'window.seen', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	return got['result']['value']
+
+
+async def test_a_key_can_be_held_down_for_a_while_when_playing_live(retinat, site):
+	"""A tap moves a platformer's figure a few px; walking a known distance is the key held down, so retinat_key holds
+	it for hold_ms when asked."""
+	site.expect_request('/keys').respond_with_data(KEYS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/keys'))
+	said = _text(await _call(retinat, 'retinat_key', {'key': 'ArrowRight', 'hold_ms': 400}))
+	seen = await _keys_seen(retinat)
+	downs = [s for s in seen if s[0] == 'keydown']
+	ups = [s for s in seen if s[0] == 'keyup']
+	assert downs and ups and all(s[1] == 'ArrowRight' for s in seen), seen
+	assert 350 <= ups[-1][2] - downs[0][2] <= 1200, seen
+	assert 'held' in said.lower() and '400' in said, said
+
+
+async def test_keys_held_together_go_down_together_and_come_up_together(retinat, site):
+	"""A running jump is the jump key pressed while the run key is down: `with` holds other keys alongside."""
+	site.expect_request('/keys').respond_with_data(KEYS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/keys'))
+	await _call(retinat, 'retinat_key', {'key': 'ArrowUp', 'hold_ms': 200, 'with': ['ArrowRight']})
+	seen = await _keys_seen(retinat)
+	first_up = min(s[2] for s in seen if s[0] == 'keyup')
+	down_before = {s[1] for s in seen if s[0] == 'keydown' and s[2] < first_up}
+	assert down_before == {'ArrowRight', 'ArrowUp'}, seen
+	assert {s[1] for s in seen if s[0] == 'keyup'} == {'ArrowRight', 'ArrowUp'}, seen
+
+
+async def test_a_hold_longer_than_a_call_can_wait_is_refused(retinat, site):
+	site.expect_request('/keys').respond_with_data(KEYS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/keys'))
+	result = await _call(retinat, 'retinat_key', {'key': 'ArrowRight', 'hold_ms': 60_000})
+	assert result.is_error and 'hold_ms' in _text(result), _text(result)
+	assert await _keys_seen(retinat) == []
+
+
+async def test_a_letter_held_down_says_which_key_it_is_as_a_keyboard_does(retinat, site):
+	"""Games read e.code or e.keyCode (QWOP's Q W O P), not only e.key: a letter comes with KeyQ and 81, as in step mode."""
+	site.expect_request('/keys').respond_with_data(KEYS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/keys'))
+	await _call(retinat, 'retinat_key', {'key': 'q', 'hold_ms': 150, 'with': ['p']})
+	seen = await _keys_seen(retinat)
+	assert {(s[1], s[4], s[5]) for s in seen if s[0] == 'keydown'} == {('q', 'KeyQ', 81), ('p', 'KeyP', 80)}, seen
+
+
+async def test_a_recording_stops_and_is_saved_when_the_page_has_hung(retinat_short, site):
+	"""Found when a model played Level Devil: its page hung, a look ran out of time, and stopping the recording then ran
+	out of time too and said nothing, while the next stop said no recording was running. The video is the record of
+	what happened, a hung page most of all: stopping it answers within the call's time, and says where it is."""
+	import asyncio
+	import re
+	import time
+	from pathlib import Path
+
+	site.expect_request('/plain-hang').respond_with_data(
+		'<!doctype html><title>Hang</title><p>soon</p>', content_type='text/html'
+	)
+	await _open_started(retinat_short, site.url_for('/plain-hang'))
+	started = await _call(retinat_short, 'retinat_record', {'action': 'start', 'framerate': 4})
+	assert not started.is_error, _text(started)
+	await asyncio.sleep(1.0)
+	cdp = await retinat_short.browser_session.get_or_create_cdp_session(focus=False)
+	await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'setTimeout(() => { for (;;) {} }, 50); 1'}, session_id=cdp.session_id
+	)
+	await asyncio.sleep(0.5)
+	await asyncio.wait_for(_call(retinat_short, 'retinat_look', {}), 60)  # runs out of time on the hung page
+	began = time.monotonic()
+	stopped = await asyncio.wait_for(_call(retinat_short, 'retinat_record', {'action': 'stop'}), 60)
+	took = time.monotonic() - began
+	assert took < retinat_short.call_budget_s + 3, f'the stop took {took:.0f}s'
+	saved = re.search(r'Saved the recording: (\S+\.mp4)', _text(stopped))
+	assert not stopped.is_error and saved, _text(stopped)
+	assert Path(saved[1]).stat().st_size > 0

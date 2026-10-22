@@ -29,11 +29,17 @@ MAX_LINK = 0.2  # of the picture's width: the farthest a thing is followed from 
 MIN_CHANGED = 6  # px that differ for a frame to differ from the one before
 MIN_SCROLL = 2.0  # px over the step for the view itself to have moved
 SCROLL_PEAK = 0.08  # phase correlation peak height for a shift of the whole view to be believed
-SCROLL_CHANGED = 0.25  # of the picture that differs before a shift of the whole view is looked for: a few moving
-# things on a flat background change little of it, and phase correlation would follow one of them
+SCROLL_CHANGED = 0.1  # of the picture that differs before a shift of the whole view is looked for: a few moving
+# things on a flat background change little of it (~2%), and phase correlation would follow one of them; a scroll seen
+# in the compositor's stream (softer than a screenshot) changed 18% of a test world
 SCROLL_EXPLAINS = 0.6  # the shift must leave at most this much of the difference between first and last frame
+SCROLL_NEAR = 0.25  # of the summed frame-to-frame shift: how far from it the first-to-last shift is looked for
 MAX_MOVERS = 12  # said in the answer; more are counted
 MIN_TRACK = 3  # looks a thing is followed through to count, once there are more than that
+MIN_FRAMES = 3  # distinct frames below which a step is too short to tell what moves (two frames give jumps, not motion)
+TOGETHER_MIN = 3  # things going the same way at the same speed that are told as one group (a scrolling world's coins)
+TOGETHER_SPREAD = 0.15  # of their speed, or TOGETHER_PX px/s if more, within which two velocities are the same
+TOGETHER_PX = 15.0
 HEADING_LOOKS = 3  # the last looks that say which way a thing was going as the step ended
 JITTER = 1.0  # px a centroid wanders by without the thing turning
 
@@ -52,9 +58,10 @@ class Mover:
 
 @dataclass
 class Movement:
-	movers: list[Mover]
+	movers: list[Mover]  # each moving on its own
 	scroll: tuple[float, float] | None  # the whole view's velocity, px/s (what it shows moves the other way)
 	frames: int  # distinct frames read
+	together: list[list[Mover]] = field(default_factory=list)  # groups going the same way at the same speed
 
 
 def read(frames: list[tuple[float, np.ndarray]]) -> Movement:
@@ -67,10 +74,10 @@ def read(frames: list[tuple[float, np.ndarray]]) -> Movement:
 	seconds = max(frames[-1][0] - frames[0][0], 1.0) / 1000
 	scroll = None
 	pictures = [f for _, f in frames]
-	shift = _scrolled(pictures[0], pictures[-1])
-	if shift is not None:
-		scroll = (shift[0] / seconds, shift[1] / seconds)
-		pictures = _aligned(pictures)
+	offsets = _scrolled(pictures)
+	if offsets is not None:
+		scroll = (offsets[-1][0] / seconds, offsets[-1][1] / seconds)
+		pictures = _aligned(pictures, offsets)
 	still = np.median(np.stack(pictures), axis=0)
 	blobs = [[(t, *b) for b in _blobs(np.abs(f - still) > DIFF)] for (t, _), f in zip(frames, pictures)]
 	end = frames[-1][0]
@@ -87,8 +94,11 @@ def read(frames: list[tuple[float, np.ndarray]]) -> Movement:
 			continue
 		_, x1, y1, area = track[-1]
 		movers.append(Mover(x1, y1, *velocity, math.sqrt(area), [(x, y) for _, x, y, _ in track]))
+	movers.sort(key=lambda m: -m.size)
+	movers = _one_each(movers)
 	movers.sort(key=lambda m: -math.hypot(m.vx, m.vy))
-	return Movement(movers, scroll, len(frames))
+	together, alone = _together(movers)
+	return Movement(alone, scroll, len(frames), together)
 
 
 def heading(dx: float, dy: float) -> str:
@@ -98,31 +108,46 @@ def heading(dx: float, dy: float) -> str:
 	return names[int((angle + 22.5) // 45) % 8]
 
 
-def describe(movement: Movement, to_picture: float, to_css: float) -> str:
-	"""The movement in words: positions in the picture the model is shown (`to_picture` per frame px), speeds in the
-	page's CSS px per second of game time (`to_css` per frame px)."""
+def describe(movement: Movement, to_picture: float) -> str:
+	"""The movement in words, positions and speeds both in the picture the model is shown (`to_picture` of its px per
+	frame px): a player that judged moves by the picture misjudged every one by its scale when speeds were in page px."""
+	if movement.frames < MIN_FRAMES:
+		return (
+			f'What the eyes saw move: the step was too short to see what moves ({movement.frames} distinct frames); '
+			'step 100 ms or more to see it.'
+		)
 	parts = []
 	if movement.scroll is not None:
 		sx, sy = movement.scroll
 		parts.append(
-			f'the whole view scrolled {heading(-sx, -sy)} at {math.hypot(sx, sy) * to_css:.0f} px/s '
+			f'the whole view scrolled {heading(-sx, -sy)} at {math.hypot(sx, sy) * to_picture:.0f} px/s '
 			f'(what it shows went {heading(sx, sy)})'
+		)
+	for group in movement.together:
+		vx, vy = float(np.mean([m.vx for m in group])), float(np.mean([m.vy for m in group]))
+		where = ', '.join(f'({m.x * to_picture:.0f}, {m.y * to_picture:.0f})' for m in group[:MAX_MOVERS])
+		parts.append(
+			f'{len(group)} things moving together {heading(vx, vy)} at {math.hypot(vx, vy) * to_picture:.0f} px/s, '
+			f'at {where}{" ..." if len(group) > MAX_MOVERS else ""}'
 		)
 	movers = movement.movers
 	if not movers:
-		parts.append('nothing moved' if movement.scroll is None else 'nothing moved against it')
+		if not movement.together:
+			parts.append('nothing moved' if movement.scroll is None else 'nothing moved against it')
 	else:
 		said = [
 			f'#{i} at ({m.x * to_picture:.0f}, {m.y * to_picture:.0f}) moving {heading(m.vx, m.vy)} at '
-			f'{math.hypot(m.vx, m.vy) * to_css:.0f} px/s'
+			f'{math.hypot(m.vx, m.vy) * to_picture:.0f} px/s'
 			for i, m in enumerate(movers[:MAX_MOVERS], 1)
 		]
 		more = f' (and {len(movers) - MAX_MOVERS} more)' if len(movers) > MAX_MOVERS else ''
 		noun = 'thing' if len(movers) == 1 else 'things'
-		parts.append(f'{len(movers)} {noun} moved{more}: ' + '; '.join(said))
+		alone = ' on its own' if len(movers) == 1 else ' on their own'
+		parts.append(f'{len(movers)} {noun} moved{alone if movement.together else ""}{more}: ' + '; '.join(said))
 	return (
-		f'What the eyes saw move over the step ({movement.frames} distinct frames, game time; positions in the picture, '
-		f'speeds in page px/s): ' + '; '.join(parts) + '. On the picture each mover has its number, its trail and an arrow.'
+		f'What the eyes saw move over the step ({movement.frames} distinct frames, game time; positions and speeds in '
+		f"the picture's px): " + '; '.join(parts) + '. On the picture each mover has its number, its trail and an arrow '
+		'(things moving together: arrows in blue).'
 	)
 
 
@@ -131,6 +156,11 @@ def draw(image, movement: Movement, to_picture: float) -> None:
 	from PIL import ImageDraw
 
 	pen = ImageDraw.Draw(image)
+	if movement.frames < MIN_FRAMES:
+		return
+	for group in movement.together:
+		for m in group[:MAX_MOVERS]:
+			_arrow(pen, m, to_picture, (0, 160, 255))
 	for i, m in enumerate(movement.movers[:MAX_MOVERS], 1):
 		trail = [(x * to_picture, y * to_picture) for x, y in m.trail]
 		if len(trail) >= 2:
@@ -147,6 +177,50 @@ def draw(image, movement: Movement, to_picture: float) -> None:
 		pen.text((x + 6, y - 16), f'#{i}', fill=(255, 0, 255))
 
 
+def _arrow(pen, m: Mover, to_picture: float, colour: tuple[int, int, int]) -> None:
+	x, y = m.x * to_picture, m.y * to_picture
+	length = math.hypot(m.vx, m.vy) or 1.0
+	ux, uy = m.vx / length, m.vy / length
+	tip = (x + ux * 16, y + uy * 16)
+	pen.line([(x, y), tip], fill=colour, width=2)
+	pen.polygon(
+		[tip, (tip[0] - ux * 6 - uy * 4, tip[1] - uy * 6 + ux * 4), (tip[0] - ux * 6 + uy * 4, tip[1] - uy * 6 - ux * 4)],
+		fill=colour,
+	)
+
+
+def _one_each(movers: list[Mover]) -> list[Mover]:
+	"""One mover per thing: a thing that moves less than about twice its size leaves its ghost in the still picture,
+	and the hole where the ghost is moves with it, a size behind; the larger of the two is kept (`movers` largest
+	first)."""
+	kept: list[Mover] = []
+	for m in movers:
+		same = any(
+			math.hypot(m.x - k.x, m.y - k.y) <= max(m.size, k.size) + 3
+			and math.hypot(m.vx - k.vx, m.vy - k.vy) <= max(TOGETHER_PX, TOGETHER_SPREAD * math.hypot(k.vx, k.vy))
+			for k in kept
+		)
+		if not same:
+			kept.append(m)
+	return kept
+
+
+def _together(movers: list[Mover]) -> tuple[list[list[Mover]], list[Mover]]:
+	"""Groups of at least TOGETHER_MIN movers going the same way at the same speed (largest first), and the rest."""
+	groups, rest = [], list(movers)
+	while True:
+		best: list[Mover] = []
+		for m in rest:
+			tol = max(TOGETHER_PX, TOGETHER_SPREAD * math.hypot(m.vx, m.vy))
+			same = [o for o in rest if math.hypot(o.vx - m.vx, o.vy - m.vy) <= tol]
+			if len(same) > len(best):
+				best = same
+		if len(best) < TOGETHER_MIN:
+			return groups, rest
+		groups.append(best)
+		rest = [m for m in rest if m not in best]
+
+
 def _distinct(frames: list[tuple[float, np.ndarray]]) -> list[tuple[float, np.ndarray]]:
 	"""A frame drawn twice in a row (nothing moved between two looks) counts once, at its first time; the last frame
 	is always kept, so the read ends where the step did."""
@@ -157,21 +231,41 @@ def _distinct(frames: list[tuple[float, np.ndarray]]) -> list[tuple[float, np.nd
 	return out
 
 
-def _scrolled(first: np.ndarray, last: np.ndarray) -> tuple[float, float] | None:
-	"""How far the whole view moved between two frames, if it did: most of the picture changed, and moving one onto
-	the other by the shift found takes most of the difference away."""
+def _scrolled(pictures: list[np.ndarray]) -> list[tuple[float, float]] | None:
+	"""Where each frame's view sits from the first's, if the whole view moved: most of the picture changed, and
+	moving the last onto the first by the shift found takes most of the difference away. Shifts are found frame to
+	frame and summed, which says roughly how far: across the whole step a world that repeats (tiles, stripes) lines up
+	again at more than one shift, and phase correlation can pick the wrong one. Each small shift is a little short and
+	they add up, so the shift from first to last frame is also looked for near the sum, which says it exactly when it
+	is there to be found; whichever of the two lines the last frame up with the first better is taken, and what it
+	adds to the sum is spread over the frames."""
+	first, last = pictures[0], pictures[-1]
 	if float((np.abs(last - first) > DIFF).mean()) < SCROLL_CHANGED:
 		return None
-	dx, dy = _shift(first, last)
-	if math.hypot(dx, dy) < MIN_SCROLL:
+	offsets = [(0.0, 0.0)]
+	for a, b in zip(pictures, pictures[1:]):
+		dx, dy = _shift(a, b)
+		offsets.append((offsets[-1][0] + dx, offsets[-1][1] + dy))
+	summed = offsets[-1]
+	exact = _shift_near(first, last, summed, max(MIN_SCROLL, SCROLL_NEAR * math.hypot(*summed)))
+	if exact is not None and _left_over(first, last, exact) < _left_over(first, last, summed):
+		(dx, dy), (sx, sy), n = exact, summed, len(offsets) - 1
+		offsets = [(ox + (dx - sx) * i / n, oy + (dy - sy) * i / n) for i, (ox, oy) in enumerate(offsets)]
+	if math.hypot(*offsets[-1]) < MIN_SCROLL:
 		return None
+	if _left_over(first, last, offsets[-1]) > SCROLL_EXPLAINS * float(np.abs(last - first).mean()):
+		return None
+	return offsets
+
+
+def _left_over(first: np.ndarray, last: np.ndarray, shift: tuple[float, float]) -> float:
+	"""How much the last frame still differs from the first once moved back by `shift` (mean grey levels over what
+	both show); infinite if they show nothing in common."""
 	h, w = first.shape
-	sx, sy = int(round(dx)), int(round(dy))
+	sx, sy = int(round(shift[0])), int(round(shift[1]))
 	a = first[max(0, -sy) : h - max(0, sy), max(0, -sx) : w - max(0, sx)]
 	b = last[max(0, sy) : h - max(0, -sy), max(0, sx) : w - max(0, -sx)]
-	if a.size == 0 or float(np.abs(b - a).mean()) > SCROLL_EXPLAINS * float(np.abs(last - first).mean()):
-		return None
-	return (dx, dy)
+	return float(np.abs(b - a).mean()) if a.size else math.inf
 
 
 def _shift(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
@@ -186,10 +280,35 @@ def _shift(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
 	return (float(dx), float(dy))
 
 
-def _aligned(frames: list[np.ndarray]) -> list[np.ndarray]:
+def _shift_near(a: np.ndarray, b: np.ndarray, guess: tuple[float, float], radius: float) -> tuple[float, float] | None:
+	"""As _shift, but the phase correlation peak is looked for only within `radius` px of `guess`, so a world that
+	repeats cannot put it at another of the shifts it lines up at; None if there is no believable peak there."""
+	h, w = a.shape
+	window = np.outer(np.hanning(h), np.hanning(w)).astype(np.float32)
+	cross = np.fft.fft2(b * window) * np.conj(np.fft.fft2(a * window))
+	surface = np.fft.ifft2(cross / (np.abs(cross) + 1e-9)).real  # peak at b's shift from a, wrapped around
+	gx, gy, r = round(guess[0]), round(guess[1]), math.ceil(radius)
+	ys, xs = np.mgrid[gy - r : gy + r + 1, gx - r : gx + r + 1]
+	near = surface[ys % h, xs % w]
+	iy, ix = np.unravel_index(int(np.argmax(near)), near.shape)
+	py, px = int(ys[iy, ix]), int(xs[iy, ix])
+	around = surface[np.arange(py - 1, py + 2)[:, None] % h, np.arange(px - 1, px + 2)[None, :] % w]
+	if float(around.sum()) < SCROLL_PEAK:
+		return None
+	weights = np.clip(around, 0, None)
+	total = float(weights.sum())
+	if total <= 0:
+		return None
+	return (
+		px + float((weights.sum(axis=0) * [-1, 0, 1]).sum()) / total,
+		py + float((weights.sum(axis=1) * [-1, 0, 1]).sum()) / total,
+	)
+
+
+def _aligned(frames: list[np.ndarray], offsets: list[tuple[float, float]]) -> list[np.ndarray]:
 	"""The frames moved onto the last one's view, cropped to what all of them show."""
-	shifts = [_shift(f, frames[-1]) for f in frames]
-	dxs, dys = [int(round(s[0])) for s in shifts], [int(round(s[1])) for s in shifts]
+	(ex, ey) = offsets[-1]
+	dxs, dys = [int(round(ex - ox)) for ox, _ in offsets], [int(round(ey - oy)) for _, oy in offsets]
 	h, w = frames[0].shape
 	left, right = max(0, max(dxs)), min(w, w + min(dxs))
 	top, bottom = max(0, max(dys)), min(h, h + min(dys))

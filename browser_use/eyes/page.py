@@ -205,12 +205,17 @@ class PageWatcher:
 		# The viewport (CSS px) at the last capture: a look image is smaller, and clicks take CSS px
 		self.viewport: tuple[float, float] | None = None
 
-	async def start(self) -> None:
+	async def start(self, min_width: int | None = None) -> None:
+		"""Watch the stream, at least `min_width` px wide if given (a stream of our own is begun again wider; the
+		recorder's is taken as it is)."""
 		if self.live is not None and not self.live.in_step():
 			await self.stop()  # a recording started or stopped since this view began: begin again in step with it
+		width = max(self.max_width, min_width or 0)
+		if self.live is not None and not self.live.shared and self.live.max_width < width:
+			await self.stop()
 		if self.live is None:
 			self.live = LiveView(self.session)
-			await self.live.start(max_width=self.max_width, quality=self.quality)
+			await self.live.start(max_width=width, quality=self.quality)
 
 	async def stop(self) -> None:
 		if self.live is not None:

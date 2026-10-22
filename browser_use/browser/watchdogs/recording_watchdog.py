@@ -18,6 +18,9 @@ from browser_use.browser.watchdog_base import BaseWatchdog
 
 # A screencast quiet for this long after a frame is topped up with one capture of the page as it is
 QUIET_TOP_UP_S = 0.3
+# How long stopping the screencast on a tab may take: a tab whose page hangs (a script that never yields) never
+# answers, and its frames have stopped anyway. Found when a recording of Level Devil could not be stopped or saved.
+STOP_SCREENCAST_S = 2.0
 
 
 class RecordingWatchdog(BaseWatchdog):
@@ -161,15 +164,22 @@ class RecordingWatchdog(BaseWatchdog):
 		self._screencast_params = None
 
 		if session_id:
-			try:
-				await self.browser_session.cdp_client.send.Page.stopScreencast(session_id=session_id)
-			except Exception as e:
-				self.logger.debug(f'Failed to stop CDP screencast on {session_id}: {e}')
+			await self._stop_screencast(session_id)
 
 		output_path = recorder.output_path
 		loop = asyncio.get_event_loop()
 		await loop.run_in_executor(None, recorder.stop_and_save)
 		return output_path
+
+	async def _stop_screencast(self, session_id: str) -> None:
+		"""Stop the screencast on a tab, waiting at most STOP_SCREENCAST_S: the tab may be closed, or hung."""
+		try:
+			# the root client stops it on that tab's session
+			await asyncio.wait_for(
+				self.browser_session.cdp_client.send.Page.stopScreencast(session_id=session_id), STOP_SCREENCAST_S
+			)
+		except Exception as e:
+			self.logger.debug(f'Failed to stop CDP screencast on {session_id}: {type(e).__name__}: {e}')
 
 	@property
 	def is_recording(self) -> bool:
@@ -199,12 +209,7 @@ class RecordingWatchdog(BaseWatchdog):
 
 			# Stop recording on the previous session
 			if self._current_session_id:
-				try:
-					# Use the root client to stop screencast on the specific session
-					await self.browser_session.cdp_client.send.Page.stopScreencast(session_id=self._current_session_id)
-				except Exception as e:
-					# It's possible the session is already closed
-					self.logger.debug(f'Failed to stop screencast on old session {self._current_session_id}: {e}')
+				await self._stop_screencast(self._current_session_id)
 
 			self._current_session_id = cdp_session.session_id
 

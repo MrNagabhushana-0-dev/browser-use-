@@ -342,8 +342,21 @@ def _browser_tools() -> list['types.Tool']:
 		),
 		types.Tool(
 			name='retinat_key',
-			description='Press one named key: Enter, Tab, Escape, Backspace, ArrowUp/Down/Left/Right, PageUp/Down, Home, End, Space.',
-			input_schema={'type': 'object', 'properties': {'key': {'type': 'string'}}, 'required': ['key']},
+			description=(
+				'Press one named key: Enter, Tab, Escape, Backspace, ArrowUp/Down/Left/Right, PageUp/Down, Home, End, Space, '
+				'or a letter. With hold_ms it is held down that long (live play: a tap moves a game figure a few px, a hold '
+				'walks it); keys in `with` are held down along with it, pressed just before it (a running jump: key '
+				'ArrowUp with ArrowRight). In step mode use retinat_step hold/tap instead.'
+			),
+			input_schema={
+				'type': 'object',
+				'properties': {
+					'key': {'type': 'string'},
+					'hold_ms': {'type': 'number', 'description': 'How long to hold it down, up to 5000 ms.'},
+					'with': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Keys held down along with it.'},
+				},
+				'required': ['key'],
+			},
 		),
 		types.Tool(
 			name='retinat_recall',
