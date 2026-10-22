@@ -230,3 +230,12 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   (it counts tokens). Ground truth for C1/C2: B2's recording aligned to the edit list (ground_truth.py: offset
   6.412 s, 34/34 cuts, residual median 0.05 s), 32 contact sheets at 0.5 s; one labeller labels the film once, for
   all v2b runs alike. Keep decision for E3/E4/E5 waits on the scorers.
+- 2026-10-22 FLAPPING PAIR, LIVE (E5's own gate log, ~/.config/browseruse/eyes/gate-20261022-193718.jsonl: 1,488
+  frames over 190 s, replayed through both gates by gate_replay.py log; MEASURED): 4-state 9 flips (170/h), 5
+  episodes; single threshold 69 flips (1,307/h), 35 episodes. Proof video of live narration per result (E5, burned
+  in at the second each was written): scratchpad E5-narrated.mp4 (10 narrations, 9 shown before the recording ended;
+  the 10th came with the stop).
+- 2026-10-22 E6 DECLARED BEFORE MEASURING (commit 3504321, on E5): a gated watch is also woken by a salient event (a cut,
+  a new item, a change in sound: the until=event triggers), never before 8 s. Why: E5 tripled B (3.9 -> 11.95 s
+  median). Keep rule: B lower bound median strictly down vs E5 AND A_unique inside 2,000-8,600 AND C2 not worse AND
+  gaps 0.
