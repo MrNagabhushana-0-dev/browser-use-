@@ -349,6 +349,34 @@ async def test_a_capture_that_gets_no_frame_gives_up_and_does_not_hold_up_the_ne
 		assert time.monotonic() - began < 4
 
 
+async def test_no_capture_is_sent_over_one_chrome_is_still_taking(session, games):
+	"""Found in review: a capture that gave up let the next one go, but Chrome cannot be told to drop a capture, so the
+	abandoned one was still running on that tab when the next was sent over it, and overlapping captures can hand each
+	other's picture back (see browser/capture.py). Nothing is sent on a tab while an earlier capture there is unanswered:
+	the next waits for it, within its own time, and gives up unsent if it does not end."""
+	from browser_use.browser import capture
+	from browser_use.browser.capture import CaptureTimeout, capture_screenshot
+
+	await session.navigate_to(games.url_for('/still'))
+	cdp = await session.get_or_create_cdp_session(focus=False)
+	client, sid = cdp.cdp_client, cdp.session_id
+	await client.send.Runtime.evaluate(
+		params={
+			'expression': 'setTimeout(() => { const end = performance.now() + 4000; while (performance.now() < end) {} }, 50); 1'
+		},
+		session_id=sid,
+	)
+	await asyncio.sleep(0.3)
+	sent = capture.captures_taken
+	with pytest.raises(CaptureTimeout):
+		await capture_screenshot(client, {'format': 'jpeg'}, sid, timeout=1.5)
+	with pytest.raises(CaptureTimeout):  # the first is still being taken: this one is not sent over it
+		await capture_screenshot(client, {'format': 'jpeg'}, sid, timeout=1.0)
+	assert capture.captures_taken - sent == 1, 'a capture was sent over one Chrome was still taking'
+	shot = await capture_screenshot(client, {'format': 'jpeg'}, sid, timeout=10)  # once the page is free again
+	assert shot['data'] and capture.captures_taken - sent == 2
+
+
 async def _in_our_world(session: BrowserSession, expression: str):
 	"""`expression` in the clock's own world of the top frame, made here rather than by PageClock."""
 	cdp = await session.get_or_create_cdp_session(focus=False)

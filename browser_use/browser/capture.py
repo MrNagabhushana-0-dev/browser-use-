@@ -30,8 +30,14 @@ _locks: 'weakref.WeakKeyDictionary[CDPClient, asyncio.Lock]' = weakref.WeakKeyDi
 # A JPEG taken to be cropped is taken at least this good, so cropping and encoding again loses little.
 CROP_SOURCE_QUALITY = 90
 
-# Captures taken through `capture_screenshot` in this process: what a caller can read to see what its work costs.
+# Captures sent to Chrome through `capture_screenshot` in this process: what a caller can read to see what its work
+# costs.
 captures_taken = 0
+
+# The capture each tab (per connection, per session) has in Chrome and not yet answered. One a caller gave up on is still
+# being taken, Chrome cannot be told to drop it, and a capture sent over it can swap pictures with it, so the next one
+# on that tab waits for it first.
+_in_chrome: 'weakref.WeakKeyDictionary[CDPClient, dict[str | None, asyncio.Future[Any]]]' = weakref.WeakKeyDictionary()
 
 # A capture waits for the compositor's next frame, and a tab that draws none never gives one. Found when a model played
 # Poki games: the first look's capture never answered, and every capture after it waited behind it for the lock until
@@ -58,17 +64,34 @@ async def capture_screenshot(client: 'CDPClient', params: Any, session_id: str |
 	global captures_taken
 	try:
 		async with asyncio.timeout(timeout), capture_lock(client):
+			in_chrome = _in_chrome.setdefault(client, {})
+			earlier = in_chrome.get(session_id)
+			if earlier is not None:
+				await asyncio.wait({earlier})  # given up on by its caller, still being taken: nothing is sent over it
 			captures_taken += 1
-			clip = params.get('clip') if isinstance(params, dict) else None
-			if clip and float(clip.get('scale') or 1) <= 1 and not params.get('captureBeyondViewport'):
-				shot = await _cropped(client, params, clip, session_id)
-				if shot is not None:
-					return shot
-			return await client.send.Page.captureScreenshot(
-				params=cast('CaptureScreenshotParameters', params), session_id=session_id
-			)
+			taking = asyncio.ensure_future(_capture(client, params, session_id))
+			in_chrome[session_id] = taking
+			taking.add_done_callback(lambda done: _taken(client, session_id, done))
+			return await asyncio.shield(taking)  # a timeout leaves it to be taken, and waited for by the next
 	except TimeoutError as e:
 		raise CaptureTimeout(f'no frame came to capture in {timeout:.0f}s: the tab draws none') from e
+
+
+async def _capture(client: 'CDPClient', params: Any, session_id: str | None) -> Any:
+	clip = params.get('clip') if isinstance(params, dict) else None
+	if clip and float(clip.get('scale') or 1) <= 1 and not params.get('captureBeyondViewport'):
+		shot = await _cropped(client, params, clip, session_id)
+		if shot is not None:
+			return shot
+	return await client.send.Page.captureScreenshot(params=cast('CaptureScreenshotParameters', params), session_id=session_id)
+
+
+def _taken(client: 'CDPClient', session_id: str | None, done: 'asyncio.Future[Any]') -> None:
+	in_chrome = _in_chrome.get(client)
+	if in_chrome is not None and in_chrome.get(session_id) is done:
+		del in_chrome[session_id]
+	if not done.cancelled():
+		done.exception()  # one nobody waited for any more failed: seen here, not reported as never retrieved
 
 
 async def _cropped(client: 'CDPClient', params: dict, clip: dict, session_id: str | None) -> dict | None:
