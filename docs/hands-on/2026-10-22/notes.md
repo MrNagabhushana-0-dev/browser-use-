@@ -64,4 +64,26 @@ Also found: a capture taken between turns showed up in the stream as a frame of 
 first frame (only the stream's own frame size is read now); a test of the live view assumed a page that repeats its
 colours within the watch never repeats a picture.
 
+## Neural detectors on these games, measured
+
+The owner asked whether a detector (they named "YOLO v28"; the newest Ultralytics family is YOLO26) should give the
+eyes their sight. Four were run on the same 50 frames (10 per game, cut from the recordings above), one at a time on
+this machine's 4 CPU cores (no GPU), in an environment of their own; one judge per detector looked at every annotated
+frame and counted. `detectors-compared.jpg`: the same two frames under each.
+
+| Detector (licence) | Seconds a frame (median) | Player found | Hazards boxed | Usefulness 0-10, per game (WHG, Moto, Neon, QWOP, Level Devil) |
+|---|---|---|---|---|
+| RF-DETR nano, COCO (Apache-2.0) | 0.23 | 23 of 50 frames | 1 of 122 | 0, 3, 0, 3, 2 |
+| YOLO26n, COCO (AGPL-3.0) | 0.07 | 24 of 50 | 2 of 124 | 0, 3, 2, 2, 1 |
+| OWLv2 base, open vocabulary (Apache-2.0) | 11.1 | 31 of 50 | 88 of 112 (all WHG dots; no saw, spike or pit) | 6, 3, 1, 0, 3 |
+| Grounding DINO tiny, open vocabulary (Apache-2.0) | 14.5 | 46 of 50 | 17 of 123 | 4, 3, 3, 2, 2 |
+
+What this says: detectors trained on photographs (COCO) do not see game sprites (YOLO26n boxed nothing on any World's
+Hardest Game frame); the open-vocabulary ones find the player but take 11-15 s a frame here, against ~1 s for a whole
+turn. Apart from World's Hardest Game's dots, the only hazards any of them boxed were three saws (labelled "clock" or
+"traffic light") and one loose "blade" box over a gear; no spike, and no pit that opens. The motion reader already
+follows every World's Hardest Game dot with its speed, and the model playing is itself an open-vocabulary detector
+looking at the same picture: what it lacks is time (what moved, which way, how fast), which is what the eyes add. A
+detector would have to be trained on these games to earn its place; that is not done.
+
 The five games are being played again on the new eyes; results follow below.
