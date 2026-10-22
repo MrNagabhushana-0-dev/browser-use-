@@ -1294,3 +1294,35 @@ async def test_a_step_says_when_the_whole_view_scrolls(retinat, site):
 	text = _text(stepped)
 	scrolled = re.search(r'the whole view scrolled (\w+) at (\d+) px/s', text)
 	assert scrolled and scrolled[1] == 'right' and float(scrolled[2]) == pytest.approx(150, rel=0.2), text
+
+
+# A dot that sets off right at 150 px/s when a key goes down, and bounces back left after 0.3 s of game time.
+BOUNCER = """<!doctype html><title>Bouncer</title><body style="margin:0;background:#fff">
+<canvas id="c" width="600" height="300" style="display:block;margin:20px"></canvas><script>
+const g = document.getElementById('c').getContext('2d');
+let go = null;
+addEventListener('keydown', () => { if (go === null) go = performance.now(); });
+function frame() {
+  const s = go === null ? 0 : (performance.now() - go) / 1000;
+  const x = s < 0.3 ? 200 + 150 * s : 245 - 150 * (s - 0.3);
+  g.fillStyle = '#eee'; g.fillRect(0, 0, 600, 300);
+  g.fillStyle = '#00d'; g.beginPath(); g.arc(x, 150, 10, 0, 7); g.fill();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body>"""
+
+
+async def test_a_step_says_which_way_a_thing_goes_at_its_end_not_on_average(retinat, site):
+	"""Found when the eyes first watched The World's Hardest Game: its dots go back and forth, and an average over the
+	step points the wrong way for a dot that turned during it. What a step says is where each thing is heading as the
+	step ends, which is what the next move has to reckon with."""
+	import re
+
+	site.expect_request('/bouncer').respond_with_data(BOUNCER, content_type='text/html')
+	await _open_started(retinat, site.url_for('/bouncer'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	stepped = await _call(retinat, 'retinat_step', {'ms': 500, 'frame': 'game', 'tap': ['ArrowRight']})
+	text = _text(stepped)
+	moved = re.findall(r'moving (\w+) at (\d+) px/s', text)
+	assert len(moved) == 1 and moved[0][0] == 'left' and float(moved[0][1]) == pytest.approx(150, rel=0.25), text

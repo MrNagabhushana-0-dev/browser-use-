@@ -116,10 +116,10 @@ START_TIMEOUT_S = 120.0
 STEP_ANSWER_S = 2.0
 # How wide (and tall, at most) a step's frame of just the game is drawn: readable without costing a full-page look's worth
 STEP_GAME_WIDTH = 800
-# What the eyes read a step's movement from: a picture of the region this wide, before the step and at up to this
-# many of its frames (spread over it, the last included)
+# What the eyes read a step's movement from: a picture of the region this wide, before the step and at each of its
+# frames, or this many spread over it (the last included): things must not go far between two looks to be followed
 MOTION_WIDTH = 400
-MOTION_LOOKS = 8
+MOTION_LOOKS = 24
 # The largest canvas, frame or video in view (its visible part), where a game is drawn, as [x, y, width, height]
 _GAME_REGION_JS = r"""(() => {
 	let best = null, bestArea = 0;

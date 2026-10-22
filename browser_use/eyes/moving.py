@@ -8,10 +8,10 @@ how fast in game time, and whether the whole view scrolled (a side-scroller's ca
 How. Frames are grey pictures of the game's region, a few hundred px wide, each with the game time it was drawn at,
 in order, the first from before the step. The view's own movement is found by phase correlation of the first and the
 last frame and taken out. What stands still is the per-pixel median of the frames; what differs from it is grouped
-into blobs, and each blob is followed from frame to frame by its nearest successor. A thing that went at least
-MIN_TRAVEL px moved, at the distance it went over the game time between its first and last frame. Something that
-moved less than its own size is only partly told apart from what stands still, so its speed reads low; its direction
-is still right.
+into blobs, and each blob is followed from frame to frame by its nearest successor. What is said is what is there as
+the step ends, heading the way it went over its last few looks (a dot that turned during the step goes the way it went
+last), and only things that went at least MIN_TRAVEL px. Something that moved less than its own size is only partly
+told apart from what stands still, so its speed reads low; its direction is still right.
 """
 
 from __future__ import annotations
@@ -33,6 +33,9 @@ SCROLL_CHANGED = 0.25  # of the picture that differs before a shift of the whole
 # things on a flat background change little of it, and phase correlation would follow one of them
 SCROLL_EXPLAINS = 0.6  # the shift must leave at most this much of the difference between first and last frame
 MAX_MOVERS = 12  # said in the answer; more are counted
+MIN_TRACK = 3  # looks a thing is followed through to count, once there are more than that
+HEADING_LOOKS = 3  # the last looks that say which way a thing was going as the step ended
+JITTER = 1.0  # px a centroid wanders by without the thing turning
 
 
 @dataclass
@@ -70,12 +73,20 @@ def read(frames: list[tuple[float, np.ndarray]]) -> Movement:
 		pictures = _aligned(pictures)
 	still = np.median(np.stack(pictures), axis=0)
 	blobs = [[(t, *b) for b in _blobs(np.abs(f - still) > DIFF)] for (t, _), f in zip(frames, pictures)]
+	end = frames[-1][0]
+	shortest = MIN_TRACK if len(frames) >= MIN_TRACK + 1 else 2
 	movers = []
+	at = {t: i for i, (t, _) in enumerate(frames)}
 	for track in _follow(blobs, width=pictures[0].shape[1]):
-		(t0, x0, y0, _), (t1, x1, y1, area) = track[0], track[-1]
-		if math.hypot(x1 - x0, y1 - y0) >= MIN_TRAVEL and t1 > t0:
-			span = (t1 - t0) / 1000
-			movers.append(Mover(x1, y1, (x1 - x0) / span, (y1 - y0) / span, math.sqrt(area), [(x, y) for _, x, y, _ in track]))
+		# what is there as the step ends, seen long enough not to be a flicker
+		if track[-1][0] != end or len(track) < shortest:
+			continue
+		track = _matched(track, pictures, at)
+		velocity = _last_leg(track)
+		if velocity is None:
+			continue
+		_, x1, y1, area = track[-1]
+		movers.append(Mover(x1, y1, *velocity, math.sqrt(area), [(x, y) for _, x, y, _ in track]))
 	movers.sort(key=lambda m: -math.hypot(m.vx, m.vy))
 	return Movement(movers, scroll, len(frames))
 
@@ -219,6 +230,57 @@ def _blobs(mask: np.ndarray) -> list[tuple[float, float, float]]:
 			(float((xs * weights).sum() / weights.sum()), float((ys * weights).sum() / weights.sum()), float(weights.sum()))
 		)
 	return blobs
+
+
+def _matched(
+	track: list[tuple[float, float, float, float]], pictures: list[np.ndarray], at: dict[float, int]
+) -> list[tuple[float, float, float, float]]:
+	"""The track with each look's position found by matching the thing's look at the end (a patch of the last picture
+	around it) near where its blob was: a blob is only what differs from the still picture, and for a thing slower than
+	its own size that is a fragment whose centre lags behind it."""
+	_, xe, ye, area = track[-1]
+	h, w = pictures[-1].shape
+	r = int(max(3, math.sqrt(area) / 2 + 2))
+	cx, cy = int(round(xe)), int(round(ye))
+	if cx - r < 0 or cy - r < 0 or cx + r >= w or cy + r >= h:
+		return track
+	template = pictures[-1][cy - r : cy + r + 1, cx - r : cx + r + 1]
+	out = []
+	for t, x, y, a in track:
+		picture = pictures[at[t]]
+		gx, gy, s = int(round(x)), int(round(y)), r
+		x0, y0 = max(0, gx - r - s), max(0, gy - r - s)
+		x1, y1 = min(w, gx + r + s + 1), min(h, gy + r + s + 1)
+		window = picture[y0:y1, x0:x1]
+		if window.shape[0] < 2 * r + 1 or window.shape[1] < 2 * r + 1:
+			out.append((t, x, y, a))
+			continue
+		views = np.lib.stride_tricks.sliding_window_view(window, template.shape)
+		cost = ((views - template) ** 2).sum(axis=(2, 3))
+		by, bx = np.unravel_index(int(np.argmin(cost)), cost.shape)
+		out.append((t, float(x0 + bx + r), float(y0 + by + r), a))
+	return out
+
+
+def _last_leg(track: list[tuple[float, float, float, float]]) -> tuple[float, float] | None:
+	"""Velocity (px/s) of a tracked thing as the step ends: a straight-line fit over the stretch back from the end in
+	which it kept going the way it went last (a thing that turned is read from after its turn). None if it went less
+	than MIN_TRAVEL px over that stretch."""
+	ts = np.array([p[0] for p in track]) / 1000
+	xs, ys = np.array([p[1] for p in track]), np.array([p[2] for p in track])
+	recent = max(0, len(track) - 1 - HEADING_LOOKS)
+	ux, uy = xs[-1] - xs[recent], ys[-1] - ys[recent]
+	norm = math.hypot(ux, uy)
+	if norm < 1e-6:
+		return None
+	along = (xs * ux + ys * uy) / norm  # how far along the last heading each look found it
+	start = len(track) - 1
+	while start > 0 and along[start - 1] <= along[start] + JITTER:
+		start -= 1
+	if along[-1] - along[start] < MIN_TRAVEL or ts[-1] <= ts[start]:
+		return None
+	t = ts[start:] - ts[start:].mean()
+	return float((t * xs[start:]).sum() / (t * t).sum()), float((t * ys[start:]).sum() / (t * t).sum())
 
 
 def _follow(
