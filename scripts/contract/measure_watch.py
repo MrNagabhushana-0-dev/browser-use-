@@ -85,6 +85,11 @@ def measure(path: str, tool: str) -> dict:
 		# the result took to build after the window closed comes on top, unseen here)
 		for v in rows[1:]:
 			latencies.append(v1 - v)
+		# correction 3: a watch stopped by an event says so ("stopped: cut at 1:02.3"): the model is told of that event
+		# in this result, though its frames open the next window (whose first row the loop above skips)
+		stop = re.search(rf'stopped: \w+ at {_T}', text)
+		if stop:
+			latencies.append(max(0.0, v1 - _seconds(stop[1])))
 	# film time no window covered between consecutive watches: what played there reached no percept
 	gaps = [round(b0 - a1, 2) for (_, a1), (b0, _) in zip(spans, spans[1:]) if b0 > a1]
 

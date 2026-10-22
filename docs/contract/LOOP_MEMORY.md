@@ -72,3 +72,15 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   token once, all narration included); p90 by linear interpolation; gaps between consecutive windows reported. MEASURED:
   E0 A_unique 5,509/min, B p90 14.66 s, gaps 10 totalling 2.3 s; E1 A_unique 8,947/min, B p90 8.54 s, gaps 17
   totalling 4.4 s.
+- 2026-10-22 E1 VERIFIED by a second fresh verifier: every script number reproduced. C1 = 72/73 = 0.986. C2 strict =
+  13/83 = 15.7% missed; all 31 edit-list cuts and the title fade covered (E0: 5 of 31 cuts missed); the 13 misses are
+  actions inside shots between keyframes. Refutations taken: (1) B left out the 18 events that stopped a watch ("stopped:
+  cut at X", the very events until=event speeds up): CORRECTION 3 counts them (v1 - X); (2) ~13.8 s of buffering stalls
+  separate wall and film time (A per film-minute is also reported); (3) again no narration text between calls, all
+  written once at the end; (4) captions again rendered in the pixels. Its labels differ in number from E0's verifier
+  (83 vs 68): C2 across runs is comparable only roughly; cut coverage against the edit list is the steady part.
+- 2026-10-22 CORRECTION 3 MEASURED: E0 B lower bound unchanged (n=33, median 7.9 s, p90 14.66 s: a timed watch never
+  stops on an event); E1 B lower bound n=43, median 1.0 s, p90 6.98 s.
+- 2026-10-22 E1 DECISION: KEEP (declared rule: B median strictly down 7.9 -> 1.0 s; C2 not worse 26.5% -> 15.7%, cuts
+  26/31 -> 31/31). Trade-off recorded: A_unique 5,509 -> 8,947/min (+62%), more calls (11 -> 19) each with a fixed
+  per-turn cost. Rule (INFERRED, from E0/E1): an event gate trades tokens for latency through the call count.
