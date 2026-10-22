@@ -152,3 +152,34 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   6.8 -> 7.22 s. Rule (INFERRED): the next watch must start at the last sample taken, never at when the percept was
   done. Open: narration is the keyframe captions, so a short action between two keyframes is missed by construction
   (6/54 in E2); the watcher writes no text between calls, so B is percept arrival, not narration.
+- 2026-10-22 19:30 UTC CONTRACT v1.1 IN FORCE; MILESTONE-1 closed by owner review. M2 GO (P2 track). Owner update
+  00:40 IST (relayed): measurement on the owner's Chrome is permitted; the owner installs the extension himself.
+  Blocker, MEASURED: this container has no inbound route and the platform cannot reach the owner's computer, so the
+  bridge runs on loopback on the owner's laptop (relay + Retinat there), driven by a Claude Code session he starts
+  there; tonight's work is container-side only.
+- 2026-10-22 PROTOCOL v2b DECLARED (before any v2b measurement): the P2 code path in this container. Container Chromium
+  with the bridge extension loaded by --load-extension (stand-in for Load unpacked) on an Xvfb display; relay inside
+  Retinat (RETINAT_BRIDGE=9333); stimulus exactly v2's (127.0.0.1:8765/watch.html, bbb480.webm, edits.json cuts); the
+  film tab shared through the extension (alwaysShare glob for the stimulus page only); recording by retinat_record
+  through the bridge; watcher a fresh Sonnet sub-agent; counter measure_watch.py as at c1bef95. Verifier in two stages:
+  a LABELLER sees only the recording (and ground_truth.py's sheets), writes event labels, and their sha256 is logged
+  here BEFORE a separate SCORER reads any narration. v2 (P1, CDP direct) numbers are reference only, not comparable.
+  Run order and keep rules, declared now:
+  B2: v2b baseline, product at c1bef95 (E2 kept), E2's watcher prompt verbatim.
+  E3: narration per result (a `narration` argument on retinat_watch, refused while the previous result is unnarrated;
+      watcher prompt says so). Keep: every result narrated before the next call (server narration log AND transcript)
+      AND C1 not worse AND C2 not worse.
+  E4: INV-2 retroactive-commit reservoir as a component (browser_use/eyes/reservoir.py): E2's cursor generalised,
+      uncommitted evidence evicted from the ring counted as evidence_erased_s. Keep: gaps 0 AND evidence_erased_s 0
+      AND cuts_reached_model not worse AND C2 not worse.
+  E5: push gate: a 4-state Schmitt gate (IDLE, CONFIRM_ONSET, ACTIVE, HANGOVER) over the reservoir's per-frame change
+      signal decides when the model is woken; no time-only wake-ups. Keep: A_unique strictly down vs E4 AND inside
+      2,000-8,600/min AND C2 not worse AND gaps 0. B is reported; a B rise is the declared trade (C2 outranks B).
+  Flapping pair (every M2 report): gate transitions/hour of the 4-state gate vs a single-threshold ablation, replayed
+  offline over the same logged per-frame signal, on the film and on a borderline page (blinking caret, slow animated
+  chart), with onset clipping (seconds of event onset not committed) beside it.
+- 2026-10-22 PROTOCOL v3 DECLARED (before any v3 measurement; runs on the owner's Chrome after his install): v2b's
+  method on a real YouTube tab he shares and nothing else; captions off; first 190 s watched; recording through the
+  bridge. Candidate stimulus: Blender Foundation's own Big Buck Bunny upload (id aqz-KE-bpKQ, UNVERIFIED-EXTERNAL from
+  memory), the same film as v2, so edits.json can give exact cuts if the recording's cuts align to it (checked by
+  ground_truth.py before scoring; if they do not align, labels only). Full text: docs/contract/PROTOCOL_v3_P2.md.
