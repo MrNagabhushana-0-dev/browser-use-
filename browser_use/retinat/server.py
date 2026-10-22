@@ -34,6 +34,7 @@ import base64
 import json
 import math
 import os
+import re
 import sys
 import time
 from collections.abc import Awaitable, Callable
@@ -227,6 +228,11 @@ class RetinatServer(BrowserUseServer):
 		self._clocks: dict[str, 'PageClock'] = {}  # per tab, once retinat_step has paused it
 		# the last step's looks for the next one to run on from: (its clock, the clock's moved_ms then, area, looks)
 		self._motion_before: tuple[Any, float, tuple[float, ...], list[tuple[float, Any]]] | None = None
+		from browser_use.config import CONFIG
+		from browser_use.eyes.narration import NarrationLog
+
+		# live narration: each watch result owed a narration before the next watch (see eyes/narration.py)
+		self._narration = NarrationLog(CONFIG.BROWSER_USE_CONFIG_DIR / 'narration' / f'{time.strftime("%Y%m%d-%H%M%S")}.jsonl')
 		self.server = Server('retinat', version=get_browser_use_version())
 		self._setup_retinat_handlers()
 
@@ -481,6 +487,13 @@ class RetinatServer(BrowserUseServer):
 			return blocks
 		if name == 'retinat_record':
 			return await self._record(str(args['action']), int(args.get('framerate', 8)))
+		if name == 'retinat_narrate':
+			text = str(args.get('text') or '').strip()
+			if not text:
+				raise Refused('Nothing to log: pass what the last watch result showed as text.')
+			n = self._narration.take(text)
+			return f'Narration of watch result {n} logged.' if n else 'Narration logged (no watch result was waiting for one).'
+
 		if name in ('retinat_reflex', 'retinat_wait'):
 			return await self._reflex(name, args, deadline)
 		if name == 'retinat_step':
@@ -511,17 +524,28 @@ class RetinatServer(BrowserUseServer):
 		if name == 'retinat_look':
 			return self._content(await eyes.look(detail=detail if detail != 'glance' else 'look'))
 		if name == 'retinat_watch':
-			return self._content(
-				await act(
-					eyes.watch(
-						seconds=float(args.get('seconds', 12)),
-						until=args.get('until', 'bored'),
-						detail=detail,
-						hold=bool(args.get('hold', True)),
-						deadline=deadline,
-					)
+			narration = str(args.get('narration') or '').strip()
+			if args.get('narrate'):
+				self._narration.start()
+			if narration:
+				self._narration.take(narration)
+			elif self._narration.owes():
+				raise Refused(self._narration.refusal())
+			percept = await act(
+				eyes.watch(
+					seconds=float(args.get('seconds', 12)),
+					until=args.get('until', 'bored'),
+					detail=detail,
+					hold=bool(args.get('hold', True)),
+					deadline=deadline,
 				)
 			)
+			covering = re.search(r'covering (\S+-\S+)', percept.text)
+			# how long before the answer the last sample was taken: the percept's build time, for narration latency
+			last = max((f.wall for item in percept.items for f in item.frames), default=None)
+			lag = round(percept.ended_at - last, 3) if last is not None else None
+			self._narration.result(covering[1] if covering else 'nothing played', lag)
+			return self._content(percept)
 		if name == 'retinat_scan':
 			return self._content(
 				await act(
@@ -665,6 +689,7 @@ class RetinatServer(BrowserUseServer):
 			if saved is None:
 				raise Refused('no recording is running: start one with action=start')
 			size = Path(saved).stat().st_size if Path(saved).exists() else 0
+			self._narration.recording('stop', str(saved))
 			return f'Saved the recording: {saved} ({size / 1e6:.1f} MB).'
 		folder = Path(os.environ.get('BROWSER_USE_RECORD_VIDEO_DIR') or CONFIG.BROWSER_USE_CONFIG_DIR / 'recordings').expanduser()
 		folder.mkdir(parents=True, exist_ok=True)
@@ -674,6 +699,7 @@ class RetinatServer(BrowserUseServer):
 			)
 		except RuntimeError as e:  # one already running, or no viewport yet
 			raise Refused(str(e)) from e
+		self._narration.recording('start', str(out))
 		return f'Recording to {out} at {framerate} fps. Call retinat_record with action=stop to finish the file.'
 
 	async def _reflex(self, name: str, args: dict[str, Any], deadline: Deadline | None = None) -> str:

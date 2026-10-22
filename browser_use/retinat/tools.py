@@ -195,8 +195,28 @@ def _browser_tools() -> list['types.Tool']:
 					'until': {'type': 'string', 'enum': ['bored', 'event', 'time', 'item'], 'default': 'bored'},
 					'detail': _DETAIL,
 					'hold': {'type': 'boolean', 'default': True, 'description': 'Pause when done so nothing plays unseen.'},
+					'narrate': {
+						'type': 'boolean',
+						'default': False,
+						'description': 'Live narration: from now on each result must be narrated (narration=...) before '
+						'the next watch, and every narration is logged with the time it was written.',
+					},
+					'narration': {
+						'type': 'string',
+						'description': 'What the previous result showed: one line per visual event, "[m:ss] what is seen". '
+						'Required in live narration, where a watch is refused until the last result is narrated.',
+					},
 				},
 			},
+		),
+		types.Tool(
+			name='retinat_narrate',
+			description=(
+				'Log the narration of the last watch result without watching again (the last result of a live '
+				'narration). One line per visual event, "[m:ss] what is seen".'
+			),
+			input_schema={'type': 'object', 'properties': {'text': {'type': 'string'}}, 'required': ['text']},
+			annotations=ro,
 		),
 		types.Tool(
 			name='retinat_scan',
