@@ -248,3 +248,9 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   reviews and the hooks build re-run on cheaper models where they suffice (B9). Retinat's MCP server failed to
   reconnect after the cold boot (CONNECT_TIMEOUT 30 s), so no watcher can run in this session until it is reconnected
   (/mcp, the owner's side); E6 waits on that.
+- 2026-10-23 PROTOCOL v3 AMENDED BEFORE ANY v3 MEASUREMENT: two arms on the owner's Chrome, in order: v3-B, the P2
+  baseline (Milestone-1's watch: until=event, narration as the watcher writes it), then v3-G (the last KEPT v2b
+  configuration, with live narration); one label set from v3-B's recording serves both. The measured commit on the
+  laptop is the checkout's HEAD (logged in R0); Retinat is not restarted between arms (a cold start can miss the
+  client's 30 s connect timeout, seen here at 23:42 UTC). Runbook and watcher prompts: PROTOCOL_v3_P2.md section 4
+  (commit 4531d56).
