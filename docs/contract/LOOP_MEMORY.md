@@ -109,3 +109,10 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   film 34.3 s but answered 18.6 s after it was issued (with the film's sound readable here, the percept's speech model
   ran on CPU), and the next watch started from when that percept was done (film 50.3 s). E2 runs next: fresh Retinat on
   d3a6df1, the same prompt.
+- 2026-10-22 E2 MEASURED (product d3a6df1 in a fresh Retinat; subagents/agent-ac05c1c116f61f401.jsonl; recording
+  retinat-20261022-154838.mp4, 196.9 s): 24 calls, window 184.9 s, film covered 189.7 s; gaps between windows 0 (B1:
+  12, 27.0 s); cuts_reached_model 34/34 (B1 29/32); B lower bound median 2.7 s, p90 6.85 s (B1 3.7 / 6.44); call->answer
+  median 2.55 s, max 8.89 s (B1 3.55 / 18.59); A_unique 8,086/min (B1 9,865). The watcher was stopped by an API
+  safeguard flag while writing its final JSON: its hand-back narration ends at film 2:03 (123 s); all watch calls and
+  the recording are complete. Declared rule (gaps strictly down, cut coverage not worse, B median not worse): met ->
+  KEEP, pending the verifier. C1/C2 for B1 and E2 are judged on film 0:00-2:03 only, alike.
