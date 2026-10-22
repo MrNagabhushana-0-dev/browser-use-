@@ -156,6 +156,26 @@ async def test_browser_use_answers_the_handshake_and_tool_list_without_loading_a
 	assert [t.model_dump() for t in browser_tools()] == [t.model_dump() for t in listed.tools]
 
 
+async def test_browser_use_starts_without_the_eyes_extra():
+	"""Found in review: the front read its call budget from the eyes package, whose `__init__` imports numpy, so a
+	base install (numpy comes only with the eyes extras) could not start the server at all, where it had served its
+	browser tools before. Without numpy the front starts, and lists every tool but the eyes'."""
+	probe = (
+		'import sys\n'
+		"sys.modules['numpy'] = None  # as on a base install: import numpy fails, find_spec('numpy') is None\n"
+		'from browser_use.mcp.front import BrowserUseFront\n'
+		'front = BrowserUseFront()\n'
+		"print(','.join(t.name for t in front.tool_list()))\n"
+	)
+	proc = await asyncio.create_subprocess_exec(
+		sys.executable, '-c', probe, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+	)
+	stdout, stderr = await asyncio.wait_for(proc.communicate(), 120)
+	assert proc.returncode == 0, stderr.decode()
+	names = stdout.decode().strip().split(',')
+	assert 'browser_navigate' in names and not any(n.startswith('eyes_') for n in names), names
+
+
 async def test_browser_use_over_stdio_takes_a_call_that_arrives_while_it_loads(tmp_path):
 	"""The front answers the handshake and the list itself; the first call waits for the server proper and is answered
 	by it, and the client is told once to list the tools again, as Retinat tells it."""
