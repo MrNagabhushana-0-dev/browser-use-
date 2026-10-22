@@ -239,3 +239,12 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   a new item, a change in sound: the until=event triggers), never before 8 s. Why: E5 tripled B (3.9 -> 11.95 s
   median). Keep rule: B lower bound median strictly down vs E5 AND A_unique inside 2,000-8,600 AND C2 not worse AND
   gaps 0.
+- 2026-10-22 STOP-RULE EVENT (MEASURED): the session limit (HTTP 429, "resets 11:40pm UTC") stopped every running agent
+  at ~19:55 UTC: the E6 watcher (it had only looked and found the play button: E6 is VOID, not measured), the
+  labeller (part-way through the sheets), the side-track reviews and the hooks build, and the core-code review. The
+  85% pause could not be applied (usage is not visible here; it arrived at 100%, the second time). The container
+  rebooted during the pause: files kept, processes gone. 23:42 UTC: rig restarted (scripts/contract/rig_v2b.py now
+  checks for a running Xvfb, not a display socket a reboot leaves behind), the labeller resumed with its work kept,
+  reviews and the hooks build re-run on cheaper models where they suffice (B9). Retinat's MCP server failed to
+  reconnect after the cold boot (CONNECT_TIMEOUT 30 s), so no watcher can run in this session until it is reconnected
+  (/mcp, the owner's side); E6 waits on that.

@@ -30,7 +30,8 @@ def up(stim: Path, port: int, display: str) -> dict:
 	assert not STATE.exists(), f'a rig is already up ({STATE}); run down first'
 	root = STATE.parent / 'rig_v2b'
 	pids: dict[str, int] = {}
-	if not Path(f'/tmp/.X11-unix/X{display.lstrip(":")}').exists():
+	# a display socket can outlive its server (a reboot keeps /tmp here): look for the server itself
+	if subprocess.run(['pgrep', '-f', f'Xvfb {display}'], capture_output=True).returncode != 0:
 		pids['xvfb'] = subprocess.Popen(
 			['Xvfb', display, '-screen', '0', '1280x900x24'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
 		).pid
