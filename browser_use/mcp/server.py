@@ -135,6 +135,9 @@ from browser_use.tools.service import Tools
 
 logger = logging.getLogger(__name__)
 
+# How long letting go of a tab's eyes may take when they move to another tab (found: a hung page held every look for
+# 60 s, in the new tab too)
+EYES_CLOSE_S = 3.0
 # Namespace for tools that belong to the page rather than to browser-use, so a site's
 # `search` can never shadow `browser_navigate`.
 SITE_TOOL_PREFIX = 'site_'
@@ -462,7 +465,8 @@ class BrowserUseServer:
 		eyes = getattr(self, '_eyes_instance', None)
 		if eyes is not None and (eyes.browser_session is not self.browser_session or (focus and eyes.retina.target_id != focus)):
 			try:
-				await eyes.close()
+				# a page that hung (a script that never yields) answers nothing: letting go of it must not wait on it
+				await asyncio.wait_for(eyes.close(), EYES_CLOSE_S)
 			except Exception:
 				pass
 			eyes = None

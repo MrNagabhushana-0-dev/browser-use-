@@ -102,6 +102,13 @@ def games():
 	main.expect_request('/loops').respond_with_data(LOOPS, content_type='text/html')
 	main.expect_request('/slow').respond_with_data(SLOW, content_type='text/html')
 	main.expect_request('/busy').respond_with_data(BUSY, content_type='text/html')
+	# an engine that waits out each frame on its clock (as a frame limiter can): on a clock that stands still it spins
+	main.expect_request('/spin').respond_with_data(
+		'<!doctype html><title>Spin</title><body><script>window.spin = false;'
+		'requestAnimationFrame(function f() { if (window.spin) { const t0 = performance.now(); while (performance.now() - t0 < 20) {} }'
+		' requestAnimationFrame(f); });</script></body>',
+		content_type='text/html',
+	)
 	main.expect_request('/still').respond_with_data(
 		'<!doctype html><title>Still</title><p>Nothing here moves.</p>', content_type='text/html'
 	)
@@ -375,6 +382,29 @@ async def test_no_capture_is_sent_over_one_chrome_is_still_taking(session, games
 	assert capture.captures_taken - sent == 1, 'a capture was sent over one Chrome was still taking'
 	shot = await capture_screenshot(client, {'format': 'jpeg'}, sid, timeout=10)  # once the page is free again
 	assert shot['data'] and capture.captures_taken - sent == 2
+
+
+async def test_a_page_that_waits_on_its_clock_is_told_and_let_go(session, games):
+	"""Found when a model played Level Devil: a step ran past its budget, and the tab never answered again. A script that
+	waits for its clock to move (`while (performance.now() - t0 < 20) {}`) spins for good on a clock that stands
+	still, and the tab's clock stays ours. A step now notices within seconds that the page is not answering, stops the
+	script that holds it, and says the page cannot be played this way."""
+	from browser_use.eyes.clock import PageStuck
+
+	await _opened(session, games.url_for('/spin'))
+	pc = PageClock(session)
+	await pc.pause()
+	await _value(session, 'window.spin = true')
+	began = time.monotonic()
+	with pytest.raises(PageStuck):
+		await pc.step(200)
+	assert time.monotonic() - began < 10, f'noticed after {time.monotonic() - began:.1f}s'
+	cdp = await session.get_or_create_cdp_session(focus=False)
+	answer = cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': '1 + 1', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	assert (await asyncio.wait_for(answer, 5))['result']['value'] == 2, 'the script holding the page was not stopped'
+	await pc.close()
 
 
 async def _in_our_world(session: BrowserSession, expression: str):

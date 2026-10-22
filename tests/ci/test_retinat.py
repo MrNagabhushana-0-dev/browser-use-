@@ -1326,3 +1326,53 @@ async def test_a_step_says_which_way_a_thing_goes_at_its_end_not_on_average(reti
 	text = _text(stepped)
 	moved = re.findall(r'moving (\w+) at (\d+) px/s', text)
 	assert len(moved) == 1 and moved[0][0] == 'left' and float(moved[0][1]) == pytest.approx(150, rel=0.25), text
+
+
+async def test_a_hung_tab_does_not_hold_up_the_eyes_in_the_next_one(retinat, site):
+	"""Found when a model played Level Devil: its tab hung (a script that never yields), and from then on every look
+	failed, in a new tab too, each after the client's 60 s. Moving the eyes to the new tab first let go of the old one,
+	and every call that made to the hung page waited for it. Letting go of a page is now bounded."""
+	import asyncio
+	import time
+
+	site.expect_request('/movers').respond_with_data(MOVERS, content_type='text/html')
+	site.expect_request('/plain-next').respond_with_data(
+		'<!doctype html><title>Next</title><p>The next page.</p>', content_type='text/html'
+	)
+	await _open_started(retinat, site.url_for('/movers'))
+	await _call(retinat, 'retinat_look', {})  # the eyes are on this tab
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'setTimeout(() => { for (;;) {} }, 50); 1'}, session_id=cdp.session_id
+	)
+	await asyncio.sleep(0.5)  # it hangs now
+	opened = await _call(retinat, 'retinat_open', {'url': site.url_for('/plain-next'), 'new_tab': True})
+	assert 'Opened "Next"' in _text(opened), _text(opened)
+	began = time.monotonic()
+	look = await _call(retinat, 'retinat_look', {})
+	took = time.monotonic() - began
+	assert not look.is_error, _text(look)
+	assert took < 15, f'the look took {took:.0f}s'
+
+
+async def test_no_call_outlives_its_budget_on_a_page_that_hangs(retinat_short, site):
+	"""Found when a model played Level Devil: once its page hung, each look ran until the client gave up at 60 s, with
+	no answer at all. Only the long tools had a backstop at their budget; every tool has one now, so a call on a page
+	that hangs answers, and says it ran out of time, while the client still listens."""
+	import asyncio
+	import time
+
+	site.expect_request('/plain-hang').respond_with_data(
+		'<!doctype html><title>Hang</title><p>soon</p>', content_type='text/html'
+	)
+	await _open_started(retinat_short, site.url_for('/plain-hang'))
+	cdp = await retinat_short.browser_session.get_or_create_cdp_session(focus=False)
+	await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'setTimeout(() => { for (;;) {} }, 50); 1'}, session_id=cdp.session_id
+	)
+	await asyncio.sleep(0.5)
+	began = time.monotonic()
+	look = await asyncio.wait_for(_call(retinat_short, 'retinat_look', {}), 60)
+	took = time.monotonic() - began
+	assert took < retinat_short.call_budget_s + retinat_short.backstop_grace_s + 3, f'the look took {took:.0f}s'
+	assert look.is_error, _text(look)

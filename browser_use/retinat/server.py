@@ -83,8 +83,9 @@ ACTING = frozenset(
 	}
 )
 
-# Tools that can run long (a count of screens, items, pages or seconds): each is held to the call's budget, and a hard
-# stop BACKSTOP_GRACE_S after it if it does not stop by itself (the client's 60 s minus room for the answer)
+# Tools that can run long (a count of screens, items, pages or seconds): each keeps to the call's budget by itself.
+# Every tool, these or not, is stopped BACKSTOP_GRACE_S past the budget if it has not ended (the client's 60 s minus
+# room for the answer)
 LONG_TOOLS = frozenset(
 	{'retinat_scan', 'retinat_browse', 'retinat_watch', 'retinat_explore', 'retinat_desktop_watch', 'retinat_step'}
 )
@@ -170,14 +171,12 @@ class RetinatServer(BrowserUseServer):
 		bridge: 'BridgeRelay | None' = None,
 		call_budget_s: float | None = None,
 		backstop_grace_s: float = BACKSTOP_GRACE_S,
-		long_tools: frozenset[str] = LONG_TOOLS,
 	) -> None:
 		# What one tool call may spend before it answers with what it has: MCP clients drop a call at 60 s
 		self.call_budget_s = float(call_budget_s or os.environ.get('BROWSER_USE_MCP_CALL_BUDGET_S') or CALL_BUDGET_S)
 		assert self.call_budget_s > 0, 'a call budget is some seconds'
 		# The tools held to the budget by a hard stop, and how long after the budget it comes
 		self.backstop_grace_s = backstop_grace_s
-		self.long_tools = long_tools
 		# Agents get `auto` unless told otherwise: direct first, Tor only after a network failure or a
 		# geo-block, never for a bot wall. `--network off` (or RETINAT/BROWSER_USE env) turns it off.
 		super().__init__(
@@ -224,9 +223,10 @@ class RetinatServer(BrowserUseServer):
 			try:
 				if params.name in listed:
 					effects.check_arguments(listed[params.name].input_schema, params.arguments or {})
-				# A last resort for a long tool that did not stop in time by itself: it loses what the tool had, so the
-				# tools stop on their deadline first; this only keeps the server from working on after the client left
-				limit = deadline.left() + self.backstop_grace_s if params.name in self.long_tools else None
+				# A last resort for a tool that did not stop in time by itself: it loses what the tool had, so the long
+				# tools stop on their deadline first; this keeps every call answering while the client still listens (a
+				# look on a page that hung ran until the client gave up, with no answer at all)
+				limit = deadline.left() + self.backstop_grace_s if deadline.bounded else None
 				async with asyncio.timeout(limit) as backstop:
 					result = await self._call_retinat(params.name, params.arguments or {}, deadline)
 				if isinstance(result, str) and result.startswith(TEXT_FAILURES):  # shared handlers report checks as text

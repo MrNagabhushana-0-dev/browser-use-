@@ -60,6 +60,8 @@ _POLITE_S = 1.0
 # How long a frame is waited for before our world is made again: a page left for another one sits frozen in the
 # back-forward cache, and a frame asked of its world never comes
 _FRAME_WAIT_S = 1.0
+# How long a page that drew no frame has to answer before a script is taken to hold it
+_ANSWER_S = 1.0
 # The most one move of the pump may catch up, how often it checks the beat is still there (a new page has none), and how
 # long it keeps failing before it takes the tab to be gone: a pump that stops while its tab lives freezes the tab for
 # good, so a page being replaced must never be enough
@@ -150,6 +152,10 @@ _BEAT = r"""(() => {
 	window.__browserUseBeat = () => { on = false; watching.disconnect(); host.remove(); delete window.__browserUseBeat; };
 	window.__browserUseBeat.attach = attach;
 })()"""
+
+
+class PageStuck(RuntimeError):
+	"""The page stopped answering during a step: a script on it never yields."""
 
 
 class Stepped(BaseModel):
@@ -345,7 +351,8 @@ class PageClock:
 			t0 = time.monotonic()
 			await self._advance(round((i + 1) * frame_ms) - round(i * frame_ms))
 			t1 = time.monotonic()
-			await self._next_frame()
+			if not await self._next_frame():
+				await self._answers_or_stuck()
 			self._waits['clock'] += t1 - t0
 			self._waits['draw'] += time.monotonic() - t1
 			played = i + 1 - first
@@ -407,6 +414,23 @@ class PageClock:
 			self._world = None  # the page was replaced or left: make the world again in the one shown now
 		logger.debug(f'clock: no frame to wait for: {trouble}')
 		return False
+
+	async def _answers_or_stuck(self) -> None:
+		"""No frame came: if the page does not answer either, a script holds it. Such a script mostly waits for its clock
+		to move (a busy loop on performance.now()), and this clock moves only between scripts, so it never ends (found on
+		Level Devil). The script is stopped, and PageStuck says the page cannot be played this way."""
+		try:
+			await asyncio.wait_for(self._send('Runtime', 'evaluate', {'expression': '1', 'returnByValue': True}), _ANSWER_S)
+			return
+		except Exception as e:
+			logger.debug(f'clock: the page does not answer: {type(e).__name__}: {e}')
+		await self._politely(self._send('Runtime', 'terminateExecution', {}), 'stop the script holding the page')
+		raise PageStuck(
+			'the page stopped answering during the step: a script on it ran without yielding. Such a script mostly waits '
+			'for its clock to move (a busy loop on performance.now()), and in step mode the clock moves only between '
+			'scripts, so it never ends. Retinat stopped that script, but the page will do it again: it cannot be played '
+			'turn by turn. Open it again with new_tab: true and play it live, without retinat_step.'
+		)
 
 	async def _frame_in_world(self) -> dict[str, Any]:
 		return await self._send(
