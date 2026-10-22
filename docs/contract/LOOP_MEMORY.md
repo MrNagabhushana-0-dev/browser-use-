@@ -183,3 +183,10 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   bridge. Candidate stimulus: Blender Foundation's own Big Buck Bunny upload (id aqz-KE-bpKQ, UNVERIFIED-EXTERNAL from
   memory), the same film as v2, so edits.json can give exact cuts if the recording's cuts align to it (checked by
   ground_truth.py before scoring; if they do not align, labels only). Full text: docs/contract/PROTOCOL_v3_P2.md.
+- 2026-10-22 B2 MEASURED (protocol v2b, product c1bef95 = E2 kept, E2 prompt verbatim; watcher transcript
+  subagents/agent-adf046dbda764bac2.jsonl; recording retinat-20261022-192004.mp4; measure_watch.py at c1bef95): 23
+  calls, window 184.9 s, film covered 184.9 s, gaps 0, cuts_reached_model 33/33, A_unique 9,370/min, B lower bound
+  median 3.9 s p90 8.5 s (n=37), call->answer median 3.19 s max 12.13 s. Narration: 0 text blocks in the whole run;
+  all 88 lines in the final answer (the 5th run in a row to batch it, despite the prompt). Verifier (labeller, then
+  scorer) pending. Measured-commit pinning from E3 on: Retinat runs from a git worktree of the measured commit
+  (RETINAT_CODE_DIR, bin/mcp-serve.sh), so files other agents edit in the main tree cannot leak into a run.
