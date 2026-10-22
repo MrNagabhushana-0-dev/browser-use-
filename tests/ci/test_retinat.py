@@ -1662,3 +1662,30 @@ async def test_a_hold_given_as_text_is_held(retinat, site):
 	assert {s[1] for s in seen if s[0] == 'keydown'} == {'ArrowRight', 'ArrowUp'}, seen
 	refused = await _call(retinat, 'retinat_key', {'key': 'ArrowUp', 'hold_ms': 'long'})
 	assert refused.is_error and 'hold_ms' in _text(refused) and 'number' in _text(refused), _text(refused)
+
+
+async def test_a_browser_in_use_is_not_closed_as_idle(site, tmp_path, monkeypatch):
+	"""Found when models played games: 30 minutes after Retinat's browser started, mid-game, the tab went blank, the
+	game and its recording gone (three times: Moto X3M, Neon, World's Hardest Game). The idle-session cleanup Retinat
+	shares with browser-use counted only browser-use's own calls as activity, so a browser used only through Retinat
+	looked idle from its start. Every call counts now."""
+	import asyncio
+
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(session_timeout_minutes=0.05)  # idle after 3 s
+	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	try:
+		site.expect_request('/plain-busy').respond_with_data(
+			'<!doctype html><title>Busy</title><p>in use</p>', content_type='text/html'
+		)
+		await _open_started(server, site.url_for('/plain-busy'))
+		session = server.browser_session
+		assert session is not None
+		for _ in range(5):
+			await asyncio.sleep(1.0)
+			look = await _call(server, 'retinat_look', {})
+			assert not look.is_error, _text(look)
+			await server._cleanup_expired_sessions()
+		assert server.browser_session is session, 'the browser in use was closed as idle'
+	finally:
+		await server._close_all_sessions()

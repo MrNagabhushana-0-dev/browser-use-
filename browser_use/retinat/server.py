@@ -283,6 +283,8 @@ class RetinatServer(BrowserUseServer):
 			finally:
 				self._waits -= waiting
 				effects.end(token)
+				if self.browser_session is not None:  # a long call ends in use too
+					self._update_session_activity(self.browser_session.id)
 
 		async def empty_resources(_context: Any, _params: 'types.PaginatedRequestParams') -> 'types.ListResourcesResult':
 			return types.ListResourcesResult(resources=[])
@@ -448,6 +450,9 @@ class RetinatServer(BrowserUseServer):
 			raise Refused(_NOT_OURS)
 		await self._ensure_session(deadline)
 		assert self.browser_session is not None
+		# in use: the idle-session cleanup shared with browser-use counted only its own calls, and closed a browser
+		# used through Retinat 30 minutes after it started, mid-game
+		self._update_session_activity(self.browser_session.id)
 		if name in ('retinat_open', 'retinat_browse', 'retinat_next', 'retinat_explore'):
 			self._motion_before = None  # another page: the last step does not run on into the next
 		if self.bridge is not None and name in ACTING:
