@@ -96,3 +96,8 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   into a Retinat started for it, MEASURED by placing that file before the start). Then E2 (d3a6df1, gap fix) is ONE
   change against B1. E2 keep rule: gaps between windows strictly down AND C2 (cut coverage vs edit list) not worse
   AND B median not worse.
+- 2026-10-22 MEASURE ADDED before B1's first result: cuts_reached_model = of the film's own cuts (edits.json, exact for
+  protocol v2's file) inside the film span the windows covered, the share some watch result reported (a timeline row or
+  "stopped: cut at") within 0.7 s. Objective, no judgement; C2 (verifier's labels, incl. actions) stays the primary.
+  On E1 (Commons copy, timing approximate): 31 of 32, missed 39.77 s. (The B1 entry above means: eyes/service.py as in
+  d3a6df1's parent.)

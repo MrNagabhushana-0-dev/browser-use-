@@ -11,6 +11,8 @@ import re
 import statistics
 from datetime import datetime
 
+CUT_MATCH_S = 0.7  # the eyes report a cut up to ~0.5 s late (6 samples a second), measured by both E0/E1 verifiers
+
 
 def _ts(s: str) -> float:
 	return datetime.fromisoformat(s.replace('Z', '+00:00')).timestamp()
@@ -35,7 +37,7 @@ def _text(content) -> str:
 	return ''
 
 
-def measure(path: str, tool: str) -> dict:
+def measure(path: str, tool: str, edits: str | None = None) -> dict:
 	lines = [json.loads(line) for line in open(path)]
 	usage: dict[str, tuple[float, dict]] = {}  # message id -> (first timestamp, usage): one message, many lines
 	calls: dict[str, float] = {}  # tool_use id -> when the call was issued
@@ -70,7 +72,7 @@ def measure(path: str, tool: str) -> dict:
 		'output_tokens', 0
 	)
 	unique_minutes = (last_t - start) / 60
-	latencies, delays, video, spans = [], [], 0.0, []
+	latencies, delays, video, spans, reported = [], [], 0.0, [], []
 	for issued, received, text in results:
 		delays.append(received - issued)
 		covering = re.search(rf'covering {_T}-{_T}', text)
@@ -81,6 +83,7 @@ def measure(path: str, tool: str) -> dict:
 		spans.append((v0, v1))
 		# each timeline row after the first starts an event (a cut, a fade, motion starting or stopping)
 		rows = [_seconds(m[1]) for m in re.finditer(rf'^\s+{_T}-{_T}\s', text, re.M)]
+		reported += rows
 		# the model sees nothing of a window before it closes at v1: an event at v waited at least v1 - v (the time
 		# the result took to build after the window closed comes on top, unseen here)
 		for v in rows[1:]:
@@ -90,6 +93,7 @@ def measure(path: str, tool: str) -> dict:
 		stop = re.search(rf'stopped: \w+ at {_T}', text)
 		if stop:
 			latencies.append(max(0.0, v1 - _seconds(stop[1])))
+			reported.append(_seconds(stop[1]))
 	# film time no window covered between consecutive watches: what played there reached no percept
 	gaps = [round(b0 - a1, 2) for (_, a1), (b0, _) in zip(spans, spans[1:]) if b0 > a1]
 
@@ -98,8 +102,16 @@ def measure(path: str, tool: str) -> dict:
 		k = 0.9 * (len(xs) - 1)
 		return xs[int(k)] + (xs[min(int(k) + 1, len(xs) - 1)] - xs[int(k)]) * (k - int(k))
 
+	# cuts_reached_model (defined before protocol v2's first result): of the film's own cuts (its edit list) inside the
+	# film span the windows covered, the share some result reported (a timeline row or a stop) within CUT_MATCH_S
+	reach = None
+	if edits and spans:
+		cuts = [c for c in json.load(open(edits))['cuts'] if spans[0][0] <= c <= spans[-1][1]]
+		found = [c for c in cuts if any(abs(r - c) <= CUT_MATCH_S for r in reported)]
+		reach = {'cuts': len(cuts), 'reported': len(found), 'missed': [c for c in cuts if c not in found]}
 	return {
 		'calls': len(results),
+		'cuts_reached_model': reach,
 		'A_unique_per_min': round(unique / unique_minutes),
 		'gaps_between_windows_s': {'n': len(gaps), 'total': round(sum(gaps), 2), 'max': max(gaps) if gaps else 0},
 		'window_s': round(end - start, 1),
@@ -124,5 +136,6 @@ if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
 	parser.add_argument('transcript')
 	parser.add_argument('--tool', default='retinat_watch')
+	parser.add_argument('--edits', help='the film edit list (JSON with "cuts" in film seconds)')
 	args = parser.parse_args()
-	print(json.dumps(measure(args.transcript, args.tool), indent=1))
+	print(json.dumps(measure(args.transcript, args.tool, args.edits), indent=1))
