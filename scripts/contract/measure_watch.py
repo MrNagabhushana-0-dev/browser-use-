@@ -40,13 +40,23 @@ def _text(content) -> str:
 def measure(path: str, tool: str, edits: str | None = None) -> dict:
 	lines = [json.loads(line) for line in open(path)]
 	usage: dict[str, tuple[float, dict]] = {}  # message id -> (first timestamp, usage): one message, many lines
+	done: dict[str, float] = {}  # message id -> when it was finished (the first line after its last one)
+	stamps = [_ts(line['timestamp']) for line in lines if line.get('timestamp')]
+	last_id = None
 	calls: dict[str, float] = {}  # tool_use id -> when the call was issued
 	results: list[tuple[float, float, str]] = []  # (call issued, result received, result text)
 	for line in lines:
 		msg = line.get('message') or {}
 		when = _ts(line['timestamp']) if line.get('timestamp') else None
-		if line.get('type') == 'assistant' and msg.get('id') and msg.get('usage'):
+		if last_id and when is not None and msg.get('id') != last_id and last_id not in done:
+			done[last_id] = when
+		# correction 4: a synthetic message (an API error the harness wrote, zero usage) is not a turn of the watcher
+		real = msg.get('model') != '<synthetic>' and any(
+			(msg.get('usage') or {}).get(k) for k in ('input_tokens', 'output_tokens')
+		)
+		if line.get('type') == 'assistant' and msg.get('id') and real:
 			usage.setdefault(msg['id'], (when, msg['usage']))
+			last_id = msg['id']
 		for block in msg.get('content') or [] if isinstance(msg.get('content'), list) else []:
 			if block.get('type') == 'tool_use' and block.get('name', '').endswith(tool):
 				calls[block['id']] = when
@@ -68,6 +78,9 @@ def measure(path: str, tool: str, edits: str | None = None) -> dict:
 	# narration may be written), so all narration is counted
 	later = [(t, u) for t, u in turns if t > start]
 	last_t, last_u = later[-1]
+	# correction 4: the span ends when the last turn was finished, not when it began (it holds the narration)
+	last_id = next(i for i, (t, u) in usage.items() if u is last_u)
+	last_t = done.get(last_id, stamps[-1] if stamps else last_t)
 	unique = sum(u.get('input_tokens', 0) + u.get('cache_creation_input_tokens', 0) for _, u in later) + last_u.get(
 		'output_tokens', 0
 	)
@@ -79,7 +92,6 @@ def measure(path: str, tool: str, edits: str | None = None) -> dict:
 		if not covering:
 			continue
 		v0, v1 = _seconds(covering[1]), _seconds(covering[2])
-		video += v1 - v0
 		spans.append((v0, v1))
 		# each timeline row after the first starts an event (a cut, a fade, motion starting or stopping)
 		rows = [_seconds(m[1]) for m in re.finditer(rf'^\s+{_T}-{_T}\s', text, re.M)]
@@ -91,9 +103,15 @@ def measure(path: str, tool: str, edits: str | None = None) -> dict:
 		# correction 3: a watch stopped by an event says so ("stopped: cut at 1:02.3"): the model is told of that event
 		# in this result, though its frames open the next window (whose first row the loop above skips)
 		stop = re.search(rf'stopped: \w+ at {_T}', text)
-		if stop:
+		# correction 4: a stop that is also a row of this result's timeline is one event, counted once
+		if stop and not any(abs(_seconds(stop[1]) - r) <= 0.1 for r in rows[1:]):
 			latencies.append(max(0.0, v1 - _seconds(stop[1])))
 			reported.append(_seconds(stop[1]))
+	# correction 4: film covered is the union of the windows (consecutive windows overlap by a sample since E2)
+	reach_to = float('-inf')
+	for v0, v1 in sorted(spans):
+		video += max(0.0, v1 - max(v0, reach_to))
+		reach_to = max(reach_to, v1)
 	# film time no window covered between consecutive watches: what played there reached no percept
 	gaps = [round(b0 - a1, 2) for (_, a1), (b0, _) in zip(spans, spans[1:]) if b0 > a1]
 

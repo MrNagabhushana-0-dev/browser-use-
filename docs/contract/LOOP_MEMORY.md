@@ -120,3 +120,35 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   part-way; they were resumed after the reset with their work kept. The 85% pause in 4.5 could not be applied: usage is
   not visible from inside the session; the limit arrived at 100%. The local film server stopped at its 2 h background
   limit; the verifiers need only files.
+- 2026-10-22 B1 VERIFIED (fresh verifier a611b3118fdc6b9d1, own code from the transcript and the recording): reproduced
+  calls, window, gaps 12/27.0 s, cuts 29/32 (29/29 of the cuts inside a window; the 3 missed sit in gaps), A_unique
+  9,865, B 3.7/6.44 exactly. C1 54/54 = 1.0; C2 strict 7/50 = 14% missed, lenient 1/50. Refuted: (1) B counts 6 stops
+  twice (the stop's cut is also the last timeline row of the same result): n=31, median 4.40 s, p90 6.80 s; (2)
+  A_unique's span ends where the last turn began, not where it finished (8,878/min to its finish); (3) "0 text blocks"
+  is wrong: 1 text block, before the first watch, none between calls. End to end on the recording (event on screen ->
+  result in the transcript): median 4.68 s, p90 8.15 s.
+- 2026-10-22 E2 VERIFIED (fresh verifier aa84e0ecb75d42a11): reproduced calls 24, window 184.9 s, gaps 0 (23 of 23
+  transitions overlap by one 0.2 s sample), cuts 34/34 (all within 0.13 s; 31 from rows, 3 from stops; the same at
+  0.3 s), B 2.7/6.85, call->answer 2.55/8.89; the film played without a stall (recording = film + 5.40 s +-0.05). C1
+  59/60 = 0.983 (one false: 55.0 "back to camera", a pixel misreading); C2 strict 6/54 = 11.1% missed (8/54 = 14.8% if
+  the truncated last line is not narration), lenient 0/54. Refuted: (1) A_unique 8,086 is a script bug: the last line
+  is a synthetic zero-usage "API Error" message, taken as the last turn, which drops the last real turn's 5,090 output
+  tokens: 9,467/min to the hand-back; (2) B counts 8 stops twice (as B1): n=38, median 3.15 s, p90 7.22 s; (3) film
+  covered 189.7 s sums overlapping windows; the union is 185.1 s. Not refuted: pixels-only narration (every line at a
+  keyframe time, nothing from sound or speech); d3a6df1 explains the zero gaps (mechanism and data agree, n=1 a side).
+- 2026-10-22 CORRECTION 4 (measure_watch.py, applied to every run alike, all four recomputed): a stop whose cut is a row
+  of the same result counts once; a synthetic zero-usage message is not a watcher turn; A_unique's span ends where the
+  last turn finished (the next line, else the transcript's last); film covered is the union of windows. MEASURED:
+  run  A_unique/min  film s  gaps n/total  cuts   B median/p90 (n)
+  E0   5,166         180.8   10/2.3 s     33/33  7.9/14.66 (33)
+  E1   8,099         176.6   17/4.4 s     31/32  1.3/7.78 (35)
+  B1   8,859         154.1   12/27.0 s    29/32  4.4/6.8 (31)
+  E2   9,447         185.1   0/0          34/34  3.15/7.22 (38)
+  Verifier figures to the hand-back line: B1 8,878, E2 9,467 (within 0.3%). E1 stays KEEP under its own rule (B median
+  7.9 -> 1.3).
+- 2026-10-22 E2 DECISION: KEEP d3a6df1 (declared rule: gaps 27.0 s -> 0 strictly down; cuts 29/32 -> 34/34 and C2
+  strict 14% -> 11.1% not worse; B median 4.4 -> 3.15 s not worse). Regressions it did not target, MEASURED, n=1 a side:
+  A_unique +6.6% (8,859 -> 9,447; 154.1 -> 185.1 s film seen in a like window: the per-film-second cost fell), B p90
+  6.8 -> 7.22 s. Rule (INFERRED): the next watch must start at the last sample taken, never at when the percept was
+  done. Open: narration is the keyframe captions, so a short action between two keyframes is missed by construction
+  (6/54 in E2); the watcher writes no text between calls, so B is percept arrival, not narration.
