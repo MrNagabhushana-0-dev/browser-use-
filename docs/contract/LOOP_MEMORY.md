@@ -254,3 +254,10 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   laptop is the checkout's HEAD (logged in R0); Retinat is not restarted between arms (a cold start can miss the
   client's 30 s connect timeout, seen here at 23:42 UTC). Runbook and watcher prompts: PROTOCOL_v3_P2.md section 4
   (commit 4531d56).
+- 2026-10-23 E6 BLOCKED, NOT MEASURED. This session's Retinat MCP client failed to reconnect after the reboot
+  (CONNECT_TIMEOUT); /mcp reconnect is not available in this web session; one genuine retry (ToolSearch at 23:49 UTC)
+  returned no Retinat tools. Respawning Retinat under a separate headless Claude Code client in this container was
+  refused by the session's permission classifier, and is not pursued. E6 (commit 3504321, declared above) stays
+  unmeasured; its keep rule is not applied. Two probe calls of a headless client were made before that (23:49-23:50,
+  no watch): one appended its lines to this session's own transcript file, one wrote its own transcript
+  (3be4613e-f5dc-4567-8c4a-a0b15021a3c4.jsonl); neither touched a measured run.
