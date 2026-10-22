@@ -261,3 +261,9 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   unmeasured; its keep rule is not applied. Two probe calls of a headless client were made before that (23:49-23:50,
   no watch): one appended its lines to this session's own transcript file, one wrote its own transcript
   (3be4613e-f5dc-4567-8c4a-a0b15021a3c4.jsonl); neither touched a measured run.
+- 2026-10-23 LABELS FROZEN BEFORE ANY SCORING (MEASURED, sha256sum and ground_truth.py freeze agree): labels_v2b.json
+  sha256 23db2c52559f45fc87a45491d987535b7f0d77cf2e999661548ec610de0799d4; 143 events (cut 37, action 79, appear 22,
+  disappear 5), film 0.21-185.09 s, from B2's recording only (retinat-20261022-192004.mp4, offset 6.412 s); labeller
+  sub-agent aa835b693867c20c9 (Sonnet), which opened no narration, transcript, measurement or edit list. It labelled
+  one fade the detector does not flag (title -> sky, film 4.09) and listed its uncertain moments. Copies (with the
+  alignment and cuts it used): docs/contract/evidence/. One label set serves B2, E3, E4 and E5 alike.

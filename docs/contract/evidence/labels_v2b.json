@@ -1,0 +1,872 @@
+{
+ "stimulus": "Big Buck Bunny, film 0-185 s (recording of a browser tab playing the film; title card, then the rabbit, bird, squirrels and chinchilla)",
+ "recording": "/root/.config/browseruse/recordings/retinat-20261022-192004.mp4",
+ "offset_s": 6.412,
+ "labeller": "fresh labeller, contact sheets of B2 recording",
+ "made_before_scoring": true,
+ "events": [
+  {
+   "rec_s": 6.625,
+   "film_s": 0.21,
+   "kind": "cut",
+   "what": "Cut from black to the white title card 'Big Buck Bunny' in blue letters."
+  },
+  {
+   "rec_s": 10.5,
+   "film_s": 4.09,
+   "kind": "cut",
+   "what": "Title card dissolves into a soft pink-cloud sky (a fade, not a hard cut)."
+  },
+  {
+   "rec_s": 13.0,
+   "film_s": 6.59,
+   "kind": "action",
+   "what": "Camera tilts down slowly: a dark conifer and round green bushes rise into frame below the clouds."
+  },
+  {
+   "rec_s": 16.0,
+   "film_s": 9.59,
+   "kind": "action",
+   "what": "Camera keeps descending and distant blue hills and a sunlit yellow-green meadow appear under the trees."
+  },
+  {
+   "rec_s": 20.0,
+   "film_s": 13.59,
+   "kind": "action",
+   "what": "Foreground rocks and small wildflowers slide into the bottom of the frame as the tilt-down ends."
+  },
+  {
+   "rec_s": 22.625,
+   "film_s": 16.21,
+   "kind": "cut",
+   "what": "Cut to a still close shot of a stream with pink reflecting water, reeds, flowers and grass on the bank."
+  },
+  {
+   "rec_s": 26.5,
+   "film_s": 20.09,
+   "kind": "cut",
+   "what": "Cut to a purple-blue bird with an orange beak perched on a branch against a lilac sky, eyes rolled upward."
+  },
+  {
+   "rec_s": 27.0,
+   "film_s": 20.59,
+   "kind": "action",
+   "what": "Bird shuts its eyes and tilts its head, swaying on the branch."
+  },
+  {
+   "rec_s": 27.25,
+   "film_s": 20.84,
+   "kind": "action",
+   "what": "Bird opens its beak wide, flaps its wings and hops, as if singing."
+  },
+  {
+   "rec_s": 28.5,
+   "film_s": 22.09,
+   "kind": "action",
+   "what": "Bird spreads both wings wide and lifts one foot, eyes closed, mid-song."
+  },
+  {
+   "rec_s": 29.5,
+   "film_s": 23.09,
+   "kind": "action",
+   "what": "Bird settles back with wings folded and eyes closed, looking content."
+  },
+  {
+   "rec_s": 30.75,
+   "film_s": 24.34,
+   "kind": "action",
+   "what": "Bird's eyes pop open and it looks up."
+  },
+  {
+   "rec_s": 31.0,
+   "film_s": 24.59,
+   "kind": "action",
+   "what": "Bird flares its wings out with beak open, startled."
+  },
+  {
+   "rec_s": 31.25,
+   "film_s": 24.84,
+   "kind": "appear",
+   "what": "A dark pine cone drops into frame from the top."
+  },
+  {
+   "rec_s": 31.5,
+   "film_s": 25.09,
+   "kind": "action",
+   "what": "Bird leaps off the branch with wings thrown up."
+  },
+  {
+   "rec_s": 32.0,
+   "film_s": 25.59,
+   "kind": "disappear",
+   "what": "Bird and pine cone are gone, leaving an empty branch with a small feather drifting."
+  },
+  {
+   "rec_s": 34.0,
+   "film_s": 27.59,
+   "kind": "cut",
+   "what": "Cut to a wide shot of a mossy mound with a tree growing on it and a dark burrow hole at its base, in dappled sunlight."
+  },
+  {
+   "rec_s": 35.0,
+   "film_s": 28.59,
+   "kind": "action",
+   "what": "Camera pushes in slowly toward the burrow hole while the grass sways in the wind."
+  },
+  {
+   "rec_s": 46.25,
+   "film_s": 39.84,
+   "kind": "cut",
+   "what": "Cut to a close view into the dark burrow: mossy rocks at left and a big dark rabbit shape curled inside in shadow."
+  },
+  {
+   "rec_s": 50.5,
+   "film_s": 44.09,
+   "kind": "appear",
+   "what": "The sleeping rabbit's face slowly becomes visible in the dark, eyes closed."
+  },
+  {
+   "rec_s": 53.5,
+   "film_s": 47.09,
+   "kind": "action",
+   "what": "Rabbit opens its mouth wide, a yawn."
+  },
+  {
+   "rec_s": 55.0,
+   "film_s": 48.59,
+   "kind": "action",
+   "what": "A rabbit paw reaches forward at the bottom of the frame as the rabbit stirs."
+  },
+  {
+   "rec_s": 55.5,
+   "film_s": 49.09,
+   "kind": "action",
+   "what": "Rabbit lifts its head, one ear flopped over, and light now falls on its face."
+  },
+  {
+   "rec_s": 58.0,
+   "film_s": 51.59,
+   "kind": "action",
+   "what": "Rabbit's eyes open wide and both ears spring upright."
+  },
+  {
+   "rec_s": 58.625,
+   "film_s": 52.21,
+   "kind": "cut",
+   "what": "Cut to a wider daylight shot of the burrow on a grassy slope; the rabbit sprawls half out of the hole with a hand on a rock."
+  },
+  {
+   "rec_s": 59.5,
+   "film_s": 53.09,
+   "kind": "action",
+   "what": "Rabbit hauls itself out of the hole."
+  },
+  {
+   "rec_s": 60.5,
+   "film_s": 54.09,
+   "kind": "action",
+   "what": "Rabbit stands up and stretches both arms wide, yawning."
+  },
+  {
+   "rec_s": 63.0,
+   "film_s": 56.59,
+   "kind": "action",
+   "what": "Rabbit drops its arms and relaxes, smiling."
+  },
+  {
+   "rec_s": 65.0,
+   "film_s": 58.59,
+   "kind": "action",
+   "what": "Rabbit starts to walk to the right, away from the burrow."
+  },
+  {
+   "rec_s": 66.875,
+   "film_s": 60.46,
+   "kind": "cut",
+   "what": "Cut to a low-angle view of empty blue sky with leaves at the left and right edges."
+  },
+  {
+   "rec_s": 68.5,
+   "film_s": 62.09,
+   "kind": "appear",
+   "what": "Rabbit's head rises into frame from below, tilted back with eyes closed, followed by its belly and arms as it breathes in the air."
+  },
+  {
+   "rec_s": 71.5,
+   "film_s": 65.09,
+   "kind": "cut",
+   "what": "Cut to a close shot of the rabbit with ears up, half-closed eyes and a contented smile, trees behind."
+  },
+  {
+   "rec_s": 73.5,
+   "film_s": 67.09,
+   "kind": "action",
+   "what": "Rabbit closes its eyes in a happy smile."
+  },
+  {
+   "rec_s": 74.0,
+   "film_s": 67.59,
+   "kind": "action",
+   "what": "Rabbit opens its eyes and looks toward the camera, mouth parting."
+  },
+  {
+   "rec_s": 74.625,
+   "film_s": 68.21,
+   "kind": "cut",
+   "what": "Cut to a low shot between large white daisies; the rabbit stands small at right beside a tree, one fist clenched."
+  },
+  {
+   "rec_s": 75.5,
+   "film_s": 69.09,
+   "kind": "action",
+   "what": "Rabbit starts walking toward the camera."
+  },
+  {
+   "rec_s": 77.5,
+   "film_s": 71.09,
+   "kind": "action",
+   "what": "Rabbit's big body looms up and fills the right side of the frame."
+  },
+  {
+   "rec_s": 78.5,
+   "film_s": 72.09,
+   "kind": "action",
+   "what": "Rabbit's face leans in beside a flower, one hand reaching out, and it sniffs the flower with eyes closed."
+  },
+  {
+   "rec_s": 80.125,
+   "film_s": 73.71,
+   "kind": "cut",
+   "what": "Cut to the rabbit seen from behind in a meadow, standing still with one arm stretched out to the left."
+  },
+  {
+   "rec_s": 82.25,
+   "film_s": 75.84,
+   "kind": "cut",
+   "what": "Cut to a high-angle view from a branch: a dark brown furry head fills the left foreground, apples hang at top right and the small rabbit is far below in the grass."
+  },
+  {
+   "rec_s": 84.25,
+   "film_s": 77.84,
+   "kind": "cut",
+   "what": "Cut to an extreme close-up of the rabbit's face and hand beside pale blue flowers."
+  },
+  {
+   "rec_s": 85.5,
+   "film_s": 79.09,
+   "kind": "action",
+   "what": "Rabbit breaks into a wide open-mouthed smile."
+  },
+  {
+   "rec_s": 86.0,
+   "film_s": 79.59,
+   "kind": "action",
+   "what": "Rabbit glances to the side, still smiling, with white daisies now in the foreground."
+  },
+  {
+   "rec_s": 86.375,
+   "film_s": 79.96,
+   "kind": "cut",
+   "what": "Cut to a top-down view of the rabbit lying in dark grass among blue flowers, a big pink butterfly fluttering at the left edge."
+  },
+  {
+   "rec_s": 88.0,
+   "film_s": 81.59,
+   "kind": "action",
+   "what": "Butterfly flutters right in front of the rabbit's face while the rabbit watches it, one arm extended."
+  },
+  {
+   "rec_s": 89.5,
+   "film_s": 83.09,
+   "kind": "action",
+   "what": "Butterfly flies over the rabbit's body toward the right as the rabbit turns to follow it."
+  },
+  {
+   "rec_s": 90.75,
+   "film_s": 84.34,
+   "kind": "cut",
+   "what": "Cut to a wide meadow shot: the rabbit stands at left looking up at a butterfly above its head, green trees behind."
+  },
+  {
+   "rec_s": 91.5,
+   "film_s": 85.09,
+   "kind": "action",
+   "what": "Butterfly settles briefly on top of the rabbit's head between its ears."
+  },
+  {
+   "rec_s": 92.5,
+   "film_s": 86.09,
+   "kind": "action",
+   "what": "Butterfly flies off to the right and sinks toward the grass, the rabbit's eyes following it."
+  },
+  {
+   "rec_s": 93.5,
+   "film_s": 87.09,
+   "kind": "action",
+   "what": "Rabbit brings both hands together at its chest, trying to catch the butterfly."
+  },
+  {
+   "rec_s": 94.75,
+   "film_s": 88.34,
+   "kind": "appear",
+   "what": "A red apple appears in the grass near the rabbit and rolls to a stop; the butterfly is gone."
+  },
+  {
+   "rec_s": 96.75,
+   "film_s": 90.34,
+   "kind": "action",
+   "what": "Rabbit unclasps its hands, stands tall and looks down at the apple."
+  },
+  {
+   "rec_s": 98.0,
+   "film_s": 91.59,
+   "kind": "action",
+   "what": "Rabbit bends down and grabs the apple."
+  },
+  {
+   "rec_s": 98.75,
+   "film_s": 92.34,
+   "kind": "action",
+   "what": "Rabbit straightens up and lifts the apple to chest height, eyeing it."
+  },
+  {
+   "rec_s": 100.5,
+   "film_s": 94.09,
+   "kind": "cut",
+   "what": "Cut to a low-angle view up into an apple tree with red apples among the leaves; the rabbit's ear and head are at lower left."
+  },
+  {
+   "rec_s": 101.25,
+   "film_s": 94.84,
+   "kind": "action",
+   "what": "Rabbit's ear straightens upright and its head turns as it looks toward the tree."
+  },
+  {
+   "rec_s": 102.25,
+   "film_s": 95.84,
+   "kind": "cut",
+   "what": "Cut back to the wide meadow: the rabbit stands holding the red apple at its side with a worried look."
+  },
+  {
+   "rec_s": 105.5,
+   "film_s": 99.09,
+   "kind": "action",
+   "what": "Rabbit raises the apple to its mouth and takes a bite."
+  },
+  {
+   "rec_s": 106.5,
+   "film_s": 100.09,
+   "kind": "action",
+   "what": "Rabbit lowers the apple and turns toward the left."
+  },
+  {
+   "rec_s": 107.5,
+   "film_s": 101.09,
+   "kind": "action",
+   "what": "Rabbit walks off to the left, hunched over the apple."
+  },
+  {
+   "rec_s": 108.25,
+   "film_s": 101.84,
+   "kind": "disappear",
+   "what": "Rabbit leaves the frame at the left, leaving an empty meadow."
+  },
+  {
+   "rec_s": 108.5,
+   "film_s": 102.09,
+   "kind": "appear",
+   "what": "A pink butterfly flutters in from the right edge and flies left over the trees."
+  },
+  {
+   "rec_s": 110.5,
+   "film_s": 104.09,
+   "kind": "cut",
+   "what": "Cut to a high-angle view from a branch: a dark red-brown furry head and ear fill the left foreground, red apples at top right, and the tiny rabbit far below."
+  },
+  {
+   "rec_s": 112.75,
+   "film_s": 106.34,
+   "kind": "cut",
+   "what": "Cut to a similar high-angle view with a big red apple at top left; the furry head is gone and only its hand slides out at the left edge, the tiny rabbit near the bottom center."
+  },
+  {
+   "rec_s": 114.875,
+   "film_s": 108.46,
+   "kind": "cut",
+   "what": "Cut to a close side view of the rabbit looking off to the left, ears up, with a pale sky and meadow behind."
+  },
+  {
+   "rec_s": 115.5,
+   "film_s": 109.09,
+   "kind": "action",
+   "what": "Rabbit lowers its arm, holding a half-eaten apple core, and looks at it."
+  },
+  {
+   "rec_s": 116.0,
+   "film_s": 109.59,
+   "kind": "action",
+   "what": "Rabbit lifts the apple core up in its hand, studying it."
+  },
+  {
+   "rec_s": 116.5,
+   "film_s": 110.09,
+   "kind": "appear",
+   "what": "A purple butterfly flies in at the right edge."
+  },
+  {
+   "rec_s": 117.0,
+   "film_s": 110.59,
+   "kind": "action",
+   "what": "Rabbit's hand drops low and the apple core is no longer visible; the butterfly hovers over its shoulder."
+  },
+  {
+   "rec_s": 118.0,
+   "film_s": 111.59,
+   "kind": "action",
+   "what": "Butterfly lands on the rabbit's forehead and the rabbit goes cross-eyed."
+  },
+  {
+   "rec_s": 119.0,
+   "film_s": 112.59,
+   "kind": "action",
+   "what": "Butterfly lifts off and flies to the upper left while the rabbit's eyes and head follow it."
+  },
+  {
+   "rec_s": 122.5,
+   "film_s": 116.09,
+   "kind": "action",
+   "what": "Butterfly flutters out at the left edge while the rabbit breaks into a broad grin."
+  },
+  {
+   "rec_s": 123.0,
+   "film_s": 116.59,
+   "kind": "action",
+   "what": "Rabbit leans hard to the left with an arm out, lunging after the butterfly."
+  },
+  {
+   "rec_s": 123.5,
+   "film_s": 117.09,
+   "kind": "cut",
+   "what": "Cut to a wide low shot of a meadow with trees: the rabbit's huge foot and rump stride past at right, a purple butterfly at top left."
+  },
+  {
+   "rec_s": 124.5,
+   "film_s": 118.09,
+   "kind": "action",
+   "what": "Rabbit, seen from behind, walks away from the camera with one arm raised toward the butterfly."
+  },
+  {
+   "rec_s": 125.5,
+   "film_s": 119.09,
+   "kind": "action",
+   "what": "Rabbit, now small near the tree, reaches up and grabs at the butterfly."
+  },
+  {
+   "rec_s": 126.0,
+   "film_s": 119.59,
+   "kind": "appear",
+   "what": "A reddish-brown round object pokes in at the right edge of the frame."
+  },
+  {
+   "rec_s": 126.5,
+   "film_s": 120.09,
+   "kind": "appear",
+   "what": "A big dark grey-purple furry animal, back to camera, fills the right side of the foreground while the small rabbit keeps reaching for the butterfly."
+  },
+  {
+   "rec_s": 128.0,
+   "film_s": 121.59,
+   "kind": "appear",
+   "what": "A red-orange pointed ear or head of another animal peeks over the grey animal at the top right."
+  },
+  {
+   "rec_s": 128.875,
+   "film_s": 122.46,
+   "kind": "cut",
+   "what": "Cut to a medium shot of a red-furred squirrel leaning over a blue-grey chinchilla that holds a chestnut, in front of green bushes."
+  },
+  {
+   "rec_s": 129.5,
+   "film_s": 123.09,
+   "kind": "appear",
+   "what": "A brown squirrel with a big blue eye creeps into frame from the lower left, low to the ground."
+  },
+  {
+   "rec_s": 130.5,
+   "film_s": 124.09,
+   "kind": "action",
+   "what": "Brown squirrel sits up on its haunches with its big tail curled and looks off to the right."
+  },
+  {
+   "rec_s": 131.75,
+   "film_s": 125.34,
+   "kind": "cut",
+   "what": "Cut to a shot of a thick tree trunk: the rabbit seen from behind at right reaches an arm toward a pink-purple butterfly in front of the trunk."
+  },
+  {
+   "rec_s": 133.5,
+   "film_s": 127.09,
+   "kind": "action",
+   "what": "Rabbit turns its head toward the camera, smiling, as the butterfly flutters upward."
+  },
+  {
+   "rec_s": 134.25,
+   "film_s": 127.84,
+   "kind": "cut",
+   "what": "Cut to the rabbit's huge grey side filling the left half of the frame, a tree trunk and grass at right."
+  },
+  {
+   "rec_s": 135.5,
+   "film_s": 129.09,
+   "kind": "appear",
+   "what": "A small brown squirrel peeks out from behind the tree trunk at the right."
+  },
+  {
+   "rec_s": 136.5,
+   "film_s": 130.09,
+   "kind": "action",
+   "what": "Squirrel scrambles out onto the root with its tail up, looking up at the rabbit."
+  },
+  {
+   "rec_s": 137.75,
+   "film_s": 131.34,
+   "kind": "cut",
+   "what": "Cut to a medium shot of the rabbit smiling in front of the tree, a purple butterfly hovering above its head."
+  },
+  {
+   "rec_s": 138.5,
+   "film_s": 132.09,
+   "kind": "action",
+   "what": "Butterfly alights on top of the rabbit's head between its ears."
+  },
+  {
+   "rec_s": 140.0,
+   "film_s": 133.59,
+   "kind": "action",
+   "what": "Butterfly flies away out of the shot and the rabbit's grin fades to a blank, wary look."
+  },
+  {
+   "rec_s": 142.0,
+   "film_s": 135.59,
+   "kind": "appear",
+   "what": "A brown squirrel appears at the right edge, clinging to the tree trunk beside the rabbit."
+  },
+  {
+   "rec_s": 144.0,
+   "film_s": 137.59,
+   "kind": "appear",
+   "what": "A red-orange furred animal hangs upside-down from the leaves at the top left."
+  },
+  {
+   "rec_s": 145.5,
+   "film_s": 139.09,
+   "kind": "appear",
+   "what": "The purple butterfly flutters back in between the rabbit and the squirrel."
+  },
+  {
+   "rec_s": 147.0,
+   "film_s": 140.59,
+   "kind": "action",
+   "what": "Butterfly hovers above the rabbit's head while the rabbit folds an arm across its belly and looks off, thoughtful."
+  },
+  {
+   "rec_s": 148.5,
+   "film_s": 142.09,
+   "kind": "action",
+   "what": "Brown squirrel scurries and leaps up the trunk to above the rabbit's ears."
+  },
+  {
+   "rec_s": 151.0,
+   "film_s": 144.59,
+   "kind": "disappear",
+   "what": "The upside-down red animal is gone from the top left and the butterfly flutters out at the left edge."
+  },
+  {
+   "rec_s": 151.0,
+   "film_s": 144.59,
+   "kind": "action",
+   "what": "A single green leaf starts to fall slowly past the tree, drifting down through the shot."
+  },
+  {
+   "rec_s": 151.5,
+   "film_s": 145.09,
+   "kind": "action",
+   "what": "Rabbit raises a hand to its chin, thinking, as the leaf drifts down."
+  },
+  {
+   "rec_s": 153.5,
+   "film_s": 147.09,
+   "kind": "action",
+   "what": "Rabbit drops its hand, perks its ears up and looks up toward the squirrel."
+  },
+  {
+   "rec_s": 154.25,
+   "film_s": 147.84,
+   "kind": "action",
+   "what": "Rabbit leans toward the camera with a startled face, its big head sliding off to the right."
+  },
+  {
+   "rec_s": 155.0,
+   "film_s": 148.59,
+   "kind": "disappear",
+   "what": "Rabbit has left the frame, leaving the squirrel alone on the trunk."
+  },
+  {
+   "rec_s": 155.75,
+   "film_s": 149.34,
+   "kind": "action",
+   "what": "Squirrel flips head-down on the trunk and glares at the camera."
+  },
+  {
+   "rec_s": 157.25,
+   "film_s": 150.84,
+   "kind": "cut",
+   "what": "Cut to a top-down view of yellow-green grass with a tiny rabbit near a tree canopy at the top left."
+  },
+  {
+   "rec_s": 158.0,
+   "film_s": 151.59,
+   "kind": "action",
+   "what": "The tiny rabbit walks slowly down and across the grass."
+  },
+  {
+   "rec_s": 160.0,
+   "film_s": 153.59,
+   "kind": "cut",
+   "what": "Cut to a sunlit rock and tree base: a blue-grey chinchilla sits at the right clutching a chestnut."
+  },
+  {
+   "rec_s": 161.5,
+   "film_s": 155.09,
+   "kind": "appear",
+   "what": "A red squirrel pops up behind the chinchilla at the right."
+  },
+  {
+   "rec_s": 163.0,
+   "film_s": 156.59,
+   "kind": "appear",
+   "what": "A brown squirrel scrambles down onto the rock from the top left, tail arched."
+  },
+  {
+   "rec_s": 164.0,
+   "film_s": 157.59,
+   "kind": "action",
+   "what": "Chinchilla holds its chestnut up beside its head while the brown squirrel, mouth open, scolds."
+  },
+  {
+   "rec_s": 164.5,
+   "film_s": 158.09,
+   "kind": "disappear",
+   "what": "The chestnut is gone from the chinchilla's paws and it looks anxious."
+  },
+  {
+   "rec_s": 165.0,
+   "film_s": 158.59,
+   "kind": "appear",
+   "what": "A small red-brown curved object, possibly a chestnut half, appears in the grass at the bottom right."
+  },
+  {
+   "rec_s": 166.875,
+   "film_s": 160.46,
+   "kind": "cut",
+   "what": "Cut to the rabbit standing alone in a yellow-green meadow, facing the camera, hands at its sides."
+  },
+  {
+   "rec_s": 169.0,
+   "film_s": 162.59,
+   "kind": "appear",
+   "what": "A small dark nut flies in from the left and strikes near the rabbit's head."
+  },
+  {
+   "rec_s": 169.5,
+   "film_s": 163.09,
+   "kind": "action",
+   "what": "Rabbit's head jerks and its ears flick, wincing from the hit."
+  },
+  {
+   "rec_s": 170.0,
+   "film_s": 163.59,
+   "kind": "action",
+   "what": "Rabbit turns toward the left with an annoyed squint."
+  },
+  {
+   "rec_s": 171.25,
+   "film_s": 164.84,
+   "kind": "action",
+   "what": "Rabbit puts its hands on its hips and looks up and off to the side."
+  },
+  {
+   "rec_s": 171.625,
+   "film_s": 165.21,
+   "kind": "cut",
+   "what": "Cut to the three animals on the rock: brown squirrel at left, red squirrel in the middle with a toothy grin, chinchilla at right."
+  },
+  {
+   "rec_s": 172.5,
+   "film_s": 166.09,
+   "kind": "action",
+   "what": "Red squirrel gestures with its arm and grins while the brown squirrel smirks."
+  },
+  {
+   "rec_s": 173.125,
+   "film_s": 166.71,
+   "kind": "cut",
+   "what": "Cut to a big close-up of the rabbit, eyes wide and mouth open, ears moving."
+  },
+  {
+   "rec_s": 173.75,
+   "film_s": 167.34,
+   "kind": "action",
+   "what": "Rabbit's eyes dart sideways and its ears sway."
+  },
+  {
+   "rec_s": 174.125,
+   "film_s": 167.71,
+   "kind": "cut",
+   "what": "Cut back to the three animals on the rock, grinning."
+  },
+  {
+   "rec_s": 175.5,
+   "film_s": 169.09,
+   "kind": "action",
+   "what": "Red squirrel's eyes go wide and it tilts its head while the brown squirrel glowers."
+  },
+  {
+   "rec_s": 176.5,
+   "film_s": 170.09,
+   "kind": "action",
+   "what": "Red squirrel lifts a green nut in its raised hand beside its head, grinning."
+  },
+  {
+   "rec_s": 177.125,
+   "film_s": 170.71,
+   "kind": "cut",
+   "what": "Cut to the rabbit close-up, mouth ajar and eyes looking to the right."
+  },
+  {
+   "rec_s": 178.25,
+   "film_s": 171.84,
+   "kind": "action",
+   "what": "Rabbit frowns and its eyes dart to the right."
+  },
+  {
+   "rec_s": 178.875,
+   "film_s": 172.46,
+   "kind": "cut",
+   "what": "Cut back to the animals: the red squirrel holds the green nut up, the brown squirrel grimacing."
+  },
+  {
+   "rec_s": 179.5,
+   "film_s": 173.09,
+   "kind": "action",
+   "what": "Red squirrel cocks its arm back with the nut."
+  },
+  {
+   "rec_s": 180.375,
+   "film_s": 173.96,
+   "kind": "cut",
+   "what": "Cut to the rabbit's face in close-up, eyes shut and mouth pursed."
+  },
+  {
+   "rec_s": 181.0,
+   "film_s": 174.59,
+   "kind": "action",
+   "what": "Rabbit drops down out of frame, leaving only its two ear tips at the bottom edge."
+  },
+  {
+   "rec_s": 182.5,
+   "film_s": 176.09,
+   "kind": "action",
+   "what": "Rabbit rises back up into the frame, eyes darting right, one ear flopped."
+  },
+  {
+   "rec_s": 184.0,
+   "film_s": 177.59,
+   "kind": "action",
+   "what": "Rabbit straightens up fully with ears upright and a worried sidelong look."
+  },
+  {
+   "rec_s": 185.5,
+   "film_s": 179.09,
+   "kind": "appear",
+   "what": "A brown nut flies into the frame at the upper left."
+  },
+  {
+   "rec_s": 185.5,
+   "film_s": 179.09,
+   "kind": "action",
+   "what": "Rabbit winces, one eye squeezed shut."
+  },
+  {
+   "rec_s": 186.5,
+   "film_s": 180.09,
+   "kind": "appear",
+   "what": "More nuts, a dark brown one and a green acorn, fly in from the top and left around the rabbit's head."
+  },
+  {
+   "rec_s": 187.0,
+   "film_s": 180.59,
+   "kind": "cut",
+   "what": "Cut to the animals: brown squirrel glaring toward us, red squirrel behind it, chinchilla holding an acorn at the right."
+  },
+  {
+   "rec_s": 187.25,
+   "film_s": 180.84,
+   "kind": "action",
+   "what": "Chinchilla now clutches a red-brown chestnut and the red squirrel waves an arm."
+  },
+  {
+   "rec_s": 188.5,
+   "film_s": 182.09,
+   "kind": "action",
+   "what": "Chinchilla grins with eyes nearly shut."
+  },
+  {
+   "rec_s": 188.625,
+   "film_s": 182.21,
+   "kind": "cut",
+   "what": "Cut to the rabbit standing full-body in a yellow meadow with a dark nut flying in at the upper left."
+  },
+  {
+   "rec_s": 189.0,
+   "film_s": 182.59,
+   "kind": "action",
+   "what": "A green acorn and then a brown nut arc in from the left past the rabbit's head while it tilts its head with a glum look."
+  },
+  {
+   "rec_s": 190.0,
+   "film_s": 183.59,
+   "kind": "appear",
+   "what": "A green pear drops from the top of the frame onto the rabbit's head, which droops with eyes shut."
+  },
+  {
+   "rec_s": 190.75,
+   "film_s": 184.34,
+   "kind": "action",
+   "what": "A brown nut hits the rabbit's ear and head."
+  },
+  {
+   "rec_s": 191.0,
+   "film_s": 184.59,
+   "kind": "action",
+   "what": "Another nut thuds into the rabbit's belly and drops away."
+  },
+  {
+   "rec_s": 191.25,
+   "film_s": 184.84,
+   "kind": "appear",
+   "what": "A red apple drops in above the rabbit's head."
+  },
+  {
+   "rec_s": 191.5,
+   "film_s": 185.09,
+   "kind": "cut",
+   "what": "Cut back to the squirrel, red squirrel and chinchilla on the rock, the chinchilla clutching an acorn."
+  }
+ ],
+ "span_rec_s": [
+  6.412,
+  191.5
+ ],
+ "recording_sha256": "4eade45cc8f8f7cd866d4f7b373fa4047951a90b70c394c93a0257b538a22e55"
+}
