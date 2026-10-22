@@ -34,3 +34,15 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   understate. METRIC-B is now v1 - v per event: a lower bound (the model sees nothing of a window until it closes at v1;
   the time to build the result after that is not in it). Also fixed: the parser read only "12.3s" times, not "1:02.3",
   and first reported 43.8 s covered and 6 events for E0; the corrected parse reads 180.8 s and 33.
+- 2026-10-22 E0 baseline (product at fb0bb25; watcher: retinat_watch seconds=12 until=time hold=false detail=glance,
+  live), MEASURED with `uv run --no-sync python scripts/contract/measure_watch.py subagents/agent-a37e48ab934f5cc04.jsonl`
+  (scripts at 71e4ae1): 11 calls, window 185.5 s, film covered 180.8 s; A_added 6,036/min, A_processed 255,938/min;
+  B call->answer median 12.64 s (max 12.93); B event lower bound median 7.9 s, p90 14.1 s (n=33). Recording:
+  /root/.config/browseruse/recordings/retinat-20261022-150157.mp4. C1/C2 and verification: pending (verifier running).
+  Per-turn split (INFERRED from the same transcript): each watch turn adds ~1,240-1,560 new tokens (the result plus the
+  turn's own narration) and writes ~300-480; the window's last turn is the watcher's JSON summary (~3,000 out), which
+  inflates A in every run of this protocol alike.
+- 2026-10-22 E1 declared before measuring: ONE change, configuration only (product unchanged at fb0bb25): the watcher
+  calls retinat_watch until=event (stop at the first cut or sound change) instead of until=time 12 s; seconds=12 stays as
+  the cap. Target: B (event lower bound median). Keep if B median strictly drops AND C2 does not worsen; A is recorded
+  as the trade-off (a later product change targets it).
