@@ -95,3 +95,6 @@ plot.py
 !.claude/agents/
 # The project MCP config is shared on purpose: it registers the retinat and browser-use servers.
 !.mcp.json
+
+# per-machine Retinat switches (bin/mcp-serve.sh sources it)
+.retinat.env
