@@ -79,7 +79,7 @@ def read(frames: list[tuple[float, np.ndarray]]) -> Movement:
 		scroll = (offsets[-1][0] / seconds, offsets[-1][1] / seconds)
 		pictures = _aligned(pictures, offsets)
 	still = np.median(np.stack(pictures), axis=0)
-	blobs = [[(t, *b) for b in _blobs(np.abs(f - still) > DIFF)] for (t, _), f in zip(frames, pictures)]
+	blobs = [[(t, *b) for b in _blobs(f, still)] for (t, _), f in zip(frames, pictures)]
 	end = frames[-1][0]
 	shortest = MIN_TRACK if len(frames) >= MIN_TRACK + 1 else 2
 	movers = []
@@ -317,11 +317,15 @@ def _aligned(frames: list[np.ndarray], offsets: list[tuple[float, float]]) -> li
 	return [np.roll(f, (dy, dx), axis=(0, 1))[top:bottom, left:right] for f, dx, dy in zip(frames, dxs, dys)]
 
 
-def _blobs(mask: np.ndarray) -> list[tuple[float, float, float]]:
-	"""(x, y, area) of each connected group of what differs, on a grid of CELL px cells (OpenCV's connected
-	components), its centre weighted by how much of each cell differs."""
+def _blobs(frame: np.ndarray, still: np.ndarray) -> list[tuple[float, float, float]]:
+	"""(x, y, area) of each connected group of what differs between `frame` and the still picture, on a grid of CELL px
+	cells (OpenCV's connected components), its centre weighted by how much of each cell differs. A group whose
+	difference is in the still picture, not in the frame, is left out: where a slow thing lingered over the step the
+	median keeps a faint copy of it, and once the thing has gone the frame there looks like what surrounds it (a ghost,
+	read before as a mover of its own)."""
 	import cv2
 
+	mask = np.abs(frame - still) > DIFF
 	h, w = mask.shape
 	gh, gw = h // CELL, w // CELL
 	cells = mask[: gh * CELL, : gw * CELL].reshape(gh, CELL, gw, CELL).sum(axis=(1, 3)).astype(np.float32)
@@ -331,12 +335,27 @@ def _blobs(mask: np.ndarray) -> list[tuple[float, float, float]]:
 	mass = np.bincount(flat, weights=weights, minlength=count)
 	sum_x = np.bincount(flat, weights=weights * (xs.ravel() + 0.5), minlength=count)
 	sum_y = np.bincount(flat, weights=weights * (ys.ravel() + 0.5), minlength=count)
-	blobs = [
+	return [
 		(float(sum_x[i] / mass[i] * CELL), float(sum_y[i] / mass[i] * CELL), float(mass[i]))
 		for i in range(1, count)
-		if stats[i, cv2.CC_STAT_AREA] >= MIN_BLOB_CELLS
+		if stats[i, cv2.CC_STAT_AREA] >= MIN_BLOB_CELLS and not _ghost(frame, still, mask, labels, stats, i)
 	]
-	return blobs
+
+
+def _ghost(frame: np.ndarray, still: np.ndarray, mask: np.ndarray, labels: np.ndarray, stats: np.ndarray, i: int) -> bool:
+	"""Whether group `i` of what differs is in the still picture rather than in the frame: against the cells around it
+	(what is there in this frame), the still picture's pixels stand out more than the frame's own."""
+	x, y, gw, gh = (int(v) for v in stats[i, :4])
+	pad = max(2, gw, gh)
+	y0, y1, x0, x1 = max(0, y - pad), min(labels.shape[0], y + gh + pad), max(0, x - pad), min(labels.shape[1], x + gw + pad)
+	near = labels[y0:y1, x0:x1]
+	px = (slice(y0 * CELL, y1 * CELL), slice(x0 * CELL, x1 * CELL))
+	group = np.repeat(np.repeat(near == i, CELL, axis=0), CELL, axis=1) & mask[px]
+	around = np.repeat(np.repeat(near == 0, CELL, axis=0), CELL, axis=1)
+	if not around.any() or not group.any():
+		return False
+	ground = float(np.median(frame[px][around]))
+	return float(np.abs(still[px][group] - ground).mean()) > float(np.abs(frame[px][group] - ground).mean())
 
 
 def _matched(

@@ -1462,6 +1462,35 @@ async def test_the_eyes_read_a_step_from_the_video_stream_not_from_screenshots(r
 	assert speeds.get('right', 0) == pytest.approx(160, rel=0.2) and speeds.get('down', 0) == pytest.approx(80, rel=0.25), text
 
 
+def test_where_a_slow_thing_lingered_is_not_read_as_another_mover():
+	"""Found when a model played World's Hardest Game, level 2: columns of dots sweep up and down, neighbours the
+	opposite way. Over a short step a dot covers the middle of its path in about half the frames, so the still picture
+	(their median) keeps a faint dot there, and where the dot has gone that ghost read as a thing moving sideways at
+	180 px/s. Every mover the eyes report here goes up or down, where a dot really is."""
+	import cv2
+	import numpy as np
+
+	from browser_use.eyes import moving
+
+	def field(t_ms: float) -> tuple[np.ndarray, list[tuple[float, float]]]:
+		picture, dots = np.full((200, 400), 235, np.float32), []
+		for i in range(10):
+			x, y = 60 + 30 * i, 50 + (t_ms * 0.15) % 100  # 150 px/s, top to bottom
+			y = 200 - y if i % 2 else y
+			cv2.circle(picture, (x, round(y)), 5, 30, -1)
+			dots.append((x, y))
+		return picture, dots
+
+	frames = [(k * 1000 / 60, field(200 + k * 1000 / 60)[0]) for k in range(10)]  # 150 ms at 60 fps
+	ends = field(200 + 9 * 1000 / 60)[1]
+	movement = moving.read(frames)
+	seen = [m for group in movement.together for m in group] + movement.movers
+	assert len(seen) == 10, [(round(m.x), round(m.y), round(m.vx), round(m.vy)) for m in seen]
+	for m in seen:
+		assert abs(m.vy) > 5 * abs(m.vx), (m.x, m.y, m.vx, m.vy)
+		assert min(np.hypot(m.x - x, m.y - y) for x, y in ends) < 3, (m.x, m.y)
+
+
 KEYS = """<!doctype html><title>Keys</title><body><script>
 window.seen = [];
 for (const type of ['keydown', 'keyup']) addEventListener(type, (e) => seen.push([type, e.key, performance.now(), e.repeat, e.code, e.keyCode]));
