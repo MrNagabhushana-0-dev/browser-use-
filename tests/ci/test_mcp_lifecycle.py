@@ -205,3 +205,38 @@ async def test_browser_use_over_stdio_takes_a_call_that_arrives_while_it_loads(t
 			assert 'No active browser sessions' in sessions.content[0].text, sessions  # type: ignore[union-attr]
 			await asyncio.sleep(0.5)
 			assert told == ['notifications/tools/list_changed'], told
+
+
+async def test_a_server_that_failed_to_load_says_so_and_loads_again_on_the_next_call(tmp_path):
+	"""Found in review: the front kept a failed load for good. A restarted server whose bridge port the old process
+	still held answered the handshake and the list, then failed every call with a raw protocol error for the rest of
+	its life, though the port was soon free. A call now says what failed and that nothing was done, and the next call
+	loads again."""
+	import socket
+
+	from mcp import ClientSession, StdioServerParameters
+	from mcp.client.stdio import stdio_client
+
+	held = socket.socket()
+	held.bind(('127.0.0.1', 0))
+	held.listen()
+	port = held.getsockname()[1]
+	env = {
+		**os.environ,
+		'BROWSER_USE_CONFIG_DIR': str(tmp_path / 'config'),
+		'ANONYMIZED_TELEMETRY': 'false',
+		'BROWSER_USE_BRIDGE': str(port),
+	}
+	params = StdioServerParameters(command=sys.executable, args=['-m', 'browser_use.mcp'], env=env)
+	try:
+		async with stdio_client(params) as (read, write):
+			async with ClientSession(read, write) as client:
+				await client.initialize()
+				failed = await client.call_tool('browser_list_sessions', {})
+				text = failed.content[0].text  # type: ignore[union-attr]
+				assert failed.is_error and 'failed to load' in text and 'call again' in text, text
+				held.close()
+				sessions = await client.call_tool('browser_list_sessions', {})
+				assert not sessions.is_error, sessions
+	finally:
+		held.close()

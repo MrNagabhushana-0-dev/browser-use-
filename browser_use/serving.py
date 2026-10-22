@@ -82,6 +82,9 @@ class Front:
 		return await self._listen_handler(context, params)
 
 	def start_loading(self) -> None:
+		# A load that failed (the bridge's port still held by the process before, say) is tried again by the next call
+		if self._loading is not None and self._loading.done() and self.inner is None:
+			self._loading = None
 		if self._loading is None:
 			self._loading_since = time.monotonic()
 			self._loading = asyncio.create_task(self._load())
@@ -118,6 +121,9 @@ class Front:
 					f'{self.label} is still loading ({time.monotonic() - self._loading_since:.0f}s so far: after the machine '
 					'boots its files are read off a cold disk). Nothing was done; call again.'
 				)
+				return types.CallToolResult(content=[types.TextContent(type='text', text=f'Error: {text}')], is_error=True)
+			except Exception as e:
+				text = f'{self.label} failed to load: {type(e).__name__}: {e}. Nothing was done; call again to load it again.'
 				return types.CallToolResult(content=[types.TextContent(type='text', text=f'Error: {text}')], is_error=True)
 			token = CALL_STARTED.set(started)
 			try:
