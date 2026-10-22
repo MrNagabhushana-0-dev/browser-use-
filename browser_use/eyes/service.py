@@ -61,6 +61,7 @@ from browser_use.eyes.percept import (
 	render_strip,
 )
 from browser_use.eyes.requests import RequestLog, told_as_page_failure
+from browser_use.eyes.reservoir import Reservoir
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
 from browser_use.eyes.views import (
 	ASR_REALTIME_X,
@@ -168,7 +169,8 @@ class Eyes:
 		self._meaning = None  # MeaningIndex over the archive, made on first search
 		self._last_now = 0.0
 		self._items_seen = 0
-		self._reported: dict[int, float] = {}  # item id -> when a percept last covered it
+		# INV-2: per item, the last sample a percept committed; the next watch commits from there (eyes/reservoir.py)
+		self.reservoir = Reservoir(backfill_max_s=BACKFILL_MAX_S)
 		self._last_percept_end = 0.0
 		self._sounds_noted: dict[int, str] = {}  # item id -> the distinct-sounds line last journaled for it
 		self._pages = None
@@ -205,12 +207,7 @@ class Eyes:
 		"""Where a watch of item `vid` starting at `start` picks up: the end of the last percept of it, or where it
 		began, up to BACKFILL_MAX_S back. Starting at the call would leave the caller's latency as a blind gap: a beep
 		or a toast between opening a page and the first watch would never be reported."""
-		if not vid:
-			return start
-		walls = [f.wall for f in self.retina.frames if f.vid == vid] + [h.wall for h in self.retina.hops if h.vid == vid]
-		if not walls:
-			return start
-		return min(start, max(min(walls), self._reported.get(vid, 0.0), self.retina.page_since, start - BACKFILL_MAX_S))
+		return self.reservoir.start(start, vid, (self.retina.frames, self.retina.hops), self.retina.page_since)
 
 	def _text_since(self, start: float) -> float:
 		"""Text that appeared after the last percept, on this page, up to BACKFILL_MAX_S back, is still news."""
@@ -360,9 +357,7 @@ class Eyes:
 		# Where this percept's samples end, per item: the next watch picks up from there. Picking up from when this
 		# percept was done left out what played while it was built (0.2-0.5 s a call, measured: real cuts fell there)
 		taken_frames, taken_hops, _ = self._since(since)
-		covered: dict[int, float] = {}
-		for sample in [*taken_frames, *taken_hops]:
-			covered[sample.vid] = max(covered.get(sample.vid, 0.0), sample.wall)
+		erased = self.reservoir.last_erased_s
 		percept = await self.perceive(
 			since=since,
 			detail=detail,
@@ -377,9 +372,10 @@ class Eyes:
 		percept.stop_reason = reason
 		percept.started_at, percept.ended_at = start, time.monotonic()
 		self._last_percept_end = percept.ended_at
-		for item in percept.items:
-			self._reported[item.vid] = covered.get(item.vid, percept.ended_at)
+		self.reservoir.commit([*taken_frames, *taken_hops], [item.vid for item in percept.items], percept.ended_at)
 		percept.text = percept.text.replace('{REASON}', reason)
+		if erased > 0:
+			percept.text += f"\n    evidence erased: {erased:.1f}s played past the eyes' memory before this watch, never seen"
 		return percept
 
 	async def perceive(
@@ -483,7 +479,7 @@ class Eyes:
 					keyframes=[Keyframe(f[i].t, f[i].seq, j) for i, j in zip(selection.indices, jpegs)],
 					coverage=selection.coverage,
 					watched_s=_watched_time([x.wall for x in f] or [x.wall for x in h]),
-					earlier=vid in self._reported,
+					earlier=vid in self.reservoir.cursor,
 					muted=muted_by_vid.get(vid),
 					tainted=vid in tainted,
 					motion=motion.track(f),
