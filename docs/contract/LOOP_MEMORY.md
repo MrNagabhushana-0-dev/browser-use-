@@ -218,3 +218,15 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   (1.08/2.71): 4-state 30/h, single 6,606/h. pulse 40 (1.38/3.46): 4-state 30/h, single 7,596/h. pulse 60 (1.79/4.88):
   4-state 30/h, single 2,612/h. Resolution: one flip in 120 s is 30/h, so the 2.0/h target needs >= 1 h of signal;
   at pulse >= 30 the 4-state gate opens once and stays open (no flapping, but no close either).
+- 2026-10-22 E5 MEASURED (v2b, commit 0fa303c pinned; transcript subagents/agent-a17fbfeeef8ead1ad.jsonl; recording
+  retinat-20261022-193732.mp4; narration log narration/20261022-193716.jsonl): 10 calls (E4 25), A_unique 4,253/min
+  (E4 10,691; -60%; inside 2,000-8,600), gaps 0, evidence erased 0, cuts 34/34, film covered 185.9 s, keyframes 84
+  (0.45 per film second; B2 0.465), stops: 6 "event going on for 15s", 4 "event over (gate)". B lower bound median
+  11.95 s p90 18.15 s (E4 3.9/6.92): the declared trade. Narration 10/10 results, the last with retinat_record stop;
+  narration a median 4.8 s after its result; B_narr median 17.39 s p90 24.63 s (E4 9.32/13.74). Windows run ~20 s,
+  not 15: the reservoir also commits what played during the model's own turn (~5 s). Disclosure: CPU contention
+  throughout B2-E5 (load average up to 9.7 on 4 cores: the side-track builders decoding video and running Chromium
+  tests; a narration-burn encode ran ~2 min during E5's first minute and was stopped); B and lag are affected, A is not
+  (it counts tokens). Ground truth for C1/C2: B2's recording aligned to the edit list (ground_truth.py: offset
+  6.412 s, 34/34 cuts, residual median 0.05 s), 32 contact sheets at 0.5 s; one labeller labels the film once, for
+  all v2b runs alike. Keep decision for E3/E4/E5 waits on the scorers.
