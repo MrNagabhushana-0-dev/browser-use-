@@ -18,6 +18,9 @@ from browser_use.browser.watchdog_base import BaseWatchdog
 
 # A screencast quiet for this long after a frame is topped up with one capture of the page as it is
 QUIET_TOP_UP_S = 0.3
+# How long stopping the screencast on a tab may take: a tab whose page hangs (a script that never yields) never
+# answers, and its frames have stopped anyway. Found when a recording of Level Devil could not be stopped or saved.
+STOP_SCREENCAST_S = 2.0
 
 
 class RecordingWatchdog(BaseWatchdog):
@@ -46,6 +49,7 @@ class RecordingWatchdog(BaseWatchdog):
 	# looks sharing its stream, ended on a frame from before the game stopped.
 	_last_frame_at: float = PrivateAttr(default=0.0)
 	_topped_up: bool = PrivateAttr(default=True)
+	_finishing: set[asyncio.Task] = PrivateAttr(default_factory=set)  # files still being finished after a stop
 
 	async def on_BrowserConnectedEvent(self, event: BrowserConnectedEvent) -> None:
 		"""
@@ -139,7 +143,9 @@ class RecordingWatchdog(BaseWatchdog):
 		"""
 		Stop any in-progress recording and finalize the output file.
 
-		Returns the path of the saved video, or None if no recording was active.
+		Returns the path of the saved video, or None if no recording was active. The file is finished even when the
+		caller stops waiting (an MCP call out of time is cancelled): an MP4 never finished has no index and does not
+		play.
 		"""
 		if not self._recorder:
 			return None
@@ -154,22 +160,34 @@ class RecordingWatchdog(BaseWatchdog):
 			due, period = self._clock
 			owed = max(1, min(int((asyncio.get_running_loop().time() - due) / period) + 1, int(60 / period)))
 			self._clock = None
-		await asyncio.to_thread(recorder.tick, owed)  # the last picture closes the video
 		self._recorder = None
 		self._current_session_id = None
 		self.latest_frame = None
 		self._screencast_params = None
 
-		if session_id:
-			try:
-				await self.browser_session.cdp_client.send.Page.stopScreencast(session_id=session_id)
-			except Exception as e:
-				self.logger.debug(f'Failed to stop CDP screencast on {session_id}: {e}')
+		async def finish() -> None:
+			# the screencast stops while the last pictures are written: a hung tab takes all of STOP_SCREENCAST_S
+			stopping = asyncio.ensure_future(self._stop_screencast(session_id)) if session_id else None
+			await asyncio.to_thread(recorder.tick, owed)  # the last picture closes the video
+			if stopping is not None:
+				await stopping
+			await asyncio.to_thread(recorder.stop_and_save)
 
-		output_path = recorder.output_path
-		loop = asyncio.get_event_loop()
-		await loop.run_in_executor(None, recorder.stop_and_save)
-		return output_path
+		finishing = asyncio.ensure_future(finish())
+		self._finishing.add(finishing)
+		finishing.add_done_callback(self._finishing.discard)
+		await asyncio.shield(finishing)
+		return recorder.output_path
+
+	async def _stop_screencast(self, session_id: str) -> None:
+		"""Stop the screencast on a tab, waiting at most STOP_SCREENCAST_S: the tab may be closed, or hung."""
+		try:
+			# the root client stops it on that tab's session
+			await asyncio.wait_for(
+				self.browser_session.cdp_client.send.Page.stopScreencast(session_id=session_id), STOP_SCREENCAST_S
+			)
+		except Exception as e:
+			self.logger.debug(f'Failed to stop CDP screencast on {session_id}: {type(e).__name__}: {e}')
 
 	@property
 	def is_recording(self) -> bool:
@@ -199,12 +217,7 @@ class RecordingWatchdog(BaseWatchdog):
 
 			# Stop recording on the previous session
 			if self._current_session_id:
-				try:
-					# Use the root client to stop screencast on the specific session
-					await self.browser_session.cdp_client.send.Page.stopScreencast(session_id=self._current_session_id)
-				except Exception as e:
-					# It's possible the session is already closed
-					self.logger.debug(f'Failed to stop screencast on old session {self._current_session_id}: {e}')
+				await self._stop_screencast(self._current_session_id)
 
 			self._current_session_id = cdp_session.session_id
 

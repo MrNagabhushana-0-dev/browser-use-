@@ -90,6 +90,7 @@ class Frame:
 	data: bytes = field(repr=False)
 	signature: bytes = field(default=b'', repr=False)
 	scroll_y: float | None = None  # where the page was scrolled when Chrome drew it (CSS px), from the frame itself
+	swapped_at: float | None = None  # when Chrome showed it, on the same clock as `at` (it comes some ms later)
 
 	def to_base64(self) -> str:
 		return base64.b64encode(self.data).decode()
@@ -200,6 +201,15 @@ class LiveView:
 			)
 		self._running = True
 		self.logger.debug(f'🎥 Live view started on {cdp.target_id[-4:]}')
+
+	@property
+	def shared(self) -> bool:
+		"""Whether the stream is the video recorder's, taken as it is, rather than one this view began."""
+		return self._shared
+
+	@property
+	def max_width(self) -> int:
+		return self._max_width
 
 	def clock(self) -> float:
 		"""Now, on the clock frames' `at` is on (seconds since this view began): frames after a moment are those with
@@ -313,13 +323,17 @@ class LiveView:
 			data = base64.b64decode(event['data'])
 		except Exception:
 			return
-		scroll_y = (event.get('metadata') or {}).get('scrollOffsetY')
+		metadata = event.get('metadata') or {}
+		scroll_y, swapped = metadata.get('scrollOffsetY'), metadata.get('timestamp')
+		at = time.monotonic() - self._started_at
 		self._frames.append(
 			Frame(
-				at=time.monotonic() - self._started_at,
+				at=at,
 				data=data,
 				signature=frame_signature(data),
 				scroll_y=float(scroll_y) if isinstance(scroll_y, int | float) else None,
+				# the swap time is seconds since the epoch: moved onto this view's clock
+				swapped_at=min(at, at - (time.time() - swapped)) if isinstance(swapped, int | float) else None,
 			)
 		)
 		if self._shared:

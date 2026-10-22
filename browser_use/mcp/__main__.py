@@ -4,9 +4,7 @@ Usage:
     python -m browser_use.mcp
 """
 
-import asyncio
-
-from browser_use.mcp.server import main
+from browser_use.mcp.front import cli
 
 if __name__ == '__main__':
-	asyncio.run(main())
+	cli()

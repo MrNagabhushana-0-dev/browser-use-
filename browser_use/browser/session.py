@@ -905,10 +905,25 @@ class BrowserSession(BaseModel):
 		BaseWatchdog.attach_handler_to_session(self, CloseTabEvent, self.on_CloseTabEvent)
 
 	@observe_debug(ignore_input=True, ignore_output=True, name='browser_session_start')
-	async def start(self) -> None:
-		"""Start the browser session."""
-		start_event = self.event_bus.dispatch(BrowserStartEvent())
-		await start_event
+	async def start(self, timeout: float | None = None) -> None:
+		"""Start the browser session.
+
+		timeout: seconds the start may take, the launch inside it included, instead of the defaults
+		(TIMEOUT_BrowserStartEvent / TIMEOUT_BrowserLaunchEvent, 30 s). Chrome read off a cold disk, as after a
+		machine boots, can take longer than that.
+		"""
+		assert timeout is None or timeout > 0, 'a start takes some seconds'
+		start_event = self.event_bus.dispatch(
+			BrowserStartEvent() if timeout is None else BrowserStartEvent(event_timeout=timeout)
+		)
+		try:
+			await start_event
+		except asyncio.CancelledError:
+			# Cancelling this wait does not stop the start on the bus: end the Chrome it waits on, so it fails at once
+			# rather than at its limit, and a kill() queued behind it does not wait that long
+			if self._local_browser_watchdog is not None:
+				self._local_browser_watchdog.kill_launching()
+			raise
 		# Ensure any exceptions from the event handler are propagated
 		await start_event.event_result(raise_if_any=True, raise_if_none=False)
 
@@ -996,7 +1011,14 @@ class BrowserSession(BaseModel):
 						raise CloudBrowserError(f'Failed to create cloud browser: {e}')
 				elif self.is_local:
 					# Launch local browser using event-driven approach
-					launch_event = self.event_bus.dispatch(BrowserLaunchEvent())
+					launch = BrowserLaunchEvent()
+					given = event.event_timeout
+					usual = BrowserStartEvent().event_timeout
+					if given and usual and launch.event_timeout and given > usual and given > launch.event_timeout:
+						# A start given more time than usual (start(timeout=...)) passes it to its launch, which is most of
+						# a start; otherwise the launch keeps its own limit
+						launch = BrowserLaunchEvent(event_timeout=given)
+					launch_event = self.event_bus.dispatch(launch)
 					await launch_event
 
 					# Get the CDP URL from LocalBrowserWatchdog handler result

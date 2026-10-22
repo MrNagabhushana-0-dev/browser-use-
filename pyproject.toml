@@ -72,7 +72,7 @@ video = ["imageio[ffmpeg]==2.37.2", "numpy==2.4.1"]
 # The browser as eyes and ears (browser_use.eyes): numpy for the analysis, and a local voice
 # activity + speech model so percepts can say where the speech is and what it says.
 # eyes: sight and hearing (numpy), speech (faster-whisper), search by meaning (CLIP via onnxruntime)
-eyes = ["numpy==2.4.1", "faster-whisper==1.2.1", "onnxruntime==1.30.0", "tokenizers==0.23.2", "huggingface-hub==1.16.1"]
+eyes = ["numpy==2.4.1", "opencv-python==5.0.0.93", "faster-whisper==1.2.1", "onnxruntime==1.30.0", "tokenizers==0.23.2", "huggingface-hub==1.16.1"]
 examples = [
     "agentmail==0.0.59",
     # botocore: only needed for Bedrock Claude boto3 examples/models/bedrock_claude.py
@@ -114,7 +114,7 @@ browseruse = "browser_use.cli:main"  # Alias for browser-use
 bu = "browser_use.cli:main"  # Alias for browser-use
 browser = "browser_use.cli:main"  # Alias for browser-use
 browser-use-tui = "browser_use.cli:browser_use_tui_main"  # Deprecated alias for browser-use
-retinat = "browser_use.retinat.server:cli"  # Retinat MCP server: continuous image/video perception for LLMs
+retinat = "browser_use.retinat.front:cli"  # Retinat MCP server: continuous image/video perception for LLMs
 
 [build-system]
 requires = ["hatchling==1.32.0"]

@@ -3673,6 +3673,19 @@ about:blank) holds that profile.
 The full `tests/ci` was **not** run on `bdd1d87`: the owner hit their usage limit and asked for everything to be
 handed off in a new PR (`docs/agent-notes/handoff-2026-10-14/README.md`).
 
+**16:42 round (after the handoff, PR #12).**
+- Applied the follow-up patch to the call budget (`2925247`): the wait keeps to the budget, a scan captures where no
+  frame came from, the archiver keeps out of a scan's way. Without the wait's clamp its test fails ("the wait took
+  10.0s with a 1 s budget").
+- **Full `tests/ci` on `2925247`: red, 1 failed, 1,745 passed, 30 skipped** (40m17s). The failure was
+  `test_screenrec.py::test_a_recording_is_finalized_into_a_playable_file`: asked for ~2 s, got 0.9 s.
+  - This file is not touched by the commit. The test failed the same way once on `aec0d20` (Round 56) and was
+    thought fixed in `409482f`; it is back, so that fix did not cover it.
+  - Alone it passed 5 of 5 straight after.
+  - Likely mechanism, not verified: `record_display` yields before ffmpeg begins grabbing (its comment says the
+    start does not wait), so under the suite's load ffmpeg's start-up ate ~1 s of the 2 s window.
+  - Pushed to PR #12 with this stated.
+
 **Next, in order:**
 1. **Games, continued:**
    - Temple Run 2: press as the key lights, not after it (the gap after the zipline); turns at corners; read the
@@ -3697,6 +3710,7 @@ handed off in a new PR (`docs/agent-notes/handoff-2026-10-14/README.md`).
    or CORS WebM/VP9 source.
 9. **The player's overlay** inside the video's box on screen: should `{from: 'video'}` leave out the controls?
 10. **Intermittents to watch in full runs:**
+   - the screen-recorder length test (back on `2925247`; see the 16:42 round: wait for ffmpeg's grab to begin?);
    - the beep-count test (a dropout longer than the 1-2 hops of the Round 50 fix, most likely);
    - the play-arena title screen;
    - the feed test;
@@ -3705,3 +3719,342 @@ handed off in a new PR (`docs/agent-notes/handoff-2026-10-14/README.md`).
 11. **Carried over:**
     - confine the AI's page script to the page's own world (Round 54);
     - the A/B test of sheet vs recall vs journal with blind agents (Round 10).
+
+## Round 57 (unattended loop, 2026-10-19): PRs #11 and #12 merged; browse and watch on the budget; a cold first start
+
+**Branch.** PRs #11 and #12 are merged into `main` (`36b350c`). `claude/laughing-hawking-2cj3a6` was fast-forwarded to
+`main`, and the two commits made after PR #12's last push (browse/watch budget `f3239e9`, scan sheet `f7567ad`) were
+carried onto it as `75a7dc1` and `e0ed5e3`. New work goes in a new PR.
+
+**Slice B1, browse and watch under the call budget** (written 2026-10-14 after the 16:42 round, pushed now).
+- `browse_cap(left, more, max_s, min_s)`: an item is begun only with time for it and for what follows (a watch's own
+  work, the flick on, the browse's end), estimates grown to what was measured. Out of time a browse stops on the
+  next reel unwatched and says `call again with items=N`; that call begins with the reel.
+- `watch` stops at the call's end less 3 s and says `out of time: watched Xs of the asked Ys`.
+- Speech runs only with time for it (an estimated 4x real time); keyframe reads end with the call.
+- Affected files on 2026-10-14: 130 passed, 1 failed (the backstop test used `retinat_watch`, which now stops by
+  itself; the test now uses `retinat_explore`, which is not yet deadline-aware).
+
+**The scan sheet, checked live.** On *List of largest cities* (11.8 screens) the sheet showed 0.0, 2.6, 5.3, 8.1, 9.5,
+10.8 screens down; before `e0ed5e3`, 4.9 to 10.9. Clip: `docs/hands-on/2026-10-19/scan-sheet-spreads-from-the-top.mp4`.
+
+**Bug: the first `retinat_open` after a machine boots fails at 30 s** (seen in the handoff, again today at 18:30 on a
+container booted at 18:25:01; the retry worked in 19 s).
+- Measured: files untouched since boot read at 16-21 MB/s; Chrome's binary is 463 MB. With Chrome, its extensions and
+  a profile copy dropped from the guest's page cache (`posix_fadvise DONTNEED`), a launch failed at 31.5 s with the
+  same error, having paged in only 246 MB (`mincore`): scattered page faults, not bandwidth. Later evictions did not
+  reproduce it (3.5 s): the layer under the guest had kept the blocks. A sequential pre-read before the launch took it
+  to 3.5 s. Warm launches: 3.5-6 s.
+- Fixed, tests first:
+  - `BrowserSession.start(timeout=...)`: a start's time covers the launch inside it (its own 30 s event limit) and
+    Chrome's wait for its port (a fixed 30 s). Defaults unchanged.
+  - Retinat keeps one start in flight across calls (120 s in all). A call waits as long as its budget allows (less
+    10 s for its own work); otherwise `The browser is still starting (Ns so far ...). Nothing was done; call again.`
+    The next call joins the same start.
+  - **Corrected:** a start stopped at its limit *did* leave its Chrome running. The first test's check was vacuous (a
+    wrapper path containing "chrome" makes the profile be copied elsewhere); the review below caught it.
+- **Verified on a real cold boot** (the container restarted at ~23:42): the first `retinat_open` since boot opened on
+  the first call in 49 s, where it had failed at 30 s. The Retinat MCP server took 88 s to connect after that boot
+  (cold imports; the client allows 120 s).
+- Not fixed, seen on the way: with `executable_path` set and headless on, `BrowserProfile.get_args()` runs
+  `<chrome> --version` with `subprocess.run` on the event loop.
+
+**Review of the round's commits** (workflow `wf_a4277e9c-140`: 5 reviewers, a skeptic per serious finding; 2 of the
+skeptics hit the usage limit). 10 confirmed, 0 refuted; fixed test-first (each new test failed first):
+- a launch cut at its limit, or a cancelled start, left Chrome running: `_launch_browser` kills the Chrome it began
+  when the wait for its port ends without one, and a cancelled `start()` kills it (`kill_launching`);
+- Retinat's start in flight: stopped (its Chrome killed) on a route change and at close; a finished start is let go
+  so a dropped browser is started afresh (it failed on `assert self.browser_session`); a cancelled start answers as
+  such; a start ending as its wait does reports its own outcome; `START_RESERVE_S` 10 -> 15 s (an open's work after
+  the launch measured 13-15 s);
+- a launch inherits the start's time only when `start()` was given more than its default;
+- `browse_cap` accepted no item with `max_seconds < min_seconds + 0.5`: the browse watched nothing, forever;
+- speech: a watch of 38-45 s and a browse's last item were left no time to transcribe (`watch_span`,
+  `browse_cap(speech_rate=)`);
+- the scan sheet's distance tie-break split gaps (a 6-screen page: 88% shown, was 100%): it now seeds at even places,
+  then fills by height added;
+- smaller: "(no video was on screen)" when a browse watched nothing; a keyframe read cut by the call blamed the page
+  and probed past the deadline; a browse with no time to flick on is skipped past by the next browse; the 1 s-budget
+  test's backstop grace is 2 s.
+
+**Test runs.**
+- Affected files on `f9f1735` (`test_eyes`, `test_retinat`, `test_browser_session`, launch cleanup, MCP lifecycle, page
+  tools and annotations, profile args): 163 passed, 0 failed (11m53s), no Chrome left running.
+- **Full `tests/ci` on `f9f1735`: red, 2 failed, 1,754 passed, 31 skipped** (40m38s):
+  - `test_screenrec.py::test_a_recording_is_finalized_into_a_playable_file` (asked ~2 s, got 0.9 s): the known
+    intermittent, not touched here; alone it then passed 6 of 6, three times over.
+  - `test_eyes.py::test_a_browse_out_of_time_stops_on_the_next_reel_and_goes_on_from_it`: **a real bug.** Under the
+    suite's load a flick overshot to the third reel and the correction took 7.6 s; the browse stopped for time and
+    reported the glimpsed third reel as watched (4.6 s), so the next call would have watched it again. Fixed in
+    `057031d`: a browse stopped for time leaves out every item it did not watch. The test now also runs on the
+    overshoot feed, where it failed the same way without load before the fix.
+- `test_eyes` + `test_retinat` on `057031d`: 137 passed, 0 failed (11m00s). The full suite was not rerun for that
+  one-path change.
+
+**Researched: can a long call outlive the client's 60 s?** MCP progress notifications reset a client's request
+timeout only where the client opts in (`resetTimeoutOnProgress` is off by default in the TypeScript SDK; Claude Code
+issue #58687 asked for it and is closed, with no shipped fix confirmed; Cursor's client has the same limit). The
+2025-11-25 spec's experimental Tasks ("call now, fetch later") are moving out of the core into an extension. So the
+50 s budget with a "call again" resume stays the portable answer; sending progress as well costs little.
+
+**Next, in order:**
+1. **Games** (the owner's test of real-time vision), as in Round 56's list: Temple Run 2 key timing and corners, MR
+   Racer rule v3 (look at the target lane first), a rule for Subway Surfers' Left/Right tutorial step.
+2. **Explore under the call budget (slice B2):** `Explorer.run`/`resume`, `ExploreReport.pending`, navigation bounded
+   by `NavigateToUrlEvent(timeout_ms=...)` and `Page.stopLoading` on a cut; then move `Deadline` to a numpy-free module
+   before `browser_use/mcp/server.py` uses it.
+3. **A per-tab busy guard** so parallel long calls on one tab are refused, and a shielded release of a held touch or
+   button after a cut. With it: bound the flick inside a browse by the deadline (it can take 8-16 s on a feed that
+   will not move), and stop a start cancelled before Chrome is spawned.
+4. **The `--version` probe** on the event loop (above): move it off the loop or cache it per executable. And the
+   88 s MCP connect after a cold boot (lazy imports in `browser_use.retinat`).
+5. **A screen feed of only what the rules read** (Round 56's item 2).
+6. **Intermittents to watch:** the screen-recorder length test, the beep-count test, the play-arena title screen, the
+   feed test, the region-runner test, the reflex speed test.
+7. **Carried over:** confine the AI's page script to the page's own world (Round 54); the sheet vs recall vs journal
+   A/B with blind agents (Round 10).
+8. **Progress notifications** from Retinat's long tools (scan, browse, watch, explore), for clients that let them
+   extend a call.
+9. **A browse's glimpses in a finished browse:** an item glimpsed while a flick overshot is still listed after the
+   watched ones when the browse was not stopped for time (it was before this round too); decide whether a browse
+   should only ever list what it watched.
+
+## Round 58 (unattended loop, 2026-10-20 01:42): MR Racer 109 -> 657 with lane keeping
+
+Hands-on only, no library change (`docs/hands-on/2026-10-20/notes.md`).
+
+- **A second cold boot:** the first `retinat_open` after it took 10 s and the MCP connect 6 s (49 s and 88 s on the
+  boot before). How slow a boot is depends on the layer under the VM.
+- **MR Racer, Endless (Farm Land), all driving by reflex rules at 480 px:**
+  - calibration run: 122;
+  - **v3**, dodge only into a lane whose boxes read clear, else brake: 163; its 300 ms steering pulses left it
+    straddling a line, and a car it moved away from clipped it;
+  - **v4**, plus lane keeping by the white lines just below the car (centred: lines at x ~385 and ~693; straddling:
+    one at ~515-528): **611 at 4.0 km**, but pinned to the right barrier at 30 km/h for long stretches, because the
+    road's edge line under the car read as a lane line on the left;
+  - **v5**, a line under the car with no lane line to its right is the edge, so steer left: swapped in live, the
+    run ended at **657 (4.26 km), the best MR Racer score so far** (was 159 in a challenge, 109 in Endless). It crashed
+    within 30 s of the swap; not looked into yet.
+- Measured: the box above our roof rose 0 -> 5 -> 42 -> 74 dark pixels over ~3 s before a rear-end; the side boxes'
+  clear-road levels differ (right 0-3, left up to ~100), so each has its own threshold.
+- Found: a notice keyed on `see.frame` came ~50 s late on the results screen (few frames drawn); keyed on `see.t` it
+  is on time. Not a library bug: worth a line in the reflex tool's description.
+
+**Next, in order:**
+1. **Racer:** why v5 crashed after the swap; stop braking for the barrier and trees the roof box also reads; a box
+   for a car level with us.
+2. Temple Run 2 key timing and corners; Subway Surfers' Left/Right tutorial step (Round 56's list).
+3. The rest of Round 57's list: explore under the call budget (slice B2), the per-tab busy guard and a bounded flick,
+   the `--version` probe and the slow connect after a boot, progress notifications.
+
+## Round 59 (unattended loop, 2026-10-20 02:42): Retinat answers the handshake while browser-use loads
+
+- **Third cold boot:** the first `retinat_open` opened on the first call in 47 s (the start-across-calls fix holds);
+  the **MCP connect took 93.5 s** (88 s two boots before), against the client's 120 s.
+- Cause, measured: the server imported 2,241 modules (3.9 s warm) before answering; the handshake needs ~600 (`mcp`).
+- **Fixed, test-first** (`769b029`): `retinat/front.py` answers `initialize` and `tools/list` from light modules (902
+  modules, 1.35 s warm) and imports `RetinatServer` in a worker thread; a tool call waits for it, its deadline counting
+  from when the front took it (`CALL_STARTED`), or says "Retinat is still loading ... call again" near the end of its
+  budget. Moved to light modules: the tool definitions (`retinat/tools.py`), the route tools (`net/tools.py`), the
+  stdio serve/close helpers (`serving.py`), the desktop-control opt-in name (`desktop/__init__.py`); `browser_use.retinat`
+  imports lazily; old import paths still work.
+  - Tests: in a fresh process the front's import and tool list load no heavy module and list exactly what the server
+    serves (failed before: no front); a call taken 4 s into a 5 s budget waits ~1 s (4.5 s without `CALL_STARTED`);
+    the stdio lifecycle tests pass through the front.
+  - Affected files (Retinat, MCP lifecycle/page tools/annotations/client errors, network, desktop control and eyes,
+    bridge, proxy CA): **152 passed, 0 failed** (9m48s). Full `tests/ci` on `769b029`: lost to a container restart. **On `d806fcb`: red, 2 failed, 1,758 passed, 30
+    skipped** (46m57s):
+    - `test_screenrec.py::test_a_recording_is_finalized_into_a_playable_file` (asked ~2 s, got 1.0 s): the known
+      intermittent;
+    - `test_desktop_control.py::test_the_ai_clicks_and_types_in_a_granted_app`: the click and typing worked ("Typed
+      10 characters in testnotes ... the screen changed"); the test app's read-back of the field (`App.eval`, CDP)
+      returned no value. Not in what this round changed (the opt-in name is bypassed by `enabled=True`); the file
+      passed 13/13 alone five times after. `App.eval` now waits for its own reply by id and raises with the reply
+      when evaluation fails, so a recurrence says why. New intermittent to watch.
+  - Measured warm over stdio: `initialize` 1.37 s through the front, 3.09 s importing the server first.
+  - **On the next cold boot (03:36) the connect took 79.7 s**, not ~35-40 s: `uv run` itself ran ~54 s before Python
+    started (its sync check reads 243 packages' metadata, 1,706 files, under a lock on `.venv` both servers share);
+    Python's part fell from ~44 s to ~27 s. `.mcp.json` now starts both servers with `uv run --no-sync`. To verify on
+    the next cold boot.
+
+**Next, in order:** as in Round 58, with "the slow connect after a boot" done if the next cold boot confirms it.
+
+## Round 60 (unattended loop, 2026-10-20 04:42): MR Racer 720, and the connect after a boot at 4.6 s
+
+Hands-on only (no library code changed); details in `docs/hands-on/2026-10-20/notes.md`.
+
+- **Measured:** with `uv run --no-sync` the Retinat MCP server connected in 4.6 s after the 04:42 boot (79.7 s at
+  03:36, 93.5 s before the front). That boot was only partly cold (the first open took 16 s).
+- **Measured:** MR Racer rule v7 (a symmetric lane keeper) scored 720 at 5.8 km in a clean run, stopped by hand;
+  the best before was 657. v6 pinned itself to the left barrier (86).
+- **Said plainly, since the owner asked:** the driving is a pixel-reading rule that Retinat runs every frame, which
+  reacts to the traffic on screen. The model writes the rule between runs; it does not see each frame.
+- **Not fixed:** a `retinat_record` stop and start sent in parallel refuse the start.
+
+**Next, in order:** confirm the connect on a fully cold boot; a racer rule that overtakes a slow vehicle instead
+of following it at 30 km/h (the score stops rising); then as in Round 58.
+
+## Round 61 (unattended loop, 2026-10-20 05:42): step mode, so the model plays; a restarted server says its tools changed
+
+The owner asked whether the racer was really the model playing. It was not: rules the model wrote drove it. This
+round builds the honest alternative, as game benchmarks do it: the page's clock stops while the model thinks.
+
+- **Measured:** on a boot less than a minute old, with `uv run --no-sync`, Retinat connected in 6.3 s and browser-use
+  in 9.0 s (79.7 s and 93.5 s on earlier cold boots). The first open took 17 s, so the disk was only partly cold.
+- **Built test-first:** `retinat_step` and `browser_use/eyes/clock.py`. Measured on Chromium before building:
+  - CDP virtual time freezes performance.now, Date and timers, but not requestAnimationFrame. A game timed by rAF
+    timestamps or by counting frames ran on through a pause; it does not now.
+  - Frames stop for good once a paused page draws nothing; a 1 px canvas keeps them coming.
+  - A tab cannot leave virtual time, so resume pumps its clock with the real one.
+  - 30 steps of one frame play 500 ms in about 0.5 s of real time.
+- **Found and fixed:** Claude Code reconnected to a restarted Retinat but kept its first tool list, so a new tool could
+  not be called. Retinat now serves `subscriptions/listen` and says the list changed. Tested in both protocol eras
+  with the SDK's clients; **not yet seen** to make Claude Code re-list within a turn.
+- **Not done:** playing Subway Surfers with `retinat_step` (the tool was not callable in this session yet); a frame
+  from another site in its own process (cannot be tried while browser-use disables site isolation here).
+
+**Next, in order:** play Subway Surfers with `retinat_step` on video, turn-based and latency-charged, and report both
+scores; a strip of frames per step if one frame does not show speed; then as in Round 58.
+
+## Round 62 (unattended loop, 2026-10-21 16:00): a new container, work lost and re-applied, a launcher that cannot start empty
+
+The session sat idle for a day (33 hourly firings queued) and resumed in a new container. No hands-on this round: the
+Retinat and browser-use servers failed to start, so no MCP tool was available.
+
+- **Found, my regression:** the new container had no project virtualenv. `.mcp.json`'s `uv run --no-sync` (Round 59)
+  then made an empty one and ran both servers in it; they failed to import and the client gave up on them for the
+  session. Fixed with `bin/mcp-serve.sh`: `--no-sync` when the project is installed, plain `uv run` (which installs)
+  when not. Both paths checked by hand; a client starting through it is **not yet seen**. A first install took 2m20s,
+  more than a client's 120 s, so `uv sync` after cloning stays in AI.md.
+- **Corrected:** commit `588f302` says it carries the step-mode review fixes but holds only the `front.py` change; the
+  rest had not been committed when the old container was replaced. Re-applied in `94971d4` from the same patches.
+- **Corrected:** `43c9b8f` blamed a stopped clock for the step test's empty title in the file run. The cause was
+  another test's `/later` page on the shared test server (no title, no `fired`); the step test now opens its own path.
+  The pump changes in that commit stand: the review found the same weaknesses.
+- **Measured:** the affected files on `94971d4` (clock, MCP lifecycle, reflex, Retinat): 77 passed, 0 failed.
+
+- **Full `tests/ci` on `94971d4`: red, 5 failed, 1 error, 1,771 passed.** Two (cobrowse login persistence, live-view
+  keyframes) fail on `main` in this container too; three pass alone; and the film edit-list test needs
+  `tests/ci/assets/big_buck_bunny/edits.json`, which `*.json` in `.gitignore` kept out of git in Round 60, so it existed
+  only in the old container. Test assets are now exempt from that rule.
+
+**Next, in order:** confirm the servers start through the launcher on the next session; play Subway Surfers with
+`retinat_step` on video, turn-based and latency-charged; rebuild and commit the film's edit list (ffmpeg scene scores,
+checked by eye, as its README says); look into the two failures that are red on `main` in this container.
+
+## Round 63 (owner reconnected the servers, 2026-10-21 17:30): Subway Surfers played turn by turn
+
+- **Seen:** the servers started through `bin/mcp-serve.sh`, and `retinat_step` showed up after the reconnect.
+- **Played:** Subway Surfers, every move decided by the model from the frame it saw, the game paused in between.
+  Score 61 (turn-based) in 12.4 s of game time; stopped at a tutorial barrier that rewound three times.
+  Clip and notes: `docs/hands-on/2026-10-21/`.
+- **Found, not fixed:** stepping a busy real page costs 0.25-0.5 s a frame (~40x slower than live); in full screen
+  the keep-alive canvas is hidden and each frame waits its 1 s limit.
+
+**Next, in order:** measure where a step's time goes on a busy page (budget expiry vs frame wait) and fix it
+test-first; draw the keep-alive where the full-screen element is; play past the tutorial; then as in Round 62.
+
+## Round 64 (unattended loop, 2026-10-21 17:42): where a step's time goes
+
+- **Built:** every step now says how much of its real time went waiting for the page to draw, and for its clock.
+- **Measured on Poki:** of a 300 ms step's 3.5 s, 2.7 s waited for the clock and 0.8 s for drawing. Virtual time
+  moved on only after 100 of the page's tasks in a row. Lowered to 5: a local page with an endless message loop steps
+  300 ms in 0.30 s against 0.61 s, and on Poki the clock part fell to 2.1-2.3 s (0.8-1.3 s drawing). The rest looks
+  like the game's own work in this GPU-less container; not yet measured.
+- **Corrected:** full screen on Poki (0.94 s a frame) was not the keep-alive canvas being covered, as I wrote in
+  Round 63. A test with a full-screen game frame steps at full speed. Full screen drew 3.4x the pixels without a GPU,
+  which fits.
+
+**Next, in order:** a frame-skip option (fewer drawn frames per game second, as the ALE's frame skip) for pages this
+slow to draw; play Subway Surfers past the tutorial; then as in Round 62.
+
+## Round 65 (owner's ask, 2026-10-21 21:40 to 2026-10-22 07:45): a cheaper model plays hard Poki games, then with the eyes
+
+The owner asked for a cheaper model to play five of the hardest Poki games for an AI through these tools, on video,
+with measured accuracy, using the eyes rather than screenshots. Sonnet agents played one game at a time, each with a
+playbook researched first (engine, controls, obstacles, turn length). Session limits stopped the runs three times
+(22:45, ~04:30); two container reboots kept the disk.
+
+- **Built (`cccaf03`):** `frame:"game"` returns just the game's region, drawn larger; `fps` lets a slow page draw fewer
+  frames per game second (frame skip).
+- **Played, one still frame per turn:** Moto X3M, level 1 finished, 3 stars, 11.44 s game time, 8 of 9 obstacles
+  cleared; World's Hardest Game, level 1 cleared, 1 of 4 dot crossings. Both logs checked against the recordings.
+  Video: `docs/hands-on/2026-10-22/`. The owner then said these were not what was asked: the model saw screenshots.
+- **Found and fixed (test first):**
+  - A game opened in a tab after another was played and resumed drew no frames, and every look hung until the client
+    gave up (60 s): a capture held the lock every later capture waited on. The beat now comes with each new page
+    from its first moment, `pause()` checks it instead of reusing the old page's world, a capture gives up after 20 s,
+    and no capture is sent on a tab over one Chrome is still taking. Not proven: that a page without its beat is what
+    stopped that tab (a screencast starting, and killing the GPU process, also brought frames back).
+  - `retinat_wait` refused to wait without reflexes; it is now a plain wait (both players reached for it).
+  - The first player thought up to 16 minutes a turn; later players run at medium effort with a "keep turns short" rule.
+  - browser-use's MCP server missed Claude Code's 30 s connect after a boot: it now answers from 771 modules (1.1 s
+    warm, against 2,136 and 3.9 s) through the front Retinat uses, now shared (`serving.Front`). Seen working: both
+    servers up 15-23 s after two reboots.
+- **Adversarial review** of those commits (13 agents): 6 confirmed, all fixed with a test that failed first (the front
+  needed numpy; the beat was a canvas a page could find, and a page rendering over `<html>` took it out; a failed
+  load was kept for good; captures were sent over abandoned ones; a weak test); 4 refuted.
+- **Rebuilt** the film edit list `edits.json` (never committed: `*.json` was ignored) from the CC BY film: scene scores,
+  two independent passes by eye over 143 candidates (agreed on all), 125 cuts as before, times in presentation time
+  (the test's pinned cuts fall on them exactly). Precision 1.000, recall 0.938.
+- **The eyes in step mode (`21dd411`, `9e94e91`):** each step looks at every frame it draws (up to 24) and says what
+  moved, which way it is heading as the step ends and how fast in game time, or that the view scrolled, and draws
+  trails and arrows on the picture. Measured on test canvases: 120 px/s right (true 120), 60 down (60), scroll 150
+  (150), a dot that turned read left at 120 (true 150). On World's Hardest Game it saw the four level-1 dots in their
+  rows, alternating directions, at a steady ~285 px/s. The first version reported 7 phantom movers there (too few
+  looks, averaged headings, blob centres lagging); fixed before the games were played again.
+- **Full `tests/ci` on `ba1978e`:** 1,787 passed, 3 failed, 1 error. Two fail on `main` here too; the reflex latency
+  test and the bridge error pass alone on `9e94e91`.
+
+**Not yet measured:** the five games played with the eyes (running), and whether the eyes raise accuracy over still
+frames (the interrupted eyes run of World's Hardest Game had reached level 2 with 1 death, as the still-frame run had).
+
+**Next, in order:** the five games with the eyes, video and accuracy checked against it; whether the eyes beat still
+frames per game; a test that the World's Hardest Game page draws a frame per step (one run saw few distinct frames);
+the two failures that are red on `main` here.
+
+## Round 66 (owner's ask and the hourly loop, 2026-10-22 08:00 to 10:45): the five games with the eyes; the eyes move to the video stream
+
+The five games were played with the eyes (first build: a capture per frame), and the video was made from them
+(`docs/hands-on/2026-10-22/sonnet-plays-poki-eyes.mp4`, scores on title cards, each checked against the footage):
+World's Hardest Game 12 of 15 obstacles (level 1 with 0 deaths, died twice on level 2), Moto X3M 6 of 6 (level 1 in
+12.97 s), Neon Challenge Legends 4 of 4 (97% of level 1, no deaths, turn cap), QWOP 29 of 29 strides survived but
+1.7 m of 100, Level Devil 3 of 4 distinct traps (stages 2-3 played live, not on video). 54 of 58 in all, 25 of 29
+without QWOP: the owner's 98% was not reached.
+
+The owner then said the eyes still ran on screenshots, and asked for neural vision (named "YOLO v28"; the newest
+Ultralytics family is YOLO26, AGPL-3.0, so not for bundling; RF-DETR is Apache-2.0 except XL/2XL).
+
+- **Found from the models' own complaints and fixed (test first, `117c015`):**
+  - A turn with the eyes took 4-10 s (a capture per looked-at frame), so the Moto X3M player turned them off. The eyes
+    now read a turn from the compositor's screencast: ~1 s. Measured against a page that paints its frame number: the
+    stream runs 0-2 frames behind the drawing in software GL and neither arrival nor swap time pins a frame, so a
+    frame's time is good to about a frame; the first (before the step, the page standing still) and the last (after
+    it settles) are exact.
+  - A capture taken between turns (the step's own frame of the game, 800x400) showed up in the stream and was read as
+    the next turn's first frame, at the wrong scale: only frames of the stream's own size are read now.
+  - The scroll: first-to-last phase correlation aliases on a world that repeats (a tiled floor read +7.4 px for a
+    true -40); the shift is now followed frame to frame, refined first to last near that guess, and whichever lines
+    the frames up better is taken. The scrolling test world reads 200 px/s (true 200; before, 183-187).
+  - Live play had only taps: `retinat_key` holds keys (`hold_ms`), several at once (`with`), and letters carry their
+    key codes (games read `e.code`/`e.keyCode`; a held "q" had none).
+  - The recorder could not stop or leave a hung tab (`Page.stopScreencast` on it never returns), so Level Devil's live
+    stages were never recorded and stopping ran out of time with the file unfinished. Bounded at 2 s, and the file is
+    finished even when the call waiting for it is cancelled (shielded); a record call cut off now reports its effect
+    as unknown, not "nothing was done".
+  - `test_live_view` failed here and on `main`: its page repeats its colours within the watch.
+- **WebMCP on Poki, checked live:** 8 page tools, all the site's own (like, search, language); the game is a canvas in
+  a cross-origin frame with none. Vision is the only way into these games.
+- **Pushed red once, said here:** `117c015` went out while its test files were still running; one new test
+  (`test_a_recording_stops_and_is_saved_when_the_page_has_hung`) failed in the full file under load: its 6 s budget
+  could not hold the stop's real work (the owed frames, the bounded stop, the finish). Fixed in the next commit (the
+  stop overlaps that work and shields it; the test uses a 20 s budget, no look, and checks the MP4 is finished).
+- Affected files: Retinat, clock, MCP lifecycle, eyes, live view, recording, hand input: 207 passed, 1 failed (above).
+
+**Not yet measured:** whether the stream eyes raise the models' accuracy (replay pending); neural detectors on these
+games (bake-off ready: RF-DETR, YOLO26 for comparison only, OWLv2, Grounding DINO, 50 frames from the five recordings,
+CPU only, a separate environment).
+
+**Next, in order:** the detector bake-off and, if one earns it, a detector in the eyes for what motion cannot show
+(the player, still hazards); the five games again on the new eyes, with the final video; full `tests/ci`, then the PR
+body.

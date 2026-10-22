@@ -18,7 +18,11 @@ you what it *is made of*. Use whichever answers the question for fewer tokens:
 
 ### Register them
 
-**Claude Code.** This repository ships `.mcp.json`, so opening the repository in Claude Code offers both servers. Or add them by hand:
+**Claude Code.** This repository ships `.mcp.json`, so opening the repository in Claude Code offers both servers. It
+starts them through `bin/mcp-serve.sh`: with the project installed it skips uv's check of the environment against the
+lockfile (after a machine boots that check read every installed package's metadata off a cold disk, ~50 s of the 120 s
+a client gives a server to connect), and in a fresh checkout it installs first. A first install takes minutes, more
+than a client waits, so run `uv sync` once after cloning or changing dependencies. Or add them by hand:
 ```bash
 claude mcp add retinat -- uv run --directory /path/to/browser-use- python -m browser_use.retinat
 claude mcp add browser-use -- uv run --directory /path/to/browser-use- python -m browser_use.mcp
@@ -189,12 +193,12 @@ continuous stream on disk rather than in your context.
 
 | You want to... | Call | Typical cost |
 |---|---|---|
-| Open a page, and know if it refused you | `retinat_open` | text only |
+| Open a page, and know if it refused you | `retinat_open` (the first call after a machine boots can answer `Retinat is still loading ...` or `The browser is still starting ... call again`: files read off a cold disk took the server's import past 90 s and Chrome's launch past 30 s; both go on, and the next call joins them) | text only |
 | See what's on screen now | `retinat_look` | 1 image (about 400–900 tokens) |
 | Understand a whole canvas or scroll-driven page | `retinat_scan` (answers within ~50 s, as clients drop a call at 60; a page too long for one call ends with `call again with from_screen=...`, and the next call goes on from there) | 1 sheet (about 1–1.5k tokens) |
 | Watch a video or reel, including its sound | `retinat_watch` with `until=bored` | 1 sheet plus a timeline (about 300–900 tokens per item) |
 | Follow an animation drawn on a canvas (a game, a chart, a physics demo): count bounces, swings, sweeps | `retinat_watch` on a page with no video (it attends the largest canvas; the percept has a `motion:` line with turning points and times) | about 200-500 tokens |
-| Scroll Reels or Shorts like a person | `retinat_browse` with `items=N` | 1 sheet, one row per item |
+| Scroll Reels or Shorts like a person | `retinat_browse` with `items=N` (answers within ~50 s; more items than fit end with `call again with items=...`, and the next call begins with the reel the feed was left on) | 1 sheet, one row per item |
 | Go to the next or previous feed item | `retinat_next` | text only |
 | Tap, swipe, click, type, press a key | `retinat_tap`, `retinat_swipe`, `retinat_click`, `retinat_type`, `retinat_key` | text only |
 | Find a moment by what it looked like, across everything archived ("a slide full of code") | `retinat_search` with `query` | 1 strip of up to 8 frames; first use downloads a ~300 MB open model |
@@ -207,6 +211,7 @@ continuous stream on disk rather than in your context.
 | Find everything broken on a site | `retinat_explore` | a report plus 1 sheet |
 | Know what the page fetched, which request failed, or what an API answered | `retinat_requests` (`only="failed"` or `"api"`; `body=#n` for one response, tokens and passwords masked) | text only, about 20 tokens a line |
 | Know what the page logged or threw: console errors and warnings, uncaught exceptions, failed loads | `retinat_console` (`level="error"` or `"warning"`, `pattern` a regex, `since` the cursor; keys and tokens masked) | text only, a line per entry |
+| Play a real-time game yourself, deciding every move from what you see | `retinat_step` with `ms`, `tap` and `hold` (the page's clock stands still between steps; see [Step mode](#step-mode-playing-it-yourself-turn-by-turn)) | 1 image per step (about 300-500 tokens) |
 
 Token figures are estimates. Images are costed at about one token per 28×28 px patch.
 
@@ -277,6 +282,27 @@ and real key or mouse input goes out within a few milliseconds. Then `retinat_wa
 - **Look after `retinat_wait` returns, not alongside it.** A client may send both at once, and the look then runs
   straight away, before what you are waiting for. Such a look says so ("asked while a retinat_wait was still
   waiting").
+
+## Step mode: playing it yourself, turn by turn
+
+Reflexes play a game with rules you wrote; step mode lets you play it, each move decided from the frame you saw.
+Your turn takes seconds and the game moves every 16 ms, so `retinat_step` stops the page's clock while you think, as
+game benchmarks do (VideoGameBench Lite, Orak and NitroGen pause the game during inference; the ALE steps it a few frames
+per action):
+
+- `retinat_step(ms=250, tap=['ArrowLeft'])` presses the key, plays 250 ms of game time a frame at a time (about 250 ms
+  of real time too), stops the clock again and shows you the frame it ended on. The first step pauses the page.
+- `tap` keys are down for the first ~50 ms; `hold` keys stay down through this step and the next ones, until a step
+  leaves them out (a throttle stays pressed while you think).
+- `charge_thinking=true` first plays the time you took to decide, with the last keys still held: how the same play
+  would fare live (OmniGameArena's latency-charged mode). Report scores with the mode they were made in: a turn-based
+  score is not real-time play, and every answer says how much slower than live the play was.
+- `action=resume` gives the page real time back. A tab cannot leave Chrome's virtual time once in it, so Retinat
+  keeps moving its clock with the real one from then on; `retinat_open` does this by itself.
+
+What stops with the clock: `performance.now()`, `Date`, timers, posted messages and animation frames, in the page and
+in frames its process draws (a game frame from the same site, as poki.com hosts games on *.gdn.poki.com). What does
+not: sound, CSS animations, video, workers, and a frame from another site running in its own process.
 
 ## Hard rules
 

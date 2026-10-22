@@ -10,3 +10,13 @@ same edit as Wikimedia Commons' "Big Buck Bunny 4K.webm"), downloaded from downl
   as (start, end); `ambiguous` is a whip tilt that could be called either way; `window` is the span that is
   scored (the first black frames and the end are left out). Built from ffmpeg's scene scores, then every
   candidate (score 0.1 or more) and every slow-change span was checked by eye, frame by frame where unclear.
+  Times are presentation times (the film's first frame shows at 2/30 s), as the grids' samples are.
+
+The first `edits.json` (2026-10-13) was never committed (`*.json` was ignored) and was lost with its container. It
+was rebuilt on 2026-10-22 the same way: 143 candidates, each labelled by two independent passes over frame strips
+(they agreed on all), the uncertain ones checked frame by frame. It has 125 cuts, as the first had. Its five gradual
+changes are the title (3.65-4.85 s, from the first list's notes), two fades through black, the iris-out, and the
+credits fading in from black; the first list's notes name a "post-credits fade" instead, which could not be matched
+to the film. `window` is 3.0-498.5 s: after the opening fade from black, to the end of the credits' fade-in. Two whip
+moves are ambiguous, where the first list had one: the tilt to the sky at 341.57 s and the pan onto the spikes at
+449.33 s. Scored with the eyes as of this commit: precision 1.000, recall 0.938 (8 missed, none false).

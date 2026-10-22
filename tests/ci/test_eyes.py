@@ -1029,6 +1029,87 @@ async def test_browse_watches_each_reel_once_and_puts_them_on_one_sheet(eyes, se
 	assert p.image is not None and p.image_size[1] > 3 * 150, 'one row per reel'
 
 
+def test_a_browse_watches_an_item_only_with_time_for_what_comes_after_it():
+	"""The plan for one item of a browse, from the call's time left. After an item come a watch's own work, a flick on
+	when there are more, and the end of the browse; the item gets what is left, up to its max, or is not begun."""
+	from browser_use.eyes.views import browse_cap
+
+	assert browse_cap(left=40, more=True, max_s=15, min_s=3) == 15
+	assert browse_cap(left=20, more=True, max_s=15, min_s=3) == 12.5  # 3 s at the end, 1.5 s of work, a 3 s flick
+	assert browse_cap(left=12, more=False, max_s=15, min_s=3) == 7.5  # the last item needs no flick after it
+	assert browse_cap(left=10.5, more=True, max_s=15, min_s=3) is None  # not even min_s and a little
+	assert browse_cap(left=20, more=True, max_s=15, min_s=3, next_est=6, overhead_est=2) == 9  # what was measured
+	# An item asked to run no longer than min_s (max_seconds 3, min_seconds 3): it is watched for its max, not never
+	assert browse_cap(left=50, more=True, max_s=3, min_s=3) == 3
+	assert browse_cap(left=50, more=True, max_s=2, min_s=3) == 2
+	# With speech, the item's own words are transcribed at the end too: its time is shared with the speech model's
+	assert browse_cap(left=49.7, more=False, max_s=45, min_s=3, speech_rate=4) == pytest.approx((49.7 - 3 - 1.5) / 1.25)
+
+
+def test_a_watch_leaves_time_for_the_speech_model_to_transcribe_it():
+	"""How long a watch may watch before its tail of work. With speech, the speech model runs over all it heard
+	(backfill included) at some multiple of real time after the watching, so a long watch is cut to leave it time; a
+	watch of 40 s with 47 s of room heard nothing transcribed."""
+	from browser_use.eyes.views import watch_span
+
+	assert watch_span(room_s=47, seconds=45) == 45
+	assert watch_span(room_s=30, seconds=45) == 30
+	assert watch_span(room_s=47, seconds=20, speech_rate=4) == 20
+	assert watch_span(room_s=47, seconds=45, speech_rate=4) == pytest.approx((47 - 1.5) * 4 / 5)
+	assert watch_span(room_s=47, seconds=45, speech_rate=4, held_s=8) == pytest.approx((47 - 1.5 - 2) * 4 / 5)
+	assert watch_span(room_s=1, seconds=45, speech_rate=4) == 0  # no room: nothing, not a negative span
+
+
+async def test_a_browse_with_no_time_for_the_reel_on_screen_does_not_say_there_was_no_video(eyes, session, site):
+	"""A browse with too little time for even the first reel stops at once: the reel on screen is held over for the
+	next call, and the answer says so, not that no video was on screen."""
+	from browser_use.eyes.views import BROWSE_FINAL_RESERVE_S, BROWSE_OVERHEAD_EST_S, Deadline
+
+	await _open(eyes, session, site.url_for('/feed'))
+	p = await eyes.browse(
+		items=3, max_seconds=4.0, min_seconds=1.0, deadline=Deadline.after(BROWSE_FINAL_RESERVE_S + BROWSE_OVERHEAD_EST_S + 1)
+	)
+	assert p.stop_reason == 'time' and p.resume and p.resume['items'] == 3, (p.resume, p.text)
+	assert 'no video was on screen' not in p.text, p.text
+	assert 'none watched' in p.text and 'the next call begins with' in p.text, p.text
+
+
+@pytest.mark.parametrize('feed', ['/feed', '/overshoot-feed'])
+async def test_a_browse_out_of_time_stops_on_the_next_reel_and_goes_on_from_it(eyes, session, site, feed):
+	"""A browse of many reels ran past the client's 60 s (30 items of up to 45 s are allowed). With a deadline it
+	watches what fits, flicks on, stops, and says how many are left; the next call watches from that reel on, and
+	each reel is watched once across the two. On the overshoot feed the flick carries the third reel into view before
+	the correction: a reel glimpsed so is not one the browse watched (seen in a full run, where it was reported as
+	watched for 4.6 s, then due to be watched again by the next call)."""
+	from browser_use.eyes.views import BROWSE_FINAL_RESERVE_S, BROWSE_NEXT_EST_S, BROWSE_OVERHEAD_EST_S, Deadline
+
+	await _open(eyes, session, site.url_for(feed))
+	# Time for the first reel at its 4 s and not for a second: the plan sets aside the flick and the end each time
+	budget = BROWSE_FINAL_RESERVE_S + BROWSE_OVERHEAD_EST_S + BROWSE_NEXT_EST_S + 4.0 + 1.5
+	started = time.monotonic()
+	first = await eyes.browse(items=3, max_seconds=4.0, min_seconds=1.0, deadline=Deadline.after(budget))
+	took = time.monotonic() - started
+	assert took < budget + 2, f'took {took:.1f}s with a {budget:.1f} s deadline'
+	assert [i.info.get('text', '').split()[0] for i in first.items] == ['@first'], first.text
+	assert first.stop_reason == 'time' and first.resume and first.resume['items'] == 2, (first.resume, first.text)
+	assert 'out of time' in first.text and 'call again with items=2' in first.text, first.text
+	second = await eyes.browse(**first.resume)
+	assert [i.info.get('text', '').split()[0] for i in second.items] == ['@second', '@third'], second.text
+
+
+async def test_a_watch_out_of_time_says_how_much_of_what_was_asked_it_watched(eyes, session, site):
+	"""A watch asked for more than its call has left stops in time and says so, rather than being dropped."""
+	from browser_use.eyes.views import Deadline
+
+	await _open(eyes, session, site.url_for('/feed'))
+	started = time.monotonic()
+	p = await eyes.watch(seconds=30, until='time', deadline=Deadline.after(6))
+	took = time.monotonic() - started
+	assert took < 7.5, f'took {took:.1f}s with a 6 s deadline'
+	assert p.stop_reason.startswith('out of time: watched') and 'of the asked 30s' in p.stop_reason, p.stop_reason
+	assert p.items and p.items[0].info.get('text', '').startswith('@first'), p.text
+
+
 # -- speech (optional extra) ---------------------------------------------------------------
 
 
@@ -1498,6 +1579,32 @@ LOOKALIKE_PAGE = (
 	+ ''.join(f'<section><h2>Story {n}</h2>' + '<p></p>' * 12 + '</section>' for n in range(1, 6))
 	+ '</body>'
 )
+
+
+def test_a_scan_sheet_too_small_for_the_page_spreads_over_it_from_the_top():
+	"""Found on Wikipedia (a 12-screen list, and a 61-screen one in two calls): six keyframes can show only half of a
+	12-screen page, and all six were from its bottom half (4.9 to 10.9 screens down), so the title and the start of the
+	table were on none. Of frames that add as much, the later one was kept, which fills the sheet from the bottom up.
+	The sheet now begins at the top and spreads over the page; of two frames at one place the later is still kept."""
+	from browser_use.eyes.page import PageFrame, choose_page_frames
+
+	vh = 1000.0
+	frames = [PageFrame(i * 0.5, i * 0.8 * vh, b'') for i in range(15)]  # a reader's steps down a 12-screen page
+	frames.insert(1, PageFrame(0.2, 0.0, b''))  # a second frame of the top: the later of the two is kept
+	chosen, shown = choose_page_frames(frames, [], 6, vh, 12 * vh)
+	ys = sorted(frames[i].scroll_y / vh for i in chosen)
+	assert ys[0] == 0 and 1 in chosen, ys
+	assert ys[-1] >= 10.4, ys  # the end of the page
+	assert max(b - a for a, b in zip(ys, ys[1:])) <= 3.3, ys  # no stretch of the page left far from every frame
+	assert shown >= 0.45, shown
+	# A page the frames can cover is still covered
+	chosen, shown = choose_page_frames(frames[:5], [], 6, vh, 3.4 * vh)
+	assert shown >= 0.99, shown
+	# A page six frames can just cover, scrolled in 100 px notches: frames 800 px apart cover it all; spread by distance
+	# alone, they split gaps and left three quarter-screen strips on none (88% shown)
+	notches = [PageFrame(i * 0.1, y, b'') for i, y in enumerate(range(0, 4001, 100))]
+	chosen, shown = choose_page_frames(notches, [], 6, 800.0, 4800.0)
+	assert shown >= 0.99, (shown, sorted(notches[i].scroll_y for i in chosen))
 
 
 async def test_a_scan_sheet_shows_the_whole_page_not_two_frames_of_its_top(eyes, session, site):

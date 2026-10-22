@@ -3,14 +3,27 @@
 This module provides integration with MCP servers and clients for browser automation.
 """
 
-from browser_use.mcp.client import MCPClient
-from browser_use.mcp.controller import MCPToolWrapper
+from typing import TYPE_CHECKING
 
-__all__ = ['MCPClient', 'MCPToolWrapper', 'BrowserUseServer']  # type: ignore
+if TYPE_CHECKING:
+	from browser_use.mcp.client import MCPClient
+	from browser_use.mcp.controller import MCPToolWrapper
+	from browser_use.mcp.server import BrowserUseServer
+
+__all__ = ['MCPClient', 'MCPToolWrapper', 'BrowserUseServer']
 
 
 def __getattr__(name):
-	"""Lazy import to avoid importing server module when only client is needed."""
+	"""Lazy imports: `python -m browser_use.mcp` runs this file before its front answers the client, and the client,
+	the tool wrapper and the server each load most of browser-use."""
+	if name == 'MCPClient':
+		from browser_use.mcp.client import MCPClient
+
+		return MCPClient
+	if name == 'MCPToolWrapper':
+		from browser_use.mcp.controller import MCPToolWrapper
+
+		return MCPToolWrapper
 	if name == 'BrowserUseServer':
 		from browser_use.mcp.server import BrowserUseServer
 

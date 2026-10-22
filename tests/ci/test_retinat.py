@@ -109,6 +109,20 @@ def _text(result) -> str:
 	return '\n'.join(b.text for b in result.content if isinstance(b, types.TextContent))
 
 
+async def _open_started(server, url: str):
+	"""retinat_open for a test's setup, waiting out the browser's start: a server with a budget of a few seconds says the
+	browser is still starting rather than wait for it, and the tests time only the calls after their setup."""
+	import asyncio
+
+	for _ in range(60):
+		r = await _call(server, 'retinat_open', {'url': url})
+		if not (r.is_error and 'still starting' in _text(r)):
+			assert not r.is_error, _text(r)
+			return r
+		await asyncio.sleep(0.5)
+	raise AssertionError('the browser did not start in 30 s')
+
+
 async def test_it_is_its_own_server_with_only_vision_first_tools():
 	server = RetinatServer()
 	assert server.server.name == 'retinat'
@@ -822,7 +836,7 @@ async def test_a_long_scan_through_mcp_answers_within_the_call_budget(retinat_sh
 		+ '</body>'
 	)
 	site.expect_request('/very-tall').respond_with_data(page, content_type='text/html')
-	await _call(retinat_short, 'retinat_open', {'url': site.url_for('/very-tall')})  # no cold launch in the timing
+	await _open_started(retinat_short, site.url_for('/very-tall'))  # no cold launch in the timing
 	started = time.monotonic()
 	first = await _call(retinat_short, 'retinat_scan', {'max_screens': 80})
 	took = time.monotonic() - started
@@ -846,13 +860,14 @@ def test_every_tool_that_can_run_long_is_under_the_call_budget():
 
 
 async def test_a_call_keeps_to_its_budget_by_itself_or_the_backstop_stops_it(tmp_path, monkeypatch, site):
-	"""A call held to a 1 s budget. A wait ends with the budget by itself (after a cold browser launch a 50 s wait went
-	past the client's 60 s). A tool that does not yet keep to the budget (watch, until it takes a deadline) is stopped
-	half a second past it and says so, instead of the client giving up on it; the next call works."""
+	"""A call held to a 1 s budget. A wait and a watch end with the budget by themselves (after a cold browser launch a
+	50 s wait went past the client's 60 s). A tool that does not yet keep to the budget (explore, until it takes a
+	deadline) is stopped two seconds past it and says so, instead of the client giving up on it; the next call works.
+	The two seconds leave a watch the work after its watching (3 s in production), so a busy machine does not fail it."""
 	import time
 
 	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
-	server = RetinatServer(call_budget_s=1, backstop_grace_s=0.5)
+	server = RetinatServer(call_budget_s=1, backstop_grace_s=2.0)
 	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
 	page = (
 		'<!doctype html><title>Spin</title><body style="margin:0"><canvas id="c" width="400" height="300"></canvas><script>'
@@ -862,7 +877,7 @@ async def test_a_call_keeps_to_its_budget_by_itself_or_the_backstop_stops_it(tmp
 	)
 	try:
 		site.expect_request('/spin').respond_with_data(page, content_type='text/html')
-		await _call(server, 'retinat_open', {'url': site.url_for('/spin')})
+		await _open_started(server, site.url_for('/spin'))
 		await _call(server, 'retinat_reflex', {'rules': [{'when': 'false', 'notify': 'never'}]})
 		started = time.monotonic()
 		waited = await _call(server, 'retinat_wait', {'timeout': 10})
@@ -870,11 +885,675 @@ async def test_a_call_keeps_to_its_budget_by_itself_or_the_backstop_stops_it(tmp
 		assert not waited.is_error and 'Nothing notified' in _text(waited), _text(waited)
 		assert took < 2, f'the wait took {took:.1f}s with a 1 s budget'
 		started = time.monotonic()
-		stopped = await _call(server, 'retinat_watch', {'seconds': 10})
+		watched = await _call(server, 'retinat_watch', {'seconds': 10})
+		took = time.monotonic() - started
+		assert not watched.is_error and 'out of time' in _text(watched), _text(watched)
+		assert took < 3, f'the watch took {took:.1f}s with a 1 s budget'
+		started = time.monotonic()
+		stopped = await _call(server, 'retinat_explore', {'url': site.url_for('/spin'), 'max_pages': 3})
 		took = time.monotonic() - started
 		assert stopped.is_error and 'past its 1s budget' in _text(stopped), _text(stopped)
-		assert took < 3, f'the watch took {took:.1f}s'
+		assert took < 4.5, f'the explore took {took:.1f}s'
 		after = await _call(server, 'retinat_look', {})
 		assert not after.is_error, _text(after)
+	finally:
+		await server._close_all_sessions()
+
+
+async def test_a_browse_through_mcp_keeps_to_the_call_budget(tmp_path, monkeypatch, site):
+	"""retinat_browse allows 30 items of up to 45 s, far past the client's 60 s, and is held to its call's budget:
+	given too little time for even one item, it says so at once with how to go on, instead of starting one."""
+	import time
+
+	from browser_use.eyes.views import BROWSE_FINAL_RESERVE_S, BROWSE_NEXT_EST_S, BROWSE_OVERHEAD_EST_S
+
+	site.expect_request('/plain').respond_with_data('<!doctype html><title>Plain</title><body>plain', content_type='text/html')
+	budget = BROWSE_FINAL_RESERVE_S + BROWSE_OVERHEAD_EST_S + BROWSE_NEXT_EST_S + 1.0
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(call_budget_s=budget)
+	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	try:
+		await _open_started(server, site.url_for('/plain'))
+		await _call(server, 'retinat_look', {})  # the eyes open here, not in the timed call
+		started = time.monotonic()
+		r = await _call(server, 'retinat_browse', {'items': 5, 'max_seconds': 10, 'min_seconds': 2})
+		took = time.monotonic() - started
+		assert not r.is_error, _text(r)
+		assert took < 4, f'took {took:.1f}s'
+		assert 'out of time' in _text(r) and 'call again with items=5' in _text(r), _text(r)
+	finally:
+		await server._close_all_sessions()
+
+
+async def test_a_browser_slow_to_start_is_waited_for_across_calls_and_started_once(tmp_path, monkeypatch, site):
+	"""The first call after a machine boots waited on a Chrome read off a cold disk: the start was stopped at 30 s, the
+	call failed, and the next call launched a browser over again. Now a start runs on past a call that cannot wait
+	for it: that call says the browser is still starting and to call again, and a later call gets it. One launch."""
+	import asyncio
+	import time
+
+	import psutil
+
+	from browser_use.browser.watchdogs.local_browser_watchdog import LocalBrowserWatchdog
+
+	chrome = LocalBrowserWatchdog._find_installed_browser_path()
+	assert chrome
+	slow = tmp_path / 'slow-browser.sh'
+	# The profile asks this Chrome its version for the user agent: that is not a launch, and is not slow
+	slow.write_text(
+		f'#!/bin/sh\ncase "$1" in --version) exec "{chrome}" "$@";; esac\n'
+		f'echo launch >> "{tmp_path / "launches"}"\nsleep 5\nexec "{chrome}" "$@"\n'
+	)
+	slow.chmod(0o755)
+	site.expect_request('/plain').respond_with_data('<!doctype html><title>Plain</title><body>plain', content_type='text/html')
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(call_budget_s=3)
+	server.config.setdefault('browser_profile', {}).update(
+		{'headless': True, 'user_data_dir': str(tmp_path / 'profile'), 'executable_path': str(slow)}
+	)
+	try:
+		started = time.monotonic()
+		first = await _call(server, 'retinat_open', {'url': site.url_for('/plain')})
+		took = time.monotonic() - started
+		assert first.is_error and 'still starting' in _text(first) and 'call again' in _text(first), _text(first)
+		assert took < 3.5, f'took {took:.1f}s with a 3 s budget'
+		for _ in range(30):
+			await asyncio.sleep(1)
+			r = await _call(server, 'retinat_open', {'url': site.url_for('/plain')})
+			if not r.is_error:
+				break
+			assert 'still starting' in _text(r), _text(r)
+		assert not r.is_error and 'Opened "Plain"' in _text(r), _text(r)
+		assert (tmp_path / 'launches').read_text().count('launch') == 1
+	finally:
+		await server._close_all_sessions()
+	assert not [
+		p for p in psutil.process_iter(['cmdline']) if any(str(tmp_path / 'profile') in a for a in p.info['cmdline'] or [])
+	], 'a browser was left running'
+
+
+async def test_a_browser_dropped_while_it_starts_or_after_is_started_afresh_and_none_is_left(tmp_path, monkeypatch, site):
+	"""A start goes on past the call that began it, so its browser can be dropped (a route change does) while it starts,
+	or after it started with no call waiting. Dropped while starting, its Chrome is ended, not left holding the profile;
+	dropped after, the next call starts another instead of failing on a browser that is gone."""
+	import asyncio
+
+	import psutil
+
+	from browser_use.browser.watchdogs.local_browser_watchdog import LocalBrowserWatchdog
+
+	chrome = LocalBrowserWatchdog._find_installed_browser_path()
+	assert chrome
+	slow = tmp_path / 'slow-browser.sh'
+	slow.write_text(f'#!/bin/sh\ncase "$1" in --version) exec "{chrome}" "$@";; esac\nsleep 3\nexec "{chrome}" "$@"\n')
+	slow.chmod(0o755)
+	profile = tmp_path / 'profile'
+
+	def running() -> list[int]:
+		return [p.pid for p in psutil.process_iter(['cmdline']) if any(str(profile) in a for a in p.info['cmdline'] or [])]
+
+	site.expect_request('/plain').respond_with_data('<!doctype html><title>Plain</title><body>plain', content_type='text/html')
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(call_budget_s=2)
+	server.config.setdefault('browser_profile', {}).update(
+		{'headless': True, 'user_data_dir': str(profile), 'executable_path': str(slow)}
+	)
+	try:
+		first = await _call(server, 'retinat_open', {'url': site.url_for('/plain')})
+		assert first.is_error and 'still starting' in _text(first), _text(first)
+		await server._drop_browser_session()
+		await asyncio.sleep(4)  # past the launcher's delay: a start left going would have its Chrome up by now
+		assert not running(), 'a browser dropped while it started was left running'
+
+		again = await _call(server, 'retinat_open', {'url': site.url_for('/plain')})
+		assert again.is_error and 'still starting' in _text(again), _text(again)
+		for _ in range(40):  # no call waits on this start: it ends by itself
+			await asyncio.sleep(0.5)
+			if server.browser_session is not None and server.browser_session.id in server.active_sessions:
+				break
+		await server._drop_browser_session()
+		opened = await _open_started(server, site.url_for('/plain'))
+		assert 'Opened "Plain"' in _text(opened), _text(opened)
+	finally:
+		await server._close_all_sessions()
+	await asyncio.sleep(1)
+	assert not running(), 'a browser was left running'
+
+
+async def test_the_handshake_and_tool_list_load_nothing_heavy_and_list_what_the_server_serves(tmp_path, monkeypatch):
+	"""After a machine boots, importing all of browser-use took Retinat 88-93 s to answer a client's handshake (each of
+	~2,200 modules read off a cold disk), against the client's 120 s to connect. The process now answers the
+	handshake and the tool list from light modules while the rest loads; the list is the one the server serves."""
+	import asyncio
+	import sys
+
+	probe = (
+		'import sys\n'
+		'from browser_use.retinat.front import tool_list\n'
+		'names = [t.name for t in tool_list()]\n'
+		"heavy = ('browser_use.mcp.server', 'browser_use.retinat.server', 'browser_use.agent.views', 'lmnr', 'openai',\n"
+		"         'browser_use.browser.session', 'browser_use.desktop.service')\n"
+		"print(','.join(names)); print(','.join(m for m in heavy if m in sys.modules))\n"
+	)
+	proc = await asyncio.create_subprocess_exec(
+		sys.executable, '-c', probe, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+	)
+	stdout, stderr = await asyncio.wait_for(proc.communicate(), 120)
+	assert proc.returncode == 0, stderr.decode()
+	names_line, heavy_line = stdout.decode().split('\n')[:2]
+	assert heavy_line == '', f'the handshake path imported {heavy_line}'
+
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer()
+	listed = await server.server.get_request_handler('tools/list').handler(None, types.PaginatedRequestParams())  # type: ignore[arg-type]
+	assert names_line.split(',') == [t.name for t in listed.tools]
+	from browser_use.retinat.front import tool_list
+
+	assert [t.model_dump() for t in tool_list()] == [t.model_dump() for t in listed.tools]
+
+
+async def test_a_call_that_waited_for_the_server_to_load_counts_that_wait(tmp_path, monkeypatch, site):
+	"""The front takes a call before the server has loaded and hands it over once it has: the call's budget counts from
+	when the front took it, so the time spent loading is not given twice and the answer still comes inside 60 s."""
+	import time
+
+	from browser_use.serving import CALL_STARTED
+
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(call_budget_s=5)
+	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	site.expect_request('/plain').respond_with_data('<!doctype html><title>Plain</title><body>plain', content_type='text/html')
+	try:
+		await _open_started(server, site.url_for('/plain'))
+		await _call(server, 'retinat_reflex', {'rules': [{'when': 'false', 'notify': 'never'}]})
+		token = CALL_STARTED.set(time.monotonic() - 4)  # taken 4 s ago, of a 5 s budget
+		try:
+			started = time.monotonic()
+			waited = await _call(server, 'retinat_wait', {'timeout': 10})
+			took = time.monotonic() - started
+		finally:
+			CALL_STARTED.reset(token)
+		assert not waited.is_error and 'Nothing notified' in _text(waited), _text(waited)
+		assert took < 1.5, f'the wait took {took:.1f}s with 1 s of its budget left'
+	finally:
+		await server._close_all_sessions()
+
+
+async def _runner(server) -> dict:
+	assert server.browser_session is not None
+	cdp = await server.browser_session.get_or_create_cdp_session(focus=False)
+	r = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'JSON.stringify(game)', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	return json.loads(r['result']['value'])
+
+
+async def test_step_plays_a_game_turn_by_turn_and_shows_the_frame_each_turn_ends_on(retinat, site):
+	"""The owner's test: play the game yourself, not through rules you wrote. A model's turn takes seconds and this game
+	moves every frame, so retinat_step stops the page's clock while the model thinks, plays only as much game time as
+	each step asks, with the keys it asks, and shows the frame the next decision is made from."""
+	import asyncio
+
+	from tests.ci.test_clock import GAME
+
+	site.expect_request('/runner').respond_with_data(GAME, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/runner')})
+	first = await _call(retinat, 'retinat_step', {'ms': 300, 'tap': ['ArrowLeft']})
+	text = _text(first)
+	assert not first.is_error, text
+	assert any(isinstance(b, types.ImageContent) for b in first.content), 'the frame to decide from'
+	assert 'Played 300 ms' in text and 'paused' in text, text
+	await asyncio.sleep(0.1)
+	a = await _runner(retinat)
+	assert a['lane'] == -1, 'the tap changed lane'
+	await asyncio.sleep(1.0)  # the model thinking
+	look = await _call(retinat, 'retinat_look', {})
+	assert not look.is_error, _text(look)
+	b = await _runner(retinat)
+	assert b['t'] == a['t'], f'the game moved while the model thought: {a["t"]} -> {b["t"]}'
+	second = await _call(retinat, 'retinat_step', {'ms': 500, 'hold': ['ArrowUp']})
+	assert 'Played 500 ms' in _text(second), _text(second)
+	c = await _runner(retinat)
+	assert abs(c['t'] - b['t'] - 500) <= 18, c['t'] - b['t']
+	assert c['boosted'] > b['boosted'] and c['up'] is True, 'held until a step leaves it out'
+	assert 'holding ArrowUp' in _text(second) and 'Turn-based' in _text(second), _text(second)
+	# a page opened from a paused tab loads: its clock is given back first
+	site.expect_request('/after-step').respond_with_data(
+		'<!doctype html><title>Later</title><body><script>window.fired = false; setTimeout(() => { window.fired = true; }, 300);</script></body>',
+		content_type='text/html',
+	)
+	opened = await _call(retinat, 'retinat_open', {'url': site.url_for('/after-step')})
+	assert not opened.is_error and 'Later' in _text(opened), _text(opened)
+	assert 'real time' in _text(opened), _text(opened)
+	await asyncio.sleep(1.0)
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	r = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'fired', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	assert r['result']['value'] is True
+	resumed = await _call(retinat, 'retinat_step', {'action': 'resume'})
+	assert not resumed.is_error and 'real time' in _text(resumed), _text(resumed)
+
+
+async def test_step_mode_is_only_for_a_browser_retinat_started_itself(tmp_path, monkeypatch):
+	"""A tab cannot leave step mode (Chrome has no way back), so the person's own browser, reached through the bridge
+	or --cdp-url, is never put in it: their tab would be left with its clock stopped for good."""
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	server = RetinatServer(cdp_url='http://127.0.0.1:9')  # nothing listens there: it must not even try to connect
+	try:
+		refused = await _call(server, 'retinat_step', {'ms': 200})
+		assert refused.is_error and 'your own browser' in _text(refused), _text(refused)
+		assert 'effect: none' in _text(refused)
+	finally:
+		await server._close_all_sessions()
+
+
+async def test_a_step_out_of_range_is_refused_before_the_page_is_paused(retinat, site):
+	import asyncio
+
+	from tests.ci.test_clock import GAME
+
+	site.expect_request('/runner-range').respond_with_data(GAME, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/runner-range')})
+	for ms in (8000, 5):
+		refused = await _call(retinat, 'retinat_step', {'ms': ms})
+		assert refused.is_error and 'effect: none' in _text(refused), _text(refused)
+	a = await _runner(retinat)
+	await asyncio.sleep(0.5)
+	b = await _runner(retinat)
+	assert b['t'] - a['t'] > 300, 'the page was paused by a refused step'
+
+
+async def test_on_a_paused_page_the_tools_that_need_its_time_say_so_and_explore_gives_it_back(retinat, site):
+	"""Between steps the page's timers stand still, so the eyes that run on them see nothing new: a watch is refused
+	with the reason rather than reporting a frozen page, a look still works, and exploring gives the clock back first."""
+	from tests.ci.test_clock import GAME
+
+	site.expect_request('/runner-paused').respond_with_data(GAME, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/runner-paused')})
+	await _call(retinat, 'retinat_step', {'ms': 100})
+	for tool, args in (
+		('retinat_watch', {'seconds': 2}),
+		('retinat_now', {}),
+		('retinat_reflex', {'rules': [{'when': 'true', 'notify': 'x'}]}),
+	):
+		refused = await _call(retinat, tool, args)
+		assert refused.is_error and 'paused by retinat_step' in _text(refused), (tool, _text(refused))
+	look = await _call(retinat, 'retinat_look', {})
+	assert not look.is_error, _text(look)
+	explored = await _call(retinat, 'retinat_explore', {'url': site.url_for('/'), 'max_pages': 1})
+	assert not explored.is_error and 'real time again' in _text(explored), _text(explored)[:300]
+
+
+async def test_a_step_can_show_just_the_game_and_draw_fewer_frames(retinat, site):
+	"""For a model that must read a small game inside a big page (Poki's frame is about a third of a look), a step can
+	return just the game, captured afresh at a readable size."""
+	import base64
+	import io
+
+	from PIL import Image
+
+	from tests.ci.test_clock import GAME
+
+	site.expect_request('/runner-inner').respond_with_data(GAME, content_type='text/html')
+	portal = (
+		'<!doctype html><title>Portal</title><body style="margin:0;background:#363">'
+		'<p style="height:150px">header</p>'
+		f'<iframe src="{site.url_for("/runner-inner")}" style="margin-left:200px;border:0" width="480" height="270"></iframe>'
+		'</body>'
+	)
+	site.expect_request('/game-portal').respond_with_data(portal, content_type='text/html')
+	await _call(retinat, 'retinat_open', {'url': site.url_for('/game-portal')})
+	stepped = await _call(retinat, 'retinat_step', {'ms': 100, 'frame': 'game'})
+	assert not stepped.is_error, _text(stepped)
+	image = next(b for b in stepped.content if isinstance(b, types.ImageContent))
+	with Image.open(io.BytesIO(base64.b64decode(image.data))) as img:
+		ratio = img.width / img.height
+	assert abs(ratio - 480 / 270) < 0.06, ratio
+	assert "the game's frame" in _text(stepped), _text(stepped)
+	slow = await _call(retinat, 'retinat_step', {'ms': 200, 'fps': 20})
+	assert 'Played 200 ms (4 frames)' in _text(slow), _text(slow)
+
+
+async def test_wait_with_no_reflexes_installed_just_waits_and_says_nothing_was_watched(retinat, site):
+	"""Found when models played Poki games: each reached for retinat_wait to let a loader finish and was refused, since it
+	only waited for reflex rules. With none installed it now waits the time asked, and says nothing was watched."""
+	import time
+
+	await _open_started(retinat, site.url_for('/'))
+	began = time.monotonic()
+	waited = await _call(retinat, 'retinat_wait', {'timeout': 1.5})
+	took = time.monotonic() - began
+	assert not waited.is_error, _text(waited)
+	assert 1.4 <= took < 4, f'waited {took:.1f}s for 1.5'
+	assert 'nothing was watched' in _text(waited), _text(waited)
+
+
+# Three things on a still background, placed by the page's clock: a red square going right at 120 px/s, a blue dot
+# going down at 60 px/s, and a green block that never moves.
+MOVERS = """<!doctype html><title>Movers</title><body style="margin:0;background:#fff">
+<canvas id="c" width="600" height="300" style="display:block;margin:20px"></canvas><script>
+const g = document.getElementById('c').getContext('2d'), t0 = performance.now();
+function frame() {
+  const s = (performance.now() - t0) / 1000;
+  g.fillStyle = '#ddd'; g.fillRect(0, 0, 600, 300);
+  g.fillStyle = '#0a0'; g.fillRect(250, 200, 30, 30);
+  g.fillStyle = '#d00'; g.fillRect(50 + (120 * s) % 450, 100, 16, 16);
+  g.fillStyle = '#00d'; g.beginPath(); g.arc(450, 30 + (60 * s) % 240, 8, 0, 7); g.fill();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body>"""
+
+
+async def test_a_step_says_what_moved_how_fast_and_which_way_as_eyes_see_it(retinat, site):
+	"""The owner's ask: play with the eyes, not by screenshots. A step showed one still frame, and a still frame cannot
+	show which way anything moves (the World's Hardest Game player's own complaint). The eyes now read the frames the
+	page drew during the step and say what moved, which way and how fast in game time, and draw where each went. Speeds
+	are in the picture's px, as its positions are: in page px, a player that went by the picture misjudged every move by
+	the picture's scale (0.76 on The World's Hardest Game)."""
+	import re
+
+	site.expect_request('/movers').respond_with_data(MOVERS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/movers'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	stepped = await _call(retinat, 'retinat_step', {'ms': 500, 'frame': 'game'})
+	text = _text(stepped)
+	assert not stepped.is_error, text
+	assert '2 things moved' in text, text
+	speeds = {d: float(v) for d, v in re.findall(r'moving (\w+) at (\d+) px/s', text)}
+	# in the picture's px, as its positions are: the 600 px canvas is drawn 800 px wide, so 120 and 60 page px/s
+	assert speeds.get('right', 0) == pytest.approx(160, rel=0.2), text
+	assert speeds.get('down', 0) == pytest.approx(80, rel=0.25), text
+	assert any(isinstance(b, types.ImageContent) for b in stepped.content), 'the picture with where each went'
+
+
+# A side-scroller: the world (blocks of many greys) goes left at 150 px/s under a player that stays in the middle.
+SCROLLER = """<!doctype html><title>Scroller</title><body style="margin:0;background:#fff">
+<canvas id="c" width="600" height="300" style="display:block;margin:20px"></canvas><script>
+const g = document.getElementById('c').getContext('2d'), t0 = performance.now();
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const blocks = Array.from({length: 400}, () => [rnd() * 3000, rnd() * 300, 20 + rnd() * 60, 20 + rnd() * 60, Math.floor(40 + rnd() * 180)]);
+function frame() {
+  const off = ((performance.now() - t0) / 1000) * 150;
+  g.fillStyle = '#888'; g.fillRect(0, 0, 600, 300);
+  for (const [x, y, w, h, c] of blocks) { g.fillStyle = `rgb(${c},${c},${c})`; g.fillRect(x - off, y, w, h); }
+  g.fillStyle = '#d00'; g.fillRect(290, 140, 20, 20);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body>"""
+
+
+async def test_a_step_says_when_the_whole_view_scrolls(retinat, site):
+	"""In a side-scroller the camera follows the player, so the player stands still on screen and the world moves: the
+	eyes say the view scrolled, which way and how fast, rather than calling the whole picture a crowd of movers."""
+	import re
+
+	site.expect_request('/scroller').respond_with_data(SCROLLER, content_type='text/html')
+	await _open_started(retinat, site.url_for('/scroller'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	stepped = await _call(retinat, 'retinat_step', {'ms': 400, 'frame': 'game'})
+	text = _text(stepped)
+	scrolled = re.search(r'the whole view scrolled (\w+) at (\d+) px/s', text)
+	assert scrolled and scrolled[1] == 'right' and float(scrolled[2]) == pytest.approx(200, rel=0.1), text
+
+
+def test_a_world_that_repeats_is_not_read_at_the_wrong_shift():
+	"""A tiled floor lines up again every tile, so the shift between the first and last frame of a step has many
+	answers; the eyes follow it frame by frame and still read how fast the view scrolled."""
+	import numpy as np
+
+	from browser_use.eyes import moving
+
+	def world(off: float) -> np.ndarray:
+		x = np.arange(400) + off
+		floor = np.where(x % 24 < 12, 70.0, 180.0)[None, :].repeat(200, 0)
+		floor[:40] = 120 + 40 * np.sin(x / 37.0)[None, :]  # a little sky that does not repeat
+		return floor.astype(np.float32)
+
+	movement = moving.read([(i * 1000 / 60, world(100 * i / 60)) for i in range(25)])  # 100 px/s for 0.4 s
+	assert movement.scroll is not None and movement.scroll[0] == pytest.approx(-100, rel=0.15), movement.scroll
+	assert abs(movement.scroll[1]) < 5, movement.scroll
+
+
+# A dot that sets off right at 150 px/s when a key goes down, and bounces back left after 0.3 s of game time.
+BOUNCER = """<!doctype html><title>Bouncer</title><body style="margin:0;background:#fff">
+<canvas id="c" width="600" height="300" style="display:block;margin:20px"></canvas><script>
+const g = document.getElementById('c').getContext('2d');
+let go = null;
+addEventListener('keydown', () => { if (go === null) go = performance.now(); });
+function frame() {
+  const s = go === null ? 0 : (performance.now() - go) / 1000;
+  const x = s < 0.3 ? 200 + 150 * s : 245 - 150 * (s - 0.3);
+  g.fillStyle = '#eee'; g.fillRect(0, 0, 600, 300);
+  g.fillStyle = '#00d'; g.beginPath(); g.arc(x, 150, 10, 0, 7); g.fill();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body>"""
+
+
+async def test_a_step_says_which_way_a_thing_goes_at_its_end_not_on_average(retinat, site):
+	"""Found when the eyes first watched The World's Hardest Game: its dots go back and forth, and an average over the
+	step points the wrong way for a dot that turned during it. What a step says is where each thing is heading as the
+	step ends, which is what the next move has to reckon with."""
+	import re
+
+	site.expect_request('/bouncer').respond_with_data(BOUNCER, content_type='text/html')
+	await _open_started(retinat, site.url_for('/bouncer'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	stepped = await _call(retinat, 'retinat_step', {'ms': 500, 'frame': 'game', 'tap': ['ArrowRight']})
+	text = _text(stepped)
+	moved = re.findall(r'moving (\w+) at (\d+) px/s', text)
+	assert len(moved) == 1 and moved[0][0] == 'left' and float(moved[0][1]) == pytest.approx(200, rel=0.25), text
+
+
+async def test_a_hung_tab_does_not_hold_up_the_eyes_in_the_next_one(retinat, site):
+	"""Found when a model played Level Devil: its tab hung (a script that never yields), and from then on every look
+	failed, in a new tab too, each after the client's 60 s. Moving the eyes to the new tab first let go of the old one,
+	and every call that made to the hung page waited for it. Letting go of a page is now bounded."""
+	import asyncio
+	import time
+
+	site.expect_request('/movers').respond_with_data(MOVERS, content_type='text/html')
+	site.expect_request('/plain-next').respond_with_data(
+		'<!doctype html><title>Next</title><p>The next page.</p>', content_type='text/html'
+	)
+	await _open_started(retinat, site.url_for('/movers'))
+	await _call(retinat, 'retinat_look', {})  # the eyes are on this tab
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'setTimeout(() => { for (;;) {} }, 50); 1'}, session_id=cdp.session_id
+	)
+	await asyncio.sleep(0.5)  # it hangs now
+	opened = await _call(retinat, 'retinat_open', {'url': site.url_for('/plain-next'), 'new_tab': True})
+	assert 'Opened "Next"' in _text(opened), _text(opened)
+	began = time.monotonic()
+	look = await _call(retinat, 'retinat_look', {})
+	took = time.monotonic() - began
+	assert not look.is_error, _text(look)
+	assert took < 15, f'the look took {took:.0f}s'
+
+
+async def test_no_call_outlives_its_budget_on_a_page_that_hangs(retinat_short, site):
+	"""Found when a model played Level Devil: once its page hung, each look ran until the client gave up at 60 s, with
+	no answer at all. Only the long tools had a backstop at their budget; every tool has one now, so a call on a page
+	that hangs answers, and says it ran out of time, while the client still listens."""
+	import asyncio
+	import time
+
+	site.expect_request('/plain-hang').respond_with_data(
+		'<!doctype html><title>Hang</title><p>soon</p>', content_type='text/html'
+	)
+	await _open_started(retinat_short, site.url_for('/plain-hang'))
+	cdp = await retinat_short.browser_session.get_or_create_cdp_session(focus=False)
+	await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'setTimeout(() => { for (;;) {} }, 50); 1'}, session_id=cdp.session_id
+	)
+	await asyncio.sleep(0.5)
+	began = time.monotonic()
+	look = await asyncio.wait_for(_call(retinat_short, 'retinat_look', {}), 60)
+	took = time.monotonic() - began
+	assert took < retinat_short.call_budget_s + retinat_short.backstop_grace_s + 3, f'the look took {took:.0f}s'
+	assert look.is_error, _text(look)
+
+
+# A row of coins drifting left together over a flat dark sky (too plain for the view's scroll to be found from it),
+# and a player rising through them, from the first key press on.
+TOGETHER = """<!doctype html><title>Together</title><body style="margin:0;background:#fff">
+<canvas id="c" width="600" height="300" style="display:block;margin:20px"></canvas><script>
+const g = document.getElementById('c').getContext('2d');
+let go = null;
+addEventListener('keydown', () => { if (go === null) go = performance.now(); });
+function frame() {
+  const s = go === null ? 0 : (performance.now() - go) / 1000;
+  g.fillStyle = '#112'; g.fillRect(0, 0, 600, 300);
+  g.fillStyle = '#fc0';
+  for (let i = 0; i < 8; i++) { g.beginPath(); g.arc(100 + i * 60 - 90 * s, 80 + (i % 2) * 40, 8, 0, 7); g.fill(); }
+  g.fillStyle = '#0f8'; g.fillRect(120, 260 - 60 * s, 18, 18);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body>"""
+
+
+async def test_things_moving_together_are_told_as_one_group(retinat, site):
+	"""Found when a model played Neon Challenge Legends: coins and scenery drifting with the world were each listed as a
+	mover, and the list was noise. Things going the same way at the same speed are now told as one group, with where
+	each is, and what moves on its own is told apart."""
+	import re
+
+	site.expect_request('/together').respond_with_data(TOGETHER, content_type='text/html')
+	await _open_started(retinat, site.url_for('/together'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	text = _text(await _call(retinat, 'retinat_step', {'ms': 400, 'frame': 'game', 'tap': ['ArrowUp']}))
+	group = re.search(r'(\d+) things moving together (\w+) at (\d+) px/s', text)
+	assert group and int(group[1]) >= 5 and group[2] == 'left', text
+	alone = re.findall(r'#\d+ at \(\d+, \d+\) moving (\w+) at (\d+) px/s', text)
+	assert [d for d, _ in alone] == ['up'], text
+
+
+async def test_a_step_too_short_to_see_motion_says_so(retinat, site):
+	"""Found when a model played The World's Hardest Game: after very short steps the eyes' trails jumped and named the
+	wrong movers, from two or three frames. A step with too few frames to follow anything now says so instead."""
+	site.expect_request('/movers').respond_with_data(MOVERS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/movers'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	text = _text(await _call(retinat, 'retinat_step', {'ms': 33, 'frame': 'game', 'fps': 30}))
+	assert 'too short to see what moves' in text and 'moving' not in text.split('too short')[1][:200], text
+
+
+async def test_the_eyes_read_a_step_from_the_video_stream_not_from_screenshots(retinat, site):
+	"""The owner's ask, and what the players measured: a step's eyes took a screenshot at every frame (~166 ms each, 4-10
+	s a step, so one player turned motion off). The eyes now read the compositor's own stream of the frames the page
+	drew, as they watch any video; the step takes one picture, the one it shows."""
+	import re
+
+	from browser_use.browser import capture
+
+	site.expect_request('/movers').respond_with_data(MOVERS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/movers'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	sent = capture.captures_taken
+	text = _text(await _call(retinat, 'retinat_step', {'ms': 500, 'frame': 'game'}))
+	assert capture.captures_taken - sent <= 1, f'{capture.captures_taken - sent} screenshots for one step'
+	speeds = {d: float(v) for d, v in re.findall(r'moving (\w+) at (\d+) px/s', text)}
+	assert speeds.get('right', 0) == pytest.approx(160, rel=0.2) and speeds.get('down', 0) == pytest.approx(80, rel=0.25), text
+
+
+KEYS = """<!doctype html><title>Keys</title><body><script>
+window.seen = [];
+for (const type of ['keydown', 'keyup']) addEventListener(type, (e) => seen.push([type, e.key, performance.now(), e.repeat, e.code, e.keyCode]));
+</script></body>"""
+
+
+async def _keys_seen(retinat) -> list:
+	assert retinat.browser_session is not None
+	cdp = await retinat.browser_session.get_or_create_cdp_session(focus=False)
+	got = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': 'window.seen', 'returnByValue': True}, session_id=cdp.session_id
+	)
+	return got['result']['value']
+
+
+async def test_a_key_can_be_held_down_for_a_while_when_playing_live(retinat, site):
+	"""A tap moves a platformer's figure a few px; walking a known distance is the key held down, so retinat_key holds
+	it for hold_ms when asked."""
+	site.expect_request('/keys').respond_with_data(KEYS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/keys'))
+	said = _text(await _call(retinat, 'retinat_key', {'key': 'ArrowRight', 'hold_ms': 400}))
+	seen = await _keys_seen(retinat)
+	downs = [s for s in seen if s[0] == 'keydown']
+	ups = [s for s in seen if s[0] == 'keyup']
+	assert downs and ups and all(s[1] == 'ArrowRight' for s in seen), seen
+	assert 350 <= ups[-1][2] - downs[0][2] <= 1200, seen
+	assert 'held' in said.lower() and '400' in said, said
+
+
+async def test_keys_held_together_go_down_together_and_come_up_together(retinat, site):
+	"""A running jump is the jump key pressed while the run key is down: `with` holds other keys alongside."""
+	site.expect_request('/keys').respond_with_data(KEYS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/keys'))
+	await _call(retinat, 'retinat_key', {'key': 'ArrowUp', 'hold_ms': 200, 'with': ['ArrowRight']})
+	seen = await _keys_seen(retinat)
+	first_up = min(s[2] for s in seen if s[0] == 'keyup')
+	down_before = {s[1] for s in seen if s[0] == 'keydown' and s[2] < first_up}
+	assert down_before == {'ArrowRight', 'ArrowUp'}, seen
+	assert {s[1] for s in seen if s[0] == 'keyup'} == {'ArrowRight', 'ArrowUp'}, seen
+
+
+async def test_a_hold_longer_than_a_call_can_wait_is_refused(retinat, site):
+	site.expect_request('/keys').respond_with_data(KEYS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/keys'))
+	result = await _call(retinat, 'retinat_key', {'key': 'ArrowRight', 'hold_ms': 60_000})
+	assert result.is_error and 'hold_ms' in _text(result), _text(result)
+	assert await _keys_seen(retinat) == []
+
+
+async def test_a_letter_held_down_says_which_key_it_is_as_a_keyboard_does(retinat, site):
+	"""Games read e.code or e.keyCode (QWOP's Q W O P), not only e.key: a letter comes with KeyQ and 81, as in step mode."""
+	site.expect_request('/keys').respond_with_data(KEYS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/keys'))
+	await _call(retinat, 'retinat_key', {'key': 'q', 'hold_ms': 150, 'with': ['p']})
+	seen = await _keys_seen(retinat)
+	assert {(s[1], s[4], s[5]) for s in seen if s[0] == 'keydown'} == {('q', 'KeyQ', 81), ('p', 'KeyP', 80)}, seen
+
+
+async def test_a_recording_stops_and_is_saved_when_the_page_has_hung(site, tmp_path, monkeypatch):
+	"""Found when a model played Level Devil: its page hung, and stopping the recording ran out of time and said
+	nothing, while the next stop said no recording was running; the file was never finished. Stopping the screencast
+	on a hung tab never returned. The video is the record of what happened, a hung page most of all: stopping it
+	answers within the call's time, with a file that plays."""
+	import asyncio
+	import re
+	import time
+	from pathlib import Path
+
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	monkeypatch.setenv('BROWSER_USE_RECORD_VIDEO_DIR', str(tmp_path / 'videos'))
+	server = RetinatServer(call_budget_s=20)
+	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	try:
+		site.expect_request('/plain-hang').respond_with_data(
+			'<!doctype html><title>Hang</title><p>soon</p>', content_type='text/html'
+		)
+		await _open_started(server, site.url_for('/plain-hang'))
+		started = await _call(server, 'retinat_record', {'action': 'start', 'framerate': 4})
+		assert not started.is_error, _text(started)
+		await asyncio.sleep(1.0)
+		assert server.browser_session is not None
+		cdp = await server.browser_session.get_or_create_cdp_session(focus=False)
+		await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'setTimeout(() => { for (;;) {} }, 50); 1'}, session_id=cdp.session_id
+		)
+		await asyncio.sleep(3.0)  # hung for a while: the recorder's picture of it waits on the page
+		began = time.monotonic()
+		stopped = await asyncio.wait_for(_call(server, 'retinat_record', {'action': 'stop'}), 60)
+		took = time.monotonic() - began
+		saved = re.search(r'Saved the recording: (\S+\.mp4)', _text(stopped))
+		assert not stopped.is_error and saved, f'{_text(stopped)} after {took:.0f}s'
+		assert took < server.call_budget_s, f'the stop took {took:.0f}s'
+		assert b'moov' in Path(saved[1]).read_bytes(), 'the MP4 was not finished (no index)'
 	finally:
 		await server._close_all_sessions()

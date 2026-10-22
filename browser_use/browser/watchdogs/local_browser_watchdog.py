@@ -56,6 +56,7 @@ class LocalBrowserWatchdog(BaseWatchdog):
 
 	# Private state for subprocess management
 	_subprocess: psutil.Process | None = PrivateAttr(default=None)
+	_launching: psutil.Process | None = PrivateAttr(default=None)  # a Chrome begun, its port not yet open
 	_owns_browser_resources: bool = PrivateAttr(default=True)
 	_temp_dirs_to_cleanup: list[Path] = PrivateAttr(default_factory=list)
 	_original_user_data_dir: str | None = PrivateAttr(default=None)
@@ -68,7 +69,8 @@ class LocalBrowserWatchdog(BaseWatchdog):
 			self.logger.debug('[LocalBrowserWatchdog] Received BrowserLaunchEvent, launching local browser...')
 
 			# self.logger.debug('[LocalBrowserWatchdog] Calling _launch_browser...')
-			process, cdp_url = await self._launch_browser()
+			# Chrome gets as long to open its port as the launch was given, and never less than before
+			process, cdp_url = await self._launch_browser(cdp_timeout=max(30.0, event.event_timeout or 0.0))
 			self._subprocess = process
 			# self.logger.debug(f'[LocalBrowserWatchdog] _launch_browser returned: process={process}, cdp_url={cdp_url}')
 
@@ -76,6 +78,18 @@ class LocalBrowserWatchdog(BaseWatchdog):
 		except Exception as e:
 			self.logger.error(f'[LocalBrowserWatchdog] Exception in on_BrowserLaunchEvent: {e}', exc_info=True)
 			raise
+
+	def kill_launching(self) -> bool:
+		"""Kill the Chrome being launched, before its port opens; says whether there was one. Synchronous, so it runs
+		while a cancelled task unwinds, and a start waiting on that Chrome then fails at once."""
+		process, self._launching = self._launching, None
+		if process is None:
+			return False
+		try:
+			process.kill()
+		except psutil.Error:
+			pass
+		return True
 
 	async def on_BrowserKillEvent(self, event: BrowserKillEvent) -> None:
 		"""Kill the local browser subprocess."""
@@ -106,7 +120,7 @@ class LocalBrowserWatchdog(BaseWatchdog):
 			self.event_bus.dispatch(BrowserKillEvent())
 
 	@observe_debug(ignore_input=True, ignore_output=True, name='launch_browser_process')
-	async def _launch_browser(self, max_retries: int = 3) -> tuple[psutil.Process, str]:
+	async def _launch_browser(self, max_retries: int = 3, cdp_timeout: float = 30.0) -> tuple[psutil.Process, str]:
 		"""Launch browser process and return (process, cdp_url).
 
 		Handles launch errors by falling back to temporary directories if needed.
@@ -188,12 +202,21 @@ class LocalBrowserWatchdog(BaseWatchdog):
 				process = psutil.Process(subprocess.pid)
 
 				# Wait for CDP to be ready and get the URL
+				self._launching = process
 				try:
-					cdp_url = await self._wait_for_cdp_url(debug_port, process=process)
+					cdp_url = await self._wait_for_cdp_url(debug_port, timeout=cdp_timeout, process=process)
 				except RuntimeError as e:
 					# Chrome said why it exited on stderr: without it the error says only that it did.
+					self.kill_launching()
 					said = await self._stderr_tail(subprocess)
 					raise RuntimeError(f'{e} Chrome said: {said}' if said else str(e)) from e
+				except BaseException:
+					# Stopped before Chrome answered (the launch's time limit, a cancelled start): nothing else holds this
+					# process yet, and left running it would hold the profile
+					self.kill_launching()
+					raise
+				finally:
+					self._launching = None
 
 				# Success! Clean up only the temp dirs we created but didn't use
 				currently_used_dir = str(profile.user_data_dir)

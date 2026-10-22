@@ -28,7 +28,8 @@ ANIMATED_PAGE = """<!DOCTYPE html>
 	<div id="stage" style="width:100vw;height:100vh;font:64px sans-serif;color:#fff;
 	     display:flex;align-items:center;justify-content:center;background:#000">0</div>
 <script>
-	const colours = ['#c0392b', '#27ae60', '#2980b9', '#8e44ad', '#f39c12', '#16a085'];
+	// more colours than a 5 s watch goes through (one each 0.6 s), so no moment it sees looks like an earlier one
+	const colours = ['#c0392b', '#27ae60', '#2980b9', '#8e44ad', '#f39c12', '#16a085', '#7f8c8d', '#d35400', '#2c3e50', '#f1c40f'];
 	let i = 0;
 	setInterval(() => {
 		i++;
