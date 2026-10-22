@@ -4012,3 +4012,49 @@ frames (the interrupted eyes run of World's Hardest Game had reached level 2 wit
 **Next, in order:** the five games with the eyes, video and accuracy checked against it; whether the eyes beat still
 frames per game; a test that the World's Hardest Game page draws a frame per step (one run saw few distinct frames);
 the two failures that are red on `main` here.
+
+## Round 66 (owner's ask and the hourly loop, 2026-10-22 08:00 to 10:45): the five games with the eyes; the eyes move to the video stream
+
+The five games were played with the eyes (first build: a capture per frame), and the video was made from them
+(`docs/hands-on/2026-10-22/sonnet-plays-poki-eyes.mp4`, scores on title cards, each checked against the footage):
+World's Hardest Game 12 of 15 obstacles (level 1 with 0 deaths, died twice on level 2), Moto X3M 6 of 6 (level 1 in
+12.97 s), Neon Challenge Legends 4 of 4 (97% of level 1, no deaths, turn cap), QWOP 29 of 29 strides survived but
+1.7 m of 100, Level Devil 3 of 4 distinct traps (stages 2-3 played live, not on video). 54 of 58 in all, 25 of 29
+without QWOP: the owner's 98% was not reached.
+
+The owner then said the eyes still ran on screenshots, and asked for neural vision (named "YOLO v28"; the newest
+Ultralytics family is YOLO26, AGPL-3.0, so not for bundling; RF-DETR is Apache-2.0 except XL/2XL).
+
+- **Found from the models' own complaints and fixed (test first, `117c015`):**
+  - A turn with the eyes took 4-10 s (a capture per looked-at frame), so the Moto X3M player turned them off. The eyes
+    now read a turn from the compositor's screencast: ~1 s. Measured against a page that paints its frame number: the
+    stream runs 0-2 frames behind the drawing in software GL and neither arrival nor swap time pins a frame, so a
+    frame's time is good to about a frame; the first (before the step, the page standing still) and the last (after
+    it settles) are exact.
+  - A capture taken between turns (the step's own frame of the game, 800x400) showed up in the stream and was read as
+    the next turn's first frame, at the wrong scale: only frames of the stream's own size are read now.
+  - The scroll: first-to-last phase correlation aliases on a world that repeats (a tiled floor read +7.4 px for a
+    true -40); the shift is now followed frame to frame, refined first to last near that guess, and whichever lines
+    the frames up better is taken. The scrolling test world reads 200 px/s (true 200; before, 183-187).
+  - Live play had only taps: `retinat_key` holds keys (`hold_ms`), several at once (`with`), and letters carry their
+    key codes (games read `e.code`/`e.keyCode`; a held "q" had none).
+  - The recorder could not stop or leave a hung tab (`Page.stopScreencast` on it never returns), so Level Devil's live
+    stages were never recorded and stopping ran out of time with the file unfinished. Bounded at 2 s, and the file is
+    finished even when the call waiting for it is cancelled (shielded); a record call cut off now reports its effect
+    as unknown, not "nothing was done".
+  - `test_live_view` failed here and on `main`: its page repeats its colours within the watch.
+- **WebMCP on Poki, checked live:** 8 page tools, all the site's own (like, search, language); the game is a canvas in
+  a cross-origin frame with none. Vision is the only way into these games.
+- **Pushed red once, said here:** `117c015` went out while its test files were still running; one new test
+  (`test_a_recording_stops_and_is_saved_when_the_page_has_hung`) failed in the full file under load: its 6 s budget
+  could not hold the stop's real work (the owed frames, the bounded stop, the finish). Fixed in the next commit (the
+  stop overlaps that work and shields it; the test uses a 20 s budget, no look, and checks the MP4 is finished).
+- Affected files: Retinat, clock, MCP lifecycle, eyes, live view, recording, hand input: 207 passed, 1 failed (above).
+
+**Not yet measured:** whether the stream eyes raise the models' accuracy (replay pending); neural detectors on these
+games (bake-off ready: RF-DETR, YOLO26 for comparison only, OWLv2, Grounding DINO, 50 frames from the five recordings,
+CPU only, a separate environment).
+
+**Next, in order:** the detector bake-off and, if one earns it, a detector in the eyes for what motion cannot show
+(the player, still hazards); the five games again on the new eyes, with the final video; full `tests/ci`, then the PR
+body.

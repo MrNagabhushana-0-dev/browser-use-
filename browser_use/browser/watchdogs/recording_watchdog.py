@@ -49,6 +49,7 @@ class RecordingWatchdog(BaseWatchdog):
 	# looks sharing its stream, ended on a frame from before the game stopped.
 	_last_frame_at: float = PrivateAttr(default=0.0)
 	_topped_up: bool = PrivateAttr(default=True)
+	_finishing: set[asyncio.Task] = PrivateAttr(default_factory=set)  # files still being finished after a stop
 
 	async def on_BrowserConnectedEvent(self, event: BrowserConnectedEvent) -> None:
 		"""
@@ -142,7 +143,9 @@ class RecordingWatchdog(BaseWatchdog):
 		"""
 		Stop any in-progress recording and finalize the output file.
 
-		Returns the path of the saved video, or None if no recording was active.
+		Returns the path of the saved video, or None if no recording was active. The file is finished even when the
+		caller stops waiting (an MCP call out of time is cancelled): an MP4 never finished has no index and does not
+		play.
 		"""
 		if not self._recorder:
 			return None
@@ -157,19 +160,24 @@ class RecordingWatchdog(BaseWatchdog):
 			due, period = self._clock
 			owed = max(1, min(int((asyncio.get_running_loop().time() - due) / period) + 1, int(60 / period)))
 			self._clock = None
-		await asyncio.to_thread(recorder.tick, owed)  # the last picture closes the video
 		self._recorder = None
 		self._current_session_id = None
 		self.latest_frame = None
 		self._screencast_params = None
 
-		if session_id:
-			await self._stop_screencast(session_id)
+		async def finish() -> None:
+			# the screencast stops while the last pictures are written: a hung tab takes all of STOP_SCREENCAST_S
+			stopping = asyncio.ensure_future(self._stop_screencast(session_id)) if session_id else None
+			await asyncio.to_thread(recorder.tick, owed)  # the last picture closes the video
+			if stopping is not None:
+				await stopping
+			await asyncio.to_thread(recorder.stop_and_save)
 
-		output_path = recorder.output_path
-		loop = asyncio.get_event_loop()
-		await loop.run_in_executor(None, recorder.stop_and_save)
-		return output_path
+		finishing = asyncio.ensure_future(finish())
+		self._finishing.add(finishing)
+		finishing.add_done_callback(self._finishing.discard)
+		await asyncio.shield(finishing)
+		return recorder.output_path
 
 	async def _stop_screencast(self, session_id: str) -> None:
 		"""Stop the screencast on a tab, waiting at most STOP_SCREENCAST_S: the tab may be closed, or hung."""

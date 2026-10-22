@@ -615,7 +615,7 @@ class RetinatServer(BrowserUseServer):
 		from pathlib import Path
 
 		from browser_use.config import CONFIG
-		from browser_use.mcp.effects import Refused
+		from browser_use.mcp.effects import Refused, act
 
 		assert action in ('start', 'stop'), action
 		assert self.browser_session is not None
@@ -623,7 +623,7 @@ class RetinatServer(BrowserUseServer):
 		if recorder is None:
 			raise Refused('this browser session has no recorder')
 		if action == 'stop':
-			saved = await recorder.stop_recording()
+			saved = await act(recorder.stop_recording())
 			if saved is None:
 				raise Refused('no recording is running: start one with action=start')
 			size = Path(saved).stat().st_size if Path(saved).exists() else 0
@@ -631,7 +631,9 @@ class RetinatServer(BrowserUseServer):
 		folder = Path(os.environ.get('BROWSER_USE_RECORD_VIDEO_DIR') or CONFIG.BROWSER_USE_CONFIG_DIR / 'recordings').expanduser()
 		folder.mkdir(parents=True, exist_ok=True)
 		try:
-			out = await recorder.start_recording(folder / f'retinat-{time.strftime("%Y%m%d-%H%M%S")}.mp4', framerate=framerate)
+			out = await act(
+				recorder.start_recording(folder / f'retinat-{time.strftime("%Y%m%d-%H%M%S")}.mp4', framerate=framerate)
+			)
 		except RuntimeError as e:  # one already running, or no viewport yet
 			raise Refused(str(e)) from e
 		return f'Recording to {out} at {framerate} fps. Call retinat_record with action=stop to finish the file.'

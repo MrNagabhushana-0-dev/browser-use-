@@ -1520,32 +1520,40 @@ async def test_a_letter_held_down_says_which_key_it_is_as_a_keyboard_does(retina
 	assert {(s[1], s[4], s[5]) for s in seen if s[0] == 'keydown'} == {('q', 'KeyQ', 81), ('p', 'KeyP', 80)}, seen
 
 
-async def test_a_recording_stops_and_is_saved_when_the_page_has_hung(retinat_short, site):
-	"""Found when a model played Level Devil: its page hung, a look ran out of time, and stopping the recording then ran
-	out of time too and said nothing, while the next stop said no recording was running. The video is the record of
-	what happened, a hung page most of all: stopping it answers within the call's time, and says where it is."""
+async def test_a_recording_stops_and_is_saved_when_the_page_has_hung(site, tmp_path, monkeypatch):
+	"""Found when a model played Level Devil: its page hung, and stopping the recording ran out of time and said
+	nothing, while the next stop said no recording was running; the file was never finished. Stopping the screencast
+	on a hung tab never returned. The video is the record of what happened, a hung page most of all: stopping it
+	answers within the call's time, with a file that plays."""
 	import asyncio
 	import re
 	import time
 	from pathlib import Path
 
-	site.expect_request('/plain-hang').respond_with_data(
-		'<!doctype html><title>Hang</title><p>soon</p>', content_type='text/html'
-	)
-	await _open_started(retinat_short, site.url_for('/plain-hang'))
-	started = await _call(retinat_short, 'retinat_record', {'action': 'start', 'framerate': 4})
-	assert not started.is_error, _text(started)
-	await asyncio.sleep(1.0)
-	cdp = await retinat_short.browser_session.get_or_create_cdp_session(focus=False)
-	await cdp.cdp_client.send.Runtime.evaluate(
-		params={'expression': 'setTimeout(() => { for (;;) {} }, 50); 1'}, session_id=cdp.session_id
-	)
-	await asyncio.sleep(0.5)
-	await asyncio.wait_for(_call(retinat_short, 'retinat_look', {}), 60)  # runs out of time on the hung page
-	began = time.monotonic()
-	stopped = await asyncio.wait_for(_call(retinat_short, 'retinat_record', {'action': 'stop'}), 60)
-	took = time.monotonic() - began
-	assert took < retinat_short.call_budget_s + 3, f'the stop took {took:.0f}s'
-	saved = re.search(r'Saved the recording: (\S+\.mp4)', _text(stopped))
-	assert not stopped.is_error and saved, _text(stopped)
-	assert Path(saved[1]).stat().st_size > 0
+	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
+	monkeypatch.setenv('BROWSER_USE_RECORD_VIDEO_DIR', str(tmp_path / 'videos'))
+	server = RetinatServer(call_budget_s=20)
+	server.config.setdefault('browser_profile', {}).update({'headless': True, 'user_data_dir': str(tmp_path / 'profile')})
+	try:
+		site.expect_request('/plain-hang').respond_with_data(
+			'<!doctype html><title>Hang</title><p>soon</p>', content_type='text/html'
+		)
+		await _open_started(server, site.url_for('/plain-hang'))
+		started = await _call(server, 'retinat_record', {'action': 'start', 'framerate': 4})
+		assert not started.is_error, _text(started)
+		await asyncio.sleep(1.0)
+		assert server.browser_session is not None
+		cdp = await server.browser_session.get_or_create_cdp_session(focus=False)
+		await cdp.cdp_client.send.Runtime.evaluate(
+			params={'expression': 'setTimeout(() => { for (;;) {} }, 50); 1'}, session_id=cdp.session_id
+		)
+		await asyncio.sleep(3.0)  # hung for a while: the recorder's picture of it waits on the page
+		began = time.monotonic()
+		stopped = await asyncio.wait_for(_call(server, 'retinat_record', {'action': 'stop'}), 60)
+		took = time.monotonic() - began
+		saved = re.search(r'Saved the recording: (\S+\.mp4)', _text(stopped))
+		assert not stopped.is_error and saved, f'{_text(stopped)} after {took:.0f}s'
+		assert took < server.call_budget_s, f'the stop took {took:.0f}s'
+		assert b'moov' in Path(saved[1]).read_bytes(), 'the MP4 was not finished (no index)'
+	finally:
+		await server._close_all_sessions()
