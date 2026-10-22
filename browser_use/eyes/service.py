@@ -318,8 +318,12 @@ class Eyes:
 			if self.gate.state != was:
 				self.gate_log.write('transition', f.wall, vid=vid, frm=was, to=self.gate.state)
 
-	def _gate_wake(self, start: float) -> str | None:
-		"""Why a watch with until='gate' should give the model what it gathered now, or None."""
+	def _gate_wake(self, start: float, frames: list[FrameSample], hops: list[AudioHop], start_vid: int) -> str | None:
+		"""Why a watch with until='gate' should give the model what it gathered now, or None (asked from GATE_MIN_S on).
+		A salient event (a cut, a new item, a change in sound) wakes it too: the model hears of it within a turn."""
+		salient = self._salient(frames, hops, start_vid)
+		if salient:
+			return salient
 		ended = [e for e in self.gate.episodes if e.end is not None and e.end >= start]
 		if ended:
 			return f'event over (gate: {len(ended)} closed)'
@@ -395,7 +399,7 @@ class Eyes:
 			elif until == 'bored':
 				why = self._bored(frames, hops, start_vid)
 			elif until == 'gate':
-				why = self._gate_wake(start)
+				why = self._gate_wake(start, frames, hops, start_vid)
 			if why:
 				reason = why
 				break

@@ -196,8 +196,8 @@ def _browser_tools() -> list['types.Tool']:
 						'type': 'string',
 						'enum': ['bored', 'event', 'time', 'item', 'gate'],
 						'default': 'bored',
-						'description': 'gate: woken by the event gate (an event over, or one going on 15 s), not before 8 s; '
-						'nothing played meanwhile is dropped.',
+						'description': 'gate: woken by a cut, a new item or a change in sound, or by the event gate (an event '
+						'over, or one going on 15 s), never before 8 s; nothing played meanwhile is dropped.',
 					},
 					'detail': _DETAIL,
 					'hold': {'type': 'boolean', 'default': True, 'description': 'Pause when done so nothing plays unseen.'},
