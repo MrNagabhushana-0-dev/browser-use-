@@ -357,6 +357,12 @@ class Eyes:
 				break
 		if hold:
 			await self._hold()
+		# Where this percept's samples end, per item: the next watch picks up from there. Picking up from when this
+		# percept was done left out what played while it was built (0.2-0.5 s a call, measured: real cuts fell there)
+		taken_frames, taken_hops, _ = self._since(since)
+		covered: dict[int, float] = {}
+		for sample in [*taken_frames, *taken_hops]:
+			covered[sample.vid] = max(covered.get(sample.vid, 0.0), sample.wall)
 		percept = await self.perceive(
 			since=since,
 			detail=detail,
@@ -372,7 +378,7 @@ class Eyes:
 		percept.started_at, percept.ended_at = start, time.monotonic()
 		self._last_percept_end = percept.ended_at
 		for item in percept.items:
-			self._reported[item.vid] = percept.ended_at
+			self._reported[item.vid] = covered.get(item.vid, percept.ended_at)
 		percept.text = percept.text.replace('{REASON}', reason)
 		return percept
 
