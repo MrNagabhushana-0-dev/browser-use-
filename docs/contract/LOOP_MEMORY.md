@@ -84,3 +84,15 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
 - 2026-10-22 E1 DECISION: KEEP (declared rule: B median strictly down 7.9 -> 1.0 s; C2 not worse 26.5% -> 15.7%, cuts
   26/31 -> 31/31). Trade-off recorded: A_unique 5,509 -> 8,947/min (+62%), more calls (11 -> 19) each with a fixed
   per-turn cost. Rule (INFERRED, from E0/E1): an event gate trades tokens for latency through the call count.
+- 2026-10-22 PROTOCOL v2 (new baseline series; E0/E1 numbers do not compare across it). Why, MEASURED: Wikimedia now
+  answers this network 429 (API and upload.wikimedia.org, curl at 15:40; likely also what voided E1 attempt 1), YouTube
+  refuses it (google.com/sorry), and the Commons player rendered captions into the pixels. v2 stimulus: a local page
+  (http://127.0.0.1:8765/watch.html, a play button over a <video>) serving the first 190 s of
+  bbb_sunflower_1080p_30fps_normal.mp4 (CC BY 3.0, Blender Foundation; the exact file tests/ci/assets/big_buck_bunny/
+  edits.json was built from, so cut times are known), transcoded VP9 854x480 + Opus (scratchpad stim/bbb480.webm). No
+  captions; its sound is readable (same origin), so percepts carry a sound strip. Watcher: E1's configuration (kept),
+  one tab, narration written as text after each result. Probe: the film plays (covering 0.0-3.0 s).
+- 2026-10-22 B1 declared: protocol v2 on the product before E2 (eyes/service.py at 3bf6cc8's parent of d3a6df1, loaded
+  into a Retinat started for it, MEASURED by placing that file before the start). Then E2 (d3a6df1, gap fix) is ONE
+  change against B1. E2 keep rule: gaps between windows strictly down AND C2 (cut coverage vs edit list) not worse
+  AND B median not worse.
