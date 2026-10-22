@@ -61,7 +61,16 @@ def measure(path: str, tool: str) -> dict:
 	added = sum(u.get('input_tokens', 0) + u.get('cache_creation_input_tokens', 0) + u.get('output_tokens', 0) for u in window)
 	processed = added + sum(u.get('cache_read_input_tokens', 0) for u in window)
 	minutes = (end - start) / 60
-	latencies, delays, video = [], [], 0.0
+	# A_unique (correction 2): every token once. A turn's output comes back as the next turn's cache_creation, so only the
+	# last turn's output is added; the window runs from the first watch call to the watcher's last turn (where the
+	# narration may be written), so all narration is counted
+	later = [(t, u) for t, u in turns if t > start]
+	last_t, last_u = later[-1]
+	unique = sum(u.get('input_tokens', 0) + u.get('cache_creation_input_tokens', 0) for _, u in later) + last_u.get(
+		'output_tokens', 0
+	)
+	unique_minutes = (last_t - start) / 60
+	latencies, delays, video, spans = [], [], 0.0, []
 	for issued, received, text in results:
 		delays.append(received - issued)
 		covering = re.search(rf'covering {_T}-{_T}', text)
@@ -69,14 +78,25 @@ def measure(path: str, tool: str) -> dict:
 			continue
 		v0, v1 = _seconds(covering[1]), _seconds(covering[2])
 		video += v1 - v0
+		spans.append((v0, v1))
 		# each timeline row after the first starts an event (a cut, a fade, motion starting or stopping)
 		rows = [_seconds(m[1]) for m in re.finditer(rf'^\s+{_T}-{_T}\s', text, re.M)]
 		# the model sees nothing of a window before it closes at v1: an event at v waited at least v1 - v (the time
 		# the result took to build after the window closed comes on top, unseen here)
 		for v in rows[1:]:
 			latencies.append(v1 - v)
+	# film time no window covered between consecutive watches: what played there reached no percept
+	gaps = [round(b0 - a1, 2) for (_, a1), (b0, _) in zip(spans, spans[1:]) if b0 > a1]
+
+	def p90(xs: list[float]) -> float:  # linear interpolation (correction 2: the index rule read low)
+		xs = sorted(xs)
+		k = 0.9 * (len(xs) - 1)
+		return xs[int(k)] + (xs[min(int(k) + 1, len(xs) - 1)] - xs[int(k)]) * (k - int(k))
+
 	return {
 		'calls': len(results),
+		'A_unique_per_min': round(unique / unique_minutes),
+		'gaps_between_windows_s': {'n': len(gaps), 'total': round(sum(gaps), 2), 'max': max(gaps) if gaps else 0},
 		'window_s': round(end - start, 1),
 		'video_s_covered': round(video, 1),
 		'A_added_per_min': round(added / minutes),
@@ -87,7 +107,7 @@ def measure(path: str, tool: str) -> dict:
 			{
 				'n': len(latencies),
 				'median': round(statistics.median(latencies), 2),
-				'p90': round(sorted(latencies)[int(0.9 * (len(latencies) - 1))], 2),
+				'p90': round(p90(latencies), 2),
 			}
 			if latencies
 			else None

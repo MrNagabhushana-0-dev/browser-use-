@@ -56,3 +56,19 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   (n=25; E0 7.9 / 14.1, n=33). Recording retinat-20261022-151008.mp4. Keep decision waits for C2 (verifiers running).
   Per call (the product's own estimate in each result, INFERRED): percept ~565 tokens = sheet image ~376 (4 keyframes,
   1292x200 every time) + text ~190; per turn ~1,313 new tokens and ~360 written: the product payload is under half.
+- 2026-10-22 E0 VERIFIED by a fresh verifier (it recomputed from the transcript with its own code; it did not run the
+  watch): A_added, A_processed, B reproduce exactly. C1 = 50/52 = 0.96 (both false lines are motion read into stills).
+  C2 strict (a line within +-3 s that describes the event) = 18/68 missed = 26.5% (cuts 5/31, actions inside shots
+  13/37); lenient (any line within +-3 s) = 2/68. Its refutations, all taken:
+  (1) A_added counts each turn's output twice (it returns as the next turn's cache_creation) and leaves out the last
+  turn, where the narration was written; (2) the p90 index rule read low (14.1; linear 14.66); (3) 10 gaps of
+  0.2-0.4 s between windows, 2.3 s of film, hold 2 real cuts (79.97, 131.3) that reached no percept: a product bug;
+  (4) the watcher wrote all narration once at the end, not after each result, so B is percept arrival, not narration;
+  (5) the Commons player showed its captions ("( bird chirping )") in the pixels, which the protocol forbids;
+  (6) narration lines = the keyframes on the sheets, so stretches with no keyframe (e.g. 83-94 s) are missed by
+  construction.
+- 2026-10-22 CORRECTION 2 (measurement, applied to every run alike): A_unique = input + cache_creation over the turns
+  from the first watch call to the watcher's last turn, plus that last turn's output, per minute of that span (every
+  token once, all narration included); p90 by linear interpolation; gaps between consecutive windows reported. MEASURED:
+  E0 A_unique 5,509/min, B p90 14.66 s, gaps 10 totalling 2.3 s; E1 A_unique 8,947/min, B p90 8.54 s, gaps 17
+  totalling 4.4 s.
