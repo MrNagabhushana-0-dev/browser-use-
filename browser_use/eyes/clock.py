@@ -107,23 +107,47 @@ _RAF_ON_PAGE_CLOCK = r"""(() => {
 # screenshot starts them again (measured), so no step could be played. A 1 px canvas, 1% opaque, drawn every frame from
 # a world of our own, keeps them coming for as long as the tab is on our clock: in the top frame, on each new page from
 # its first moment (a capture made before then waited for good, and the tab drew nothing after it).
+# It is no canvas the page can find (in a closed shadow root, moved after <body> once there is one: a page's
+# querySelector('canvas') found it when it sat between <head> and <body>), and it puts itself back when the page renders
+# itself anew over everything in <html> (which takes it out while this world lives on). `window.__browserUseBeat()` stops it;
+# `window.__browserUseBeat.attach()` puts it back if it is out, and says whether it is in.
 _BEAT = r"""(() => {
-	if (window.__browserUseBeat || window !== window.top) return;
+	if (window !== window.top) return;
+	if (window.__browserUseBeat) { window.__browserUseBeat.attach(); return; }
+	const host = document.createElement('browser-use-beat');
+	host.style.cssText = 'display:block;position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:2147483647';
 	const canvas = document.createElement('canvas');
 	canvas.width = canvas.height = 1;
-	canvas.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:2147483647';
+	canvas.style.cssText = 'display:block;width:1px;height:1px';
+	host.attachShadow({mode: 'closed'}).append(canvas);
 	const g = canvas.getContext('2d');
-	let on = true, n = 0;
+	let on = true, n = 0, html = null;
 	const beat = () => {
 		if (!on) return;
 		g.fillStyle = n++ % 2 ? '#000' : '#fff';
 		g.fillRect(0, 0, 1, 1);
 		requestAnimationFrame(beat);
 	};
-	const start = () => { document.documentElement.append(canvas); requestAnimationFrame(beat); };
-	if (document.documentElement) start();
-	else new MutationObserver((_, seen) => { if (document.documentElement) { seen.disconnect(); start(); } }).observe(document, {childList: true});
-	window.__browserUseBeat = () => { on = false; canvas.remove(); delete window.__browserUseBeat; };
+	// in <html> as soon as there is one, moved after <body> when it comes, back in whenever it is taken out
+	const attach = () => {
+		const root = document.documentElement, body = document.body;
+		if (!on || !root) return false;
+		if (!host.isConnected || (body && body.compareDocumentPosition(host) & Node.DOCUMENT_POSITION_PRECEDING)) root.append(host);
+		return host.isConnected;
+	};
+	const watching = new MutationObserver(() => { attach(); watchRoot(); });
+	const watchRoot = () => {
+		if (document.documentElement && document.documentElement !== html) {
+			html = document.documentElement;
+			watching.observe(html, {childList: true});
+		}
+	};
+	watching.observe(document, {childList: true});
+	watchRoot();
+	attach();
+	requestAnimationFrame(beat);
+	window.__browserUseBeat = () => { on = false; watching.disconnect(); host.remove(); delete window.__browserUseBeat; };
+	window.__browserUseBeat.attach = attach;
 })()"""
 
 
@@ -389,13 +413,18 @@ class PageClock:
 		)
 
 	async def _check_beat(self) -> None:
-		"""Make our world (and its beat) again if the page shown now has none: it was replaced since."""
+		"""Make our world (and its beat) again if the page shown now has none: it was replaced since. A beat the page took
+		out (by writing itself anew) is put back."""
 		try:
 			result = await asyncio.wait_for(
 				self._send(
 					'Runtime',
 					'evaluate',
-					{'expression': '!!window.__browserUseBeat', 'contextId': await self._world_id(), 'returnByValue': True},
+					{
+						'expression': '!!window.__browserUseBeat && window.__browserUseBeat.attach()',
+						'contextId': await self._world_id(),
+						'returnByValue': True,
+					},
 				),
 				_FRAME_WAIT_S,
 			)

@@ -105,6 +105,20 @@ def games():
 	main.expect_request('/still').respond_with_data(
 		'<!doctype html><title>Still</title><p>Nothing here moves.</p>', content_type='text/html'
 	)
+	# a page that finds its canvas the way many engines do, the first in the document, with a script in <head> first
+	main.expect_request('/engine').respond_with_data(
+		'<!doctype html><title>Engine</title><head><script>window.early = 1</script></head><body>'
+		'<canvas id="game" width="800" height="600"></canvas><script>window.found = document.querySelector("canvas").id;'
+		' window.canvases = document.getElementsByTagName("canvas").length</script></body>',
+		content_type='text/html',
+	)
+	# a page that renders itself anew once loaded, over everything in <html>, as some client-rendered shells do
+	main.expect_request('/rewrite').respond_with_data(
+		'<!doctype html><title>Rewrite</title><script>addEventListener("load", () => setTimeout(() => {'
+		' document.documentElement.innerHTML = "<head><title>Rewritten</title></head><body><p>written anew</p></body>";'
+		' window.rewritten = true }, 1000))</script><p>first</p>',
+		content_type='text/html',
+	)
 	other.expect_request('/runner').respond_with_data(GAME, content_type='text/html')
 	# the game in a frame from another origin of the same site, as poki.com hosts its games on *.gdn.poki.com
 	framed = f'<!doctype html><title>Portal</title><body><iframe id="g" src="{other.url_for("/runner")}" width="420" height="220"></iframe></body>'
@@ -303,12 +317,8 @@ async def test_a_new_page_in_a_tab_on_our_clock_is_drawn_from_its_first_moment(s
 	try:
 		cdp = await session.get_or_create_cdp_session(focus=False)
 		await session.navigate_to(games.url_for('/still'))
+		assert await _in_our_world(session, 'typeof window.__browserUseBeat') == 'function', 'the new page has no beat'
 		await pc.pause()  # the next game, played turn by turn: its clock stands still and it draws nothing itself
-		beat = await cdp.cdp_client.send.Runtime.evaluate(
-			params={'expression': 'typeof window.__browserUseBeat', 'contextId': await pc._world_id(), 'returnByValue': True},
-			session_id=cdp.session_id,
-		)
-		assert beat['result'].get('value') == 'function', f'the new page was paused without a beat: {beat}'
 		stepped = await asyncio.wait_for(pc.step(100), 10)
 		assert stepped.game_ms == pytest.approx(100, abs=1) and stepped.draw_s < 2, stepped
 		shot = await asyncio.wait_for(capture_screenshot(cdp.cdp_client, {'format': 'jpeg'}, cdp.session_id), 10)
@@ -337,6 +347,69 @@ async def test_a_capture_that_gets_no_frame_gives_up_and_does_not_hold_up_the_ne
 		with pytest.raises(CaptureTimeout):
 			await capture_screenshot(cdp.cdp_client, {'format': 'jpeg'}, cdp.session_id, timeout=2)
 		assert time.monotonic() - began < 4
+
+
+async def _in_our_world(session: BrowserSession, expression: str):
+	"""`expression` in the clock's own world of the top frame, made here rather than by PageClock."""
+	cdp = await session.get_or_create_cdp_session(focus=False)
+	tree = await cdp.cdp_client.send.Page.getFrameTree(session_id=cdp.session_id)
+	world = await cdp.cdp_client.send.Page.createIsolatedWorld(
+		params={'frameId': tree['frameTree']['frame']['id'], 'worldName': 'browser_use_clock'}, session_id=cdp.session_id
+	)
+	r = await cdp.cdp_client.send.Runtime.evaluate(
+		params={'expression': expression, 'contextId': world['executionContextId'], 'returnByValue': True},
+		session_id=cdp.session_id,
+	)
+	return r['result'].get('value')
+
+
+async def _on_our_clock(session: BrowserSession, games) -> PageClock:
+	"""A tab once played turn by turn and resumed: on our clock for good."""
+	await _opened(session, games.url_for('/runner'))
+	pc = PageClock(session)
+	await pc.pause()
+	await pc.step(50)
+	await pc.resume()
+	return pc
+
+
+async def test_the_beat_is_no_canvas_the_page_can_find(session, games):
+	"""Found in review: on each new page from its first moment, the beat's canvas went into <html> between <head> and
+	<body> whenever a script in <head> ran first, so the page's own `document.querySelector('canvas')` found it: a 1 px
+	canvas that already has a 2d context, where an engine asks for WebGL. The beat is now drawn in a closed shadow root,
+	after <body>."""
+	pc = await _on_our_clock(session, games)
+	try:
+		await session.navigate_to(games.url_for('/engine'))
+		assert await _value(session, 'window.found') == 'game', 'the page found the beat as its canvas'
+		assert await _value(session, 'window.canvases') == 1
+		order = await _value(session, '[...document.documentElement.children].map(e => e.tagName.toLowerCase()).join()')
+		assert order.index('body') < order.index('browser-use-beat'), order
+		assert await _in_our_world(session, 'typeof window.__browserUseBeat') == 'function', 'the page has no beat'
+	finally:
+		await pc.close()
+
+
+async def test_a_page_that_writes_itself_anew_keeps_its_beat(session, games):
+	"""Found in review: a page that renders itself anew over everything in <html> takes the beat out, while the beat's
+	world, and the sign that it has one, live on; pausing it then left a page that draws nothing."""
+	pc = await _on_our_clock(session, games)
+	try:
+		await session.navigate_to(games.url_for('/rewrite'))
+		await pc._check_beat()  # our world is the new page's, and its beat is in, before the page renders itself anew
+		assert not await _value(session, 'window.rewritten === true')
+		for _ in range(30):
+			if await _value(session, 'window.rewritten === true'):
+				break
+			await asyncio.sleep(0.1)
+		assert await _value(session, 'document.title') == 'Rewritten'
+		await pc._stop_pump()
+		await pc.pause()
+		assert await _value(session, '!!document.querySelector("browser-use-beat")?.isConnected'), 'no beat on the page'
+		stepped = await asyncio.wait_for(pc.step(100), 10)
+		assert stepped.draw_s < 2, f'frames did not come: {stepped}'
+	finally:
+		await pc.close()
 
 
 async def _value(session: BrowserSession, expression: str):
