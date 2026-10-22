@@ -190,3 +190,31 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   all 88 lines in the final answer (the 5th run in a row to batch it, despite the prompt). Verifier (labeller, then
   scorer) pending. Measured-commit pinning from E3 on: Retinat runs from a git worktree of the measured commit
   (RETINAT_CODE_DIR, bin/mcp-serve.sh), so files other agents edit in the main tree cannot leak into a run.
+- 2026-10-22 E3 MEASURED (v2b, commit 13039f1 pinned; transcript subagents/agent-a2c886e76af530c78.jsonl; recording
+  retinat-20261022-192510.mp4; narration log ~/.config/browseruse/narration/20261022-192444.jsonl): 27 calls (one
+  interrupted by an API safety classifier mid-call), gaps 0, cuts 34/34, A_unique 10,996/min (B2 9,370), B lower bound
+  3.75/6.46 s (n=38). Narration: 25 of 25 results that had a next call were narrated before it (server log and
+  transcript agree); the last was not: retinat_narrate is missing from this client's tool list (cached at session
+  start), a harness gap, fixed in E5's commit by taking the narration with retinat_record stop. Narration came a
+  median 3.69 s after its result (max 5.43). NEW MEASURE, event -> narration (B_narr, measure_narration.py): median
+  8.44 s, p90 12.17 s (n=34). Verifier pending; keep decision waits on C1/C2.
+- 2026-10-22 E4 MEASURED (v2b, commit 7b9bc1e pinned; transcript subagents/agent-a3c40ff79ae867c31.jsonl; recording
+  retinat-20261022-193123.mp4; log narration/20261022-193107.jsonl): 25 calls, gaps 0, evidence erased 0 (no percept
+  said so), cuts 34/34, A_unique 10,691/min, B lower bound 3.9/6.92 s (n=39), narration 24/24 before the next call
+  (last again unnarrated, same harness gap), B_narr 9.32/13.74 s. Verifier pending.
+- 2026-10-22 E5 DECLARED BEFORE MEASURING (commit 0fa303c): wake policy = retinat_watch until=gate: the call returns when
+  the always-on 4-state gate (tau_high 3.0, tau_low 1.5 on the EMA of sight.deltas, attack 0.6, decay 0.15, n_on 3,
+  n_off 10 frames) closes an episode, not before 8 s, or once an episode has gone on 15 s into the call; the 30 s cap
+  is the transport's (a client stops a call at 60 s), reported as such. The sheet keeps B2's evidence density
+  (max(4, round(0.465 x seconds committed)) keyframes): one mechanism, gate-woken commits at constant density, so the
+  experiment does not trade evidence for tokens. Comparison base: E4. Keep rule as declared (A strictly down AND in
+  2,000-8,600 AND C2 not worse AND gaps 0).
+- 2026-10-22 FLAPPING PAIR, OFFLINE (gate_replay.py on commit 0fa303c; same signal through both gates; MEASURED):
+  film (bbb480.webm 0-190 s, 1,901 frames, 34 edit cuts): 4-state 21 flips (398/h), 11 episodes, 8 cuts begun while
+  closed, clipped 0.37 s max (2.62 s total) without a reservoir; single threshold 71 flips (1,346/h), 36 episodes, 11
+  clipped, 0.07 s max (0.49 s total). With the reservoir the commit starts at the cursor, before any onset: 0 clipped.
+  Borderline page (120 s; caret 1 Hz, creeping sparkline, ticking clock, an animated card swept in amplitude; median /
+  p90 score): pulse 0 (0.03/0.05): 0 flips/h both. pulse 20 (0.74/1.85): 4-state 0, single 360/h. pulse 30
+  (1.08/2.71): 4-state 30/h, single 6,606/h. pulse 40 (1.38/3.46): 4-state 30/h, single 7,596/h. pulse 60 (1.79/4.88):
+  4-state 30/h, single 2,612/h. Resolution: one flip in 120 s is 30/h, so the 2.0/h target needs >= 1 h of signal;
+  at pulse >= 30 the 4-state gate opens once and stays open (no flapping, but no close either).
