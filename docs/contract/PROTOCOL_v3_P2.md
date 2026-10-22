@@ -54,33 +54,77 @@ and the result block. v2's verifiers labelled and scored in a single agent, so v
 ## 3. Setup
 
 - The owner's steps are `docs/contract/P2_MORNING_CHECKLIST.md`: install, load unpacked, self-test, open the video
-  paused at the start with captions off, share that tab, start `claude remote-control`. This protocol adds nothing he
+  paused at the start with captions off, share that tab, start `claude --remote-control`. This protocol adds nothing he
   has to do.
 - Only the designated tab is shared, and the run acts only in it. No other tab, window, bookmark, history entry,
   cookie, setting or extension is read or touched.
 - Every action is visible and reversible. Chrome's debugging bar and the extension's pill show while the AI acts, and
   the checklist's Undo section stops any of it. In the tab, the run only plays the film and pauses it at the end. It
   makes no navigation and no clicks outside the player.
-- The measured commit is pinned: Retinat runs from a git worktree of it (`RETINAT_CODE_DIR`, `bin/mcp-serve.sh`), as
-  from E3 on. Retinat is started fresh for the run (the rule from E1 attempt 1).
+- The measured commit is the checkout's HEAD on the laptop (`~/retinat`, the branch as the setup cloned or pulled it),
+  logged in R0; nobody edits that checkout during the run, so no worktree pin is needed there. Retinat is not
+  restarted between the two arms: a restart makes the client reconnect, and a cold start can miss its 30 s connect
+  timeout (seen in this container at 23:42 UTC on 2026-10-22). Both arms run on the same Retinat process.
 
-## 4. Run procedure
+## 4. Run procedure (the RUNBOOK the session on the owner's laptop executes)
 
-1. **Preflight (logged):** self-test PASS, pinned commit, tab URL, captions off, film paused at 0:00, any pre-roll
-   played out.
-2. `retinat_record action=start` (framerate 8, as in v2/v2b). The recording runs through the bridge.
-3. **Watcher:** one fresh sub-agent, given only Retinat tools and the WATCHER PROMPT below. It starts playback, watches
-   to film 3:10, and pauses the film.
-4. `retinat_record action=stop`, passing the last narration as from E5's commit. Then copy the recording path, the
-   watcher's transcript JSONL and the narration log (`~/.config/browseruse/narration/*.jsonl`) into the run's
-   evidence directory.
-5. Leave the tab as it is. The owner unshares it when he chooses.
+The owner pastes one line into the Claude Code session he started in `~/retinat` (checklist step 7): "Run the RUNBOOK
+in docs/contract/PROTOCOL_v3_P2.md, then report." That session is the operator; it never asks him for anything.
 
-### WATCHER PROMPT
+R0. **Preflight (logged):** `retinat_now` names the shared YouTube tab (if no tab is shared, stop and say so);
+    `git rev-parse --short HEAD` (the measured commit; pin it as section 3 says); `curl -s 127.0.0.1:9333/bridge/status`
+    (extension version, browser); the tab's channel, title and length as seen; captions off; any pre-roll played out.
+R1. **Two arms, in this order, each a fresh watcher sub-agent** (Agent tool, model sonnet, background; the same
+    Retinat process for both), each starting the film from 0:00:
+    - **v3-B**, the P2 baseline: Milestone-1's watch (until=event, narration written by the watcher). WATCHER PROMPT B.
+    - **v3-G**, the M2 product: the last KEPT v2b configuration (LOOP_MEMORY's latest KEEP among E3-E6), with live
+      narration. WATCHER PROMPT G (gate) if E5 or E6 is kept, else WATCHER PROMPT G-event.
+R2. **Measure** each arm (section 5). The token counter is the watcher's own transcript, the newest
+    `~/.claude/projects/*/*/subagents/agent-*.jsonl` after the run; the narration log is the newest
+    `~/.config/browseruse/narration/*.jsonl`; the gate log is the newest `~/.config/browseruse/eyes/gate-*.jsonl`.
+R3. **Ground truth before scoring** (section 6) from v3-B's recording, once for both arms (same video, same seconds).
+R4. **Score** each arm with its own SCORER (section 8). Burn v3-G's narration into its recording:
+    `uv run --no-sync python scripts/contract/narrated_recording.py <recording> <narration log>`. Flapping pair:
+    `uv run --no-sync python scripts/contract/gate_replay.py log <gate log>`.
+R5. **Record:** one result block per arm (section 9) appended to LOOP_MEMORY.md; commit and push to
+    claude/laughing-hawking-2cj3a6 (no PR). Leave the tab as it is; the owner unshares it when he chooses.
 
-The exact prompt text is pasted from the run's LOOP_MEMORY entry. The baseline uses the watcher prompt of the last kept
-v2b experiment verbatim, changing only the page and tab it names. Any other difference counts as a change and is
-declared.
+### WATCHER PROMPT B (v3-B: Milestone-1's watch, on the shared YouTube tab)
+
+```text
+You are the watcher in a measured experiment. Use ONLY these Retinat MCP tools; load them first with ToolSearch query
+"select:mcp__retinat__retinat_now,mcp__retinat__retinat_look,mcp__retinat__retinat_click,mcp__retinat__retinat_key,mcp__retinat__retinat_watch,mcp__retinat__retinat_record".
+Do not use any other tool. The shared tab is a YouTube video; act only inside its player.
+1. retinat_look. If captions show, retinat_key "c" once and look again. If an ad plays, let it finish: call
+   retinat_watch {"seconds": 10, "until": "time"} until the film itself shows (never skip or block it).
+2. retinat_key "0" (to 0:00), then retinat_record {"action": "start", "framerate": 8}, then retinat_key "k" (play).
+3. Loop: retinat_watch {"seconds": 12, "until": "event", "hold": false, "detail": "glance"}. After EACH result, BEFORE
+   calling the next tool, write in your visible reply (as text, not only in your thinking) one line per visual event
+   you see in that result's pictures and timeline, as "[film m:ss] what is seen" (film time from the result). Narrate
+   only what the pictures show: never sound, page text, captions or transcripts. Then call the next watch at once.
+   Stop looping once a result's "covering ...-Y" has Y of 3:00 or more.
+4. retinat_key "k" (pause), retinat_record {"action": "stop"}.
+Final answer (your last message), exactly this JSON and nothing else:
+{"recording": "<path>", "watch_calls": <n>, "narration": [{"film_s": <seconds>, "text": "<what was seen>"}, ...]}
+```
+
+### WATCHER PROMPT G (v3-G: live narration, event gate; E5/E6's watch)
+
+```text
+Same as WATCHER PROMPT B, with step 3 and 4 replaced by:
+3. Live narration loop. First call: retinat_watch {"seconds": 30, "until": "gate", "hold": false, "detail": "glance",
+   "narrate": true}. Every later call: retinat_watch {"seconds": 30, "until": "gate", "hold": false, "detail":
+   "glance", "narration": "<lines>"} where <lines> narrates the PREVIOUS result: one line per visual event in that
+   result's pictures and timeline, as "[film m:ss] what is seen", lines separated by newlines. Pictures only: never
+   sound, page text, captions or transcripts. Write the narration straight into the next call; do not write it
+   anywhere else. Stop looping once a result's "covering ...-Y" has Y of 3:00 or more.
+4. retinat_key "k" (pause), then retinat_record {"action": "stop", "narration": "<lines narrating that last result>"}.
+Final answer (your last message), exactly this JSON and nothing else: {"recording": "<path>", "watch_calls": <n>}
+```
+
+### WATCHER PROMPT G-event (v3-G if neither E5 nor E6 is kept: E4's watch)
+
+Same as WATCHER PROMPT G with `"seconds": 12, "until": "event"` in both watch calls.
 
 ## 5. Measurement (outputs kept verbatim)
 

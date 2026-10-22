@@ -36,12 +36,23 @@ You need: Google Chrome, Claude Code (logged in), and a terminal. Nothing below 
    the bottom of the tab says "An AI is working in this tab". Only shared tabs are visible to the AI.
 6. **Start Claude** in a new terminal and leave it running:
    ```bash
-   cd ~/retinat && claude remote-control
+   cd ~/retinat && claude --remote-control --permission-mode auto
    ```
+   `--remote-control` lets you follow (and type into) the same session from the Claude app on your phone;
+   `--permission-mode auto` lets the run go on without asking you to approve each command while you sleep. Leave
+   that flag out if you would rather approve each step yourself.
    It starts Retinat in bridge mode (it reads `.retinat.env`); the extension connects within about 10 s. The first
    time, Claude may ask whether you trust this folder and whether to use the MCP servers in `.mcp.json`: say yes
    (at least `retinat`).
-   Then go back to sleep or keep watching; the AI works only in the shared YouTube tab.
+   The AI works only in the shared YouTube tab.
+7. **Start the run.** In that Claude session (the terminal, or the app), paste this one line and press Enter:
+   ```text
+   Run the RUNBOOK in docs/contract/PROTOCOL_v3_P2.md, then report.
+   ```
+   It checks it can see your shared YouTube tab, plays the film from 0:00 twice (about 4 minutes each, once the
+   Milestone-1 way and once with the event gate), records both, measures them, has two fresh sub-agents label and
+   score them, and pushes the results to the branch. About 30-40 minutes; you can sleep. It acts only in the shared
+   tab; Cancel on the debugging bar stops it at once.
 
 ## What each extension permission is for
 
@@ -83,7 +94,7 @@ prompt; Chrome lists the permissions above under the extension's **Details**.
 - **Pause:** Alt+Shift+Z (Option+Shift+Z on a Mac) takes the wheel back; the AI can only look. Press it again, or
   "Hand back" on the pill, to let it continue. Using the shared tab yourself also pauses it for a few seconds.
 - **Stop sharing one tab:** extension button -> **Stop sharing this tab** (or Alt+Shift+A).
-- **Stop Claude:** Ctrl+C in the terminal running `claude remote-control`.
+- **Stop Claude:** Ctrl+C in the terminal running Claude.
 - **Remove the extension:** `chrome://extensions` -> Retinat bridge -> **Remove**.
 - **Delete everything:** macOS/Linux `rm -rf ~/retinat ~/retinat-extension`; Windows
   `Remove-Item -Recurse -Force ~\retinat, ~\retinat-extension`. uv stays installed (`~/.local/bin/uv`); delete it
