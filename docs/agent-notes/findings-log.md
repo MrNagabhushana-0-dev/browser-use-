@@ -3967,3 +3967,48 @@ test-first; draw the keep-alive where the full-screen element is; play past the 
 
 **Next, in order:** a frame-skip option (fewer drawn frames per game second, as the ALE's frame skip) for pages this
 slow to draw; play Subway Surfers past the tutorial; then as in Round 62.
+
+## Round 65 (owner's ask, 2026-10-21 21:40 to 2026-10-22 07:45): a cheaper model plays hard Poki games, then with the eyes
+
+The owner asked for a cheaper model to play five of the hardest Poki games for an AI through these tools, on video,
+with measured accuracy, using the eyes rather than screenshots. Sonnet agents played one game at a time, each with a
+playbook researched first (engine, controls, obstacles, turn length). Session limits stopped the runs three times
+(22:45, ~04:30); two container reboots kept the disk.
+
+- **Built (`cccaf03`):** `frame:"game"` returns just the game's region, drawn larger; `fps` lets a slow page draw fewer
+  frames per game second (frame skip).
+- **Played, one still frame per turn:** Moto X3M, level 1 finished, 3 stars, 11.44 s game time, 8 of 9 obstacles
+  cleared; World's Hardest Game, level 1 cleared, 1 of 4 dot crossings. Both logs checked against the recordings.
+  Video: `docs/hands-on/2026-10-22/`. The owner then said these were not what was asked: the model saw screenshots.
+- **Found and fixed (test first):**
+  - A game opened in a tab after another was played and resumed drew no frames, and every look hung until the client
+    gave up (60 s): a capture held the lock every later capture waited on. The beat now comes with each new page
+    from its first moment, `pause()` checks it instead of reusing the old page's world, a capture gives up after 20 s,
+    and no capture is sent on a tab over one Chrome is still taking. Not proven: that a page without its beat is what
+    stopped that tab (a screencast starting, and killing the GPU process, also brought frames back).
+  - `retinat_wait` refused to wait without reflexes; it is now a plain wait (both players reached for it).
+  - The first player thought up to 16 minutes a turn; later players run at medium effort with a "keep turns short" rule.
+  - browser-use's MCP server missed Claude Code's 30 s connect after a boot: it now answers from 771 modules (1.1 s
+    warm, against 2,136 and 3.9 s) through the front Retinat uses, now shared (`serving.Front`). Seen working: both
+    servers up 15-23 s after two reboots.
+- **Adversarial review** of those commits (13 agents): 6 confirmed, all fixed with a test that failed first (the front
+  needed numpy; the beat was a canvas a page could find, and a page rendering over `<html>` took it out; a failed
+  load was kept for good; captures were sent over abandoned ones; a weak test); 4 refuted.
+- **Rebuilt** the film edit list `edits.json` (never committed: `*.json` was ignored) from the CC BY film: scene scores,
+  two independent passes by eye over 143 candidates (agreed on all), 125 cuts as before, times in presentation time
+  (the test's pinned cuts fall on them exactly). Precision 1.000, recall 0.938.
+- **The eyes in step mode (`21dd411`, `9e94e91`):** each step looks at every frame it draws (up to 24) and says what
+  moved, which way it is heading as the step ends and how fast in game time, or that the view scrolled, and draws
+  trails and arrows on the picture. Measured on test canvases: 120 px/s right (true 120), 60 down (60), scroll 150
+  (150), a dot that turned read left at 120 (true 150). On World's Hardest Game it saw the four level-1 dots in their
+  rows, alternating directions, at a steady ~285 px/s. The first version reported 7 phantom movers there (too few
+  looks, averaged headings, blob centres lagging); fixed before the games were played again.
+- **Full `tests/ci` on `ba1978e`:** 1,787 passed, 3 failed, 1 error. Two fail on `main` here too; the reflex latency
+  test and the bridge error pass alone on `9e94e91`.
+
+**Not yet measured:** the five games played with the eyes (running), and whether the eyes raise accuracy over still
+frames (the interrupted eyes run of World's Hardest Game had reached level 2 with 1 death, as the still-frame run had).
+
+**Next, in order:** the five games with the eyes, video and accuracy checked against it; whether the eyes beat still
+frames per game; a test that the World's Hardest Game page draws a frame per step (one run saw few distinct frames);
+the two failures that are red on `main` here.
