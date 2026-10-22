@@ -49,7 +49,7 @@ CHARGE_MAX_MS = 10_000.0
 TAP_MS = 50.0
 # The fewest frames a step may draw per second of game time (frame skip, for pages slow to draw)
 FPS_MIN = 10.0
-# How long a frame's budget may take to be spent before the page is taken to be stuck
+# How long a frame's budget may take to be spent before the page is asked whether it still answers
 _BUDGET_WAIT_S = 5.0
 # Virtual time moves only when the page has no task ready to run: after this many tasks run in a row it is moved on
 # anyway, so a page that keeps posting work cannot hold the clock back. Real time does not wait for a page either. At
@@ -60,8 +60,10 @@ _POLITE_S = 1.0
 # How long a frame is waited for before our world is made again: a page left for another one sits frozen in the
 # back-forward cache, and a frame asked of its world never comes
 _FRAME_WAIT_S = 1.0
-# How long a page that drew no frame has to answer before a script is taken to hold it
-_ANSWER_S = 1.0
+# How long a page that drew no frame has to answer before a script is taken to hold it: a heavy page on a loaded
+# machine took seconds to draw a frame (QWOP), and was stopped as if stuck when it had 1 s; a script waiting on the
+# stopped clock never answers, so waiting longer costs time only on a page that is stuck
+_ANSWER_S = 12.0
 # The most one move of the pump may catch up, how often it checks the beat is still there (a new page has none), and how
 # long it keeps failing before it takes the tab to be gone: a pump that stops while its tab lives freezes the tab for
 # good, so a page being replaced must never be enough
@@ -179,6 +181,7 @@ class PageClock:
 		self.session = browser_session
 		self.paused = False
 		self.played_ms = 0.0  # game time played by steps since the first pause, thinking charged included
+		self.moved_ms = 0.0  # all the game time the clock has moved, by steps and in real time
 		self.paused_s = 0.0  # real time the page spent under step mode
 		self.target_id: str | None = None
 		self.held: list[str] = []
@@ -379,13 +382,20 @@ class PageClock:
 		return await getattr(getattr(self._cdp.cdp_client.send, domain), method)(params=params, session_id=self._session_id)
 
 	async def _advance(self, ms: float) -> None:
+		self.moved_ms += ms
 		self._expired.clear()
 		await self._send(
 			'Emulation',
 			'setVirtualTimePolicy',
 			{'policy': 'advance', 'budget': ms, 'maxVirtualTimeTaskStarvationCount': _STARVATION_TASKS},
 		)
-		await asyncio.wait_for(self._expired.wait(), _BUDGET_WAIT_S)
+		try:
+			await asyncio.wait_for(self._expired.wait(), _BUDGET_WAIT_S)
+		except TimeoutError:
+			# the page is still in a task: virtual time moves only between them. A page that answers is slow (a heavy
+			# frame on a loaded machine) and spends the budget once its task ends; one that does not is stuck
+			await self._answers_or_stuck()
+			await asyncio.wait_for(self._expired.wait(), _BUDGET_WAIT_S)
 
 	async def _world_id(self) -> int:
 		"""Our own world in the top frame, made (with its beat) on first use and again after the page is replaced."""
@@ -418,7 +428,8 @@ class PageClock:
 	async def _answers_or_stuck(self) -> None:
 		"""No frame came: if the page does not answer either, a script holds it. Such a script mostly waits for its clock
 		to move (a busy loop on performance.now()), and this clock moves only between scripts, so it never ends (found on
-		Level Devil). The script is stopped, and PageStuck says the page cannot be played this way."""
+		Level Devil). The script is stopped, and PageStuck says the page cannot be played this way. A page that answers,
+		however late, is only slow: the step goes on."""
 		try:
 			await asyncio.wait_for(self._send('Runtime', 'evaluate', {'expression': '1', 'returnByValue': True}), _ANSWER_S)
 			return

@@ -123,6 +123,9 @@ STEP_GAME_WIDTH = 800
 MOTION_WIDTH = 400
 MOTION_LOOKS = 24
 MOTION_SETTLE_S = 0.15  # after a step, for the stream's last frames of it to arrive
+# Game time stands still between steps, so the end of one step runs on into the next: this much of it is read with the
+# next step, so a short step near an obstacle still shows what moves
+MOTION_BEFORE_MS = 300.0
 KEY_HOLD_MAX_MS = 5000.0  # the longest retinat_key holds keys down (a step plays at most as long)
 KEY_WITH_MAX = 4  # keys held down along with the key
 KEY_ANSWER_S = 1.0  # what a key hold keeps of its call to let the keys go and answer
@@ -165,6 +168,29 @@ _HIT_JS = r"""(x, y) => {
 }"""
 
 
+def _as_number(value: Any) -> Any:
+	"""A number given as text ("250") as the number; anything else as it came."""
+	if isinstance(value, str):
+		try:
+			return float(value)
+		except ValueError:
+			return value
+	return value
+
+
+def _as_list(value: Any) -> Any:
+	"""A list given as JSON text ('["ArrowRight"]') or as one name ("ArrowRight") as the list; none as []."""
+	if value is None or value == '':
+		return []
+	if isinstance(value, str):
+		try:
+			parsed = json.loads(value)
+		except ValueError:
+			return [value]
+		return parsed if isinstance(parsed, list) else [value]
+	return value
+
+
 class RetinatServer(BrowserUseServer):
 	"""browser-use's MCP session handling, with a vision-first tool surface."""
 
@@ -199,6 +225,8 @@ class RetinatServer(BrowserUseServer):
 		self._starting: asyncio.Task[None] | None = None  # the browser start in flight, which calls join
 		self._starting_since = 0.0
 		self._clocks: dict[str, 'PageClock'] = {}  # per tab, once retinat_step has paused it
+		# the last step's looks for the next one to run on from: (its clock, the clock's moved_ms then, area, looks)
+		self._motion_before: tuple[Any, float, tuple[float, ...], list[tuple[float, Any]]] | None = None
 		self.server = Server('retinat', version=get_browser_use_version())
 		self._setup_retinat_handlers()
 
@@ -420,6 +448,8 @@ class RetinatServer(BrowserUseServer):
 			raise Refused(_NOT_OURS)
 		await self._ensure_session(deadline)
 		assert self.browser_session is not None
+		if name in ('retinat_open', 'retinat_browse', 'retinat_next', 'retinat_explore'):
+			self._motion_before = None  # another page: the last step does not run on into the next
 		if self.bridge is not None and name in ACTING:
 			self._check_wheel()
 		if name in NEEDS_PAGE_TIME:
@@ -565,17 +595,20 @@ class RetinatServer(BrowserUseServer):
 			await act(eyes.hand.type_text(str(args['text'])))
 			return f'Typed {len(str(args["text"]))} characters.'
 		if name == 'retinat_key':
-			key, hold_ms, also = str(args['key']), args.get('hold_ms'), args.get('with') or []
+			# a client with a schema from before hold_ms and with existed sends them as text
+			key, hold_ms, also = str(args['key']), _as_number(args.get('hold_ms')), _as_list(args.get('with'))
 			if hold_ms is None and not also:
 				await act(eyes.hand.press(key))
 				return f'Pressed {key}.'
 			if not isinstance(also, list) or len(also) > KEY_WITH_MAX or not all(isinstance(k, str) and k for k in also):
 				raise Refused(f'with is a list of up to {KEY_WITH_MAX} key names held down along with key')
 			hold_ms = 100.0 if hold_ms is None else hold_ms
+			if not isinstance(hold_ms, int | float):
+				raise Refused(f'hold_ms is a number of milliseconds, not {hold_ms!r}')
 			fits = KEY_HOLD_MAX_MS
 			if deadline is not None and deadline.bounded:
 				fits = min(fits, (deadline.left() - KEY_ANSWER_S) * 1000)
-			if not isinstance(hold_ms, int | float) or not 0 < hold_ms <= fits:
+			if not 0 < hold_ms <= fits:
 				raise Refused(f'hold_ms is how long to hold the keys down, more than 0 and at most {max(0.0, fits):.0f} ms')
 			await act(eyes.hand.hold(key, hold_ms / 1000, also=also))
 			return f'Held {" + ".join([*also, key])} down for {hold_ms:.0f} ms, then let go.'
@@ -764,6 +797,7 @@ class RetinatServer(BrowserUseServer):
 
 				seen = look_at
 				looks.append((0.0, await self._grey_look(area)))  # as it stands before the step
+		moved = clock.moved_ms
 		stepped = await act(
 			clock.step(ms, hold=keys['hold'], tap=keys['tap'], charge_thinking=charge, stop_at=stop_at, fps=fps, seen=seen)
 		)
@@ -772,6 +806,8 @@ class RetinatServer(BrowserUseServer):
 			looks = self._stream_looks(live, began, drawn, area, view)
 		elif motion and looks[-1][0] < stepped.game_ms:  # the step ended early: the eyes see where it ended too
 			looks.append((stepped.game_ms, await self._grey_look(area)))
+		if motion:
+			looks = self._run_on(clock, moved, tuple(area), looks, stepped.charged_ms)
 		cut = f' of the {ms:.0f} asked (the call had no time for more)' if stepped.game_ms < ms - FRAME_MS else ''
 		thought = f'First played your {stepped.charged_ms / 1000:.1f}s of thinking with the last keys held. ' if charge else ''
 		held = f'holding {", ".join(stepped.held)}' if stepped.held else 'no keys held'
@@ -882,6 +918,25 @@ class RetinatServer(BrowserUseServer):
 				grey = grey.resize((MOTION_WIDTH, max(1, round(grey.height * MOTION_WIDTH / grey.width))))
 			return np.asarray(grey)
 
+	def _run_on(
+		self, clock: Any, moved: float, area: tuple[float, ...], looks: list[tuple[float, Any]], charged_ms: float
+	) -> list[tuple[float, Any]]:
+		"""The step's looks with the last MOTION_BEFORE_MS of the step before in front (at game times before 0), when
+		game time has not moved between the two on the same clock and region; kept for the next step. Thinking played
+		at the start of this step (`charged_ms`) is a gap between them, unseen."""
+		before, self._motion_before = self._motion_before, None
+		if looks:
+			self._motion_before = (clock, clock.moved_ms, area, [(t, p) for t, p in looks if t >= 0])
+		if before is None or before[0] is not clock or before[1] != moved or before[2] != area or not looks:
+			return looks
+		earlier = before[3]
+		if not earlier or earlier[0][1].shape != looks[0][1].shape:
+			return looks
+		end = earlier[-1][0] + charged_ms
+		# the step before's last look is this step's first, the page standing still between
+		ran = [(t - end, p) for t, p in earlier[:-1] if t - end >= -MOTION_BEFORE_MS]
+		return ran + looks
+
 	def _motion_on(self, jpeg: bytes, looks: list[tuple[float, Any]], picture_width: int) -> tuple[bytes, str]:
 		"""What moved during the step, read by the eyes from `looks`, drawn on the picture (`jpeg`) and said in words."""
 		import io
@@ -896,7 +951,8 @@ class RetinatServer(BrowserUseServer):
 		moving.draw(picture, movement, picture_width / MOTION_WIDTH)
 		out = io.BytesIO()
 		picture.save(out, format='JPEG', quality=85)
-		return out.getvalue(), moving.describe(movement, picture_width / MOTION_WIDTH)
+		before_ms = max(0.0, -looks[0][0]) if looks else 0.0
+		return out.getvalue(), moving.describe(movement, picture_width / MOTION_WIDTH, before_ms=before_ms)
 
 	async def _game_region(self) -> list[float] | None:
 		"""The largest canvas, frame or video in view, in viewport CSS px: where a game is drawn."""

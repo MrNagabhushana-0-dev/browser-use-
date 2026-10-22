@@ -26,6 +26,8 @@ CELL = 2  # px: what differs is grouped on a grid of cells this size
 MIN_BLOB_CELLS = 2  # smaller is noise
 MIN_TRAVEL = 2.0  # px over the step: less is standing still
 MAX_LINK = 0.2  # of the picture's width: the farthest a thing is followed from one frame to the next
+FOLLOW_GAP = 2  # frames a thing may leave no difference in and still be followed on
+GHOST_RATIO = 2.0  # how much more a group of what differs stands out in the still picture than in the frame to be a ghost
 MIN_CHANGED = 6  # px that differ for a frame to differ from the one before
 MIN_SCROLL = 2.0  # px over the step for the view itself to have moved
 SCROLL_PEAK = 0.08  # phase correlation peak height for a shift of the whole view to be believed
@@ -40,6 +42,9 @@ MIN_FRAMES = 3  # distinct frames below which a step is too short to tell what m
 TOGETHER_MIN = 3  # things going the same way at the same speed that are told as one group (a scrolling world's coins)
 TOGETHER_SPREAD = 0.15  # of their speed, or TOGETHER_PX px/s if more, within which two velocities are the same
 TOGETHER_PX = 15.0
+ERRATIC_STEPS = 5  # legs a track needs before its turning back says it is a piece of something in place
+ERRATIC_PX = 3.0  # the shortest leg of a track looked at for turning back
+ERRATIC_TURNS = 0.25  # of its steps that turn back on the one before: a piece of a spinning saw, not a thing going somewhere
 HEADING_LOOKS = 3  # the last looks that say which way a thing was going as the step ended
 JITTER = 1.0  # px a centroid wanders by without the thing turning
 
@@ -62,6 +67,7 @@ class Movement:
 	scroll: tuple[float, float] | None  # the whole view's velocity, px/s (what it shows moves the other way)
 	frames: int  # distinct frames read
 	together: list[list[Mover]] = field(default_factory=list)  # groups going the same way at the same speed
+	in_place: list[tuple[float, float, float]] = field(default_factory=list)  # (x, y, px across) spinning or changing where it is
 
 
 def read(frames: list[tuple[float, np.ndarray]]) -> Movement:
@@ -79,14 +85,21 @@ def read(frames: list[tuple[float, np.ndarray]]) -> Movement:
 		scroll = (offsets[-1][0] / seconds, offsets[-1][1] / seconds)
 		pictures = _aligned(pictures, offsets)
 	still = np.median(np.stack(pictures), axis=0)
-	blobs = [[(t, *b) for b in _blobs(f, still)] for (t, _), f in zip(frames, pictures)]
+	found = [_blobs(f, still) for f in pictures]
+	blobs = [[(t, *b) for b in kept] for (t, _), (kept, _) in zip(frames, found)]
+	regions = _regions([cells for _, cells in found])
 	end = frames[-1][0]
 	shortest = MIN_TRACK if len(frames) >= MIN_TRACK + 1 else 2
 	movers = []
 	at = {t: i for i, (t, _) in enumerate(frames)}
-	for track in _follow(blobs, width=pictures[0].shape[1]):
-		# what is there as the step ends, seen long enough not to be a flicker
-		if track[-1][0] != end or len(track) < shortest:
+	# what is there as the step ends, seen long enough not to be a flicker
+	tracks = [t for t in _follow(blobs, width=pictures[0].shape[1]) if t[-1][0] == end and len(t) >= shortest]
+	# pieces of something spinning or changing where it is (a saw's teeth) jump back and forth; a track too short to
+	# tell is a piece too where such pieces are
+	spinning = {_region_at(regions, t[-1]) for t in tracks if _erratic(t)}
+	pieces = [t for t in tracks if _erratic(t) or (_erratic(t) is None and _region_at(regions, t[-1]) in spinning)]
+	for track in tracks:
+		if any(track is p for p in pieces):
 			continue
 		track = _matched(track, pictures, at)
 		velocity = _last_leg(track)
@@ -98,7 +111,9 @@ def read(frames: list[tuple[float, np.ndarray]]) -> Movement:
 	movers = _one_each(movers)
 	movers.sort(key=lambda m: -math.hypot(m.vx, m.vy))
 	together, alone = _together(movers)
-	return Movement(alone, scroll, len(frames), together)
+	moving_in = {_region_at(regions, (0.0, m.x, m.y, 0.0)) for m in movers}
+	places = _places(regions, {_region_at(regions, t[-1]) for t in pieces} - moving_in - {0})
+	return Movement(alone, scroll, len(frames), together, places)
 
 
 def heading(dx: float, dy: float) -> str:
@@ -108,9 +123,10 @@ def heading(dx: float, dy: float) -> str:
 	return names[int((angle + 22.5) // 45) % 8]
 
 
-def describe(movement: Movement, to_picture: float) -> str:
+def describe(movement: Movement, to_picture: float, before_ms: float = 0.0) -> str:
 	"""The movement in words, positions and speeds both in the picture the model is shown (`to_picture` of its px per
-	frame px): a player that judged moves by the picture misjudged every one by its scale when speeds were in page px."""
+	frame px): a player that judged moves by the picture misjudged every one by its scale when speeds were in page px.
+	`before_ms`: how much of the step before was read with it."""
 	if movement.frames < MIN_FRAMES:
 		return (
 			f'What the eyes saw move: the step was too short to see what moves ({movement.frames} distinct frames); '
@@ -144,10 +160,21 @@ def describe(movement: Movement, to_picture: float) -> str:
 		noun = 'thing' if len(movers) == 1 else 'things'
 		alone = ' on its own' if len(movers) == 1 else ' on their own'
 		parts.append(f'{len(movers)} {noun} moved{alone if movement.together else ""}{more}: ' + '; '.join(said))
+	if movement.in_place:
+		where = ', '.join(
+			f'({x * to_picture:.0f}, {y * to_picture:.0f}) ~{across * to_picture:.0f} px across'
+			for x, y, across in movement.in_place[:MAX_MOVERS]
+		)
+		n = len(movement.in_place)
+		parts.append(
+			f'{n} {"thing changes" if n == 1 else "things change"} in place (spinning or animating where '
+			f'{"it is" if n == 1 else "they are"}): at {where}{" ..." if n > MAX_MOVERS else ""}'
+		)
 	return (
-		f'What the eyes saw move over the step ({movement.frames} distinct frames, game time; positions and speeds in '
+		f'What the eyes saw move over the step{f" and the {before_ms:.0f} ms before it" if before_ms else ""} '
+		f'({movement.frames} distinct frames, game time; positions and speeds in '
 		f"the picture's px): " + '; '.join(parts) + '. On the picture each mover has its number, its trail and an arrow '
-		'(things moving together: arrows in blue).'
+		'(things moving together: arrows in blue; things changing in place: circled in cyan).'
 	)
 
 
@@ -158,6 +185,10 @@ def draw(image, movement: Movement, to_picture: float) -> None:
 	pen = ImageDraw.Draw(image)
 	if movement.frames < MIN_FRAMES:
 		return
+	for x, y, across in movement.in_place[:MAX_MOVERS]:
+		r = across * to_picture / 2
+		x, y = x * to_picture, y * to_picture
+		pen.ellipse([(x - r, y - r), (x + r, y + r)], outline=(0, 230, 230), width=2)
 	for group in movement.together:
 		for m in group[:MAX_MOVERS]:
 			_arrow(pen, m, to_picture, (0, 160, 255))
@@ -317,12 +348,12 @@ def _aligned(frames: list[np.ndarray], offsets: list[tuple[float, float]]) -> li
 	return [np.roll(f, (dy, dx), axis=(0, 1))[top:bottom, left:right] for f, dx, dy in zip(frames, dxs, dys)]
 
 
-def _blobs(frame: np.ndarray, still: np.ndarray) -> list[tuple[float, float, float]]:
+def _blobs(frame: np.ndarray, still: np.ndarray) -> tuple[list[tuple[float, float, float]], np.ndarray]:
 	"""(x, y, area) of each connected group of what differs between `frame` and the still picture, on a grid of CELL px
 	cells (OpenCV's connected components), its centre weighted by how much of each cell differs. A group whose
 	difference is in the still picture, not in the frame, is left out: where a slow thing lingered over the step the
 	median keeps a faint copy of it, and once the thing has gone the frame there looks like what surrounds it (a ghost,
-	read before as a mover of its own)."""
+	read before as a mover of its own). Also the cells of the groups kept, on the cell grid."""
 	import cv2
 
 	mask = np.abs(frame - still) > DIFF
@@ -335,16 +366,62 @@ def _blobs(frame: np.ndarray, still: np.ndarray) -> list[tuple[float, float, flo
 	mass = np.bincount(flat, weights=weights, minlength=count)
 	sum_x = np.bincount(flat, weights=weights * (xs.ravel() + 0.5), minlength=count)
 	sum_y = np.bincount(flat, weights=weights * (ys.ravel() + 0.5), minlength=count)
-	return [
-		(float(sum_x[i] / mass[i] * CELL), float(sum_y[i] / mass[i] * CELL), float(mass[i]))
+	kept = [
+		i
 		for i in range(1, count)
 		if stats[i, cv2.CC_STAT_AREA] >= MIN_BLOB_CELLS and not _ghost(frame, still, mask, labels, stats, i)
 	]
+	blobs = [(float(sum_x[i] / mass[i] * CELL), float(sum_y[i] / mass[i] * CELL), float(mass[i])) for i in kept]
+	return blobs, np.isin(labels, kept)
+
+
+def _regions(changed: list[np.ndarray]) -> np.ndarray:
+	"""The cells that differ in any frame, joined into regions (a cell's gap bridged): their labels on the cell grid, 0
+	where nothing changed."""
+	import cv2
+
+	union = np.any(np.stack(changed), axis=0).astype(np.uint8)
+	_, labels = cv2.connectedComponents(cv2.dilate(union, np.ones((3, 3), np.uint8)), connectivity=8)
+	return labels
+
+
+def _region_at(regions: np.ndarray, blob: tuple[float, float, float, float]) -> int:
+	_, x, y, _ = blob
+	return int(regions[min(max(int(y // CELL), 0), regions.shape[0] - 1), min(max(int(x // CELL), 0), regions.shape[1] - 1)])
+
+
+def _erratic(track: list[tuple[float, float, float, float]]) -> bool | None:
+	"""Whether a track jumps back and forth rather than going somewhere: ERRATIC_TURNS or more of its legs turn back on
+	the one before. A leg is the track walked until it is half the thing's size (ERRATIC_PX at least) from where the
+	leg began, so a centre wobbling within the thing does not count. None when it has too few legs to tell."""
+	size = math.sqrt(float(np.mean([area for _, _, _, area in track])))
+	reach = max(ERRATIC_PX, size / 2)
+	legs, (ax, ay) = [], track[0][1:3]
+	for _, x, y, _ in track[1:]:
+		if math.hypot(x - ax, y - ay) >= reach:
+			legs.append((x - ax, y - ay))
+			ax, ay = x, y
+	if len(legs) < ERRATIC_STEPS:
+		return None
+	back = sum(1 for (px, py), (qx, qy) in zip(legs, legs[1:]) if px * qx + py * qy < 0)
+	return back >= ERRATIC_TURNS * (len(legs) - 1)
+
+
+def _places(regions: np.ndarray, labels: set[int]) -> list[tuple[float, float, float]]:
+	"""(x, y, px across) of each region in `labels`, largest first: where something changes in place."""
+	places = []
+	for label in labels:
+		ys, xs = np.nonzero(regions == label)
+		across = math.hypot(float(xs.max() - xs.min() + 1), float(ys.max() - ys.min() + 1)) * CELL
+		places.append(((float(xs.mean()) + 0.5) * CELL, (float(ys.mean()) + 0.5) * CELL, across))
+	return sorted(places, key=lambda p: -p[2])
 
 
 def _ghost(frame: np.ndarray, still: np.ndarray, mask: np.ndarray, labels: np.ndarray, stats: np.ndarray, i: int) -> bool:
 	"""Whether group `i` of what differs is in the still picture rather than in the frame: against the cells around it
-	(what is there in this frame), the still picture's pixels stand out more than the frame's own."""
+	(what is there in this frame), the still picture's pixels stand out GHOST_RATIO times more than the frame's own. A
+	thing that moved half its size since the still picture differs as much in each (half of it new, half where it
+	was): it is there, and kept."""
 	x, y, gw, gh = (int(v) for v in stats[i, :4])
 	pad = max(2, gw, gh)
 	y0, y1, x0, x1 = max(0, y - pad), min(labels.shape[0], y + gh + pad), max(0, x - pad), min(labels.shape[1], x + gw + pad)
@@ -355,7 +432,7 @@ def _ghost(frame: np.ndarray, still: np.ndarray, mask: np.ndarray, labels: np.nd
 	if not around.any() or not group.any():
 		return False
 	ground = float(np.median(frame[px][around]))
-	return float(np.abs(still[px][group] - ground).mean()) > float(np.abs(frame[px][group] - ground).mean())
+	return float(np.abs(still[px][group] - ground).mean()) > GHOST_RATIO * float(np.abs(frame[px][group] - ground).mean())
 
 
 def _matched(
@@ -414,11 +491,13 @@ def _follow(
 	per_frame: list[list[tuple[float, float, float, float]]], width: int
 ) -> list[list[tuple[float, float, float, float]]]:
 	"""Tracks of blobs (time, x, y, area) over the frames: each blob is joined, nearest first, to a track that had a blob
-	in the frame before; one left over starts a track of its own, and a track that gets none ends."""
+	in the last FOLLOW_GAP + 1 frames (a thing as slow as it is small leaves no difference for a frame or two, where it
+	passes where it was on average); one left over starts a track of its own."""
 	reach = MAX_LINK * width
 	tracks = [[b] for b in per_frame[0]]
-	active = list(range(len(tracks)))
-	for blobs in per_frame[1:]:
+	last = [0] * len(tracks)  # the frame each track last had a blob in
+	for k, blobs in enumerate(per_frame[1:], 1):
+		active = [t for t in range(len(tracks)) if k - last[t] <= FOLLOW_GAP + 1]
 		pairs = sorted(
 			(math.hypot(b[1] - tracks[t][-1][1], b[2] - tracks[t][-1][2]), t, j) for t in active for j, b in enumerate(blobs)
 		)
@@ -427,11 +506,11 @@ def _follow(
 		for distance, t, j in pairs:
 			if distance <= reach and t not in joined and j not in taken:
 				tracks[t].append(blobs[j])
+				last[t] = k
 				joined.add(t)
 				taken.add(j)
-		active = sorted(joined)
 		for j, b in enumerate(blobs):
 			if j not in taken:
 				tracks.append([b])
-				active.append(len(tracks) - 1)
+				last.append(k)
 	return [t for t in tracks if len(t) >= 2]

@@ -92,6 +92,13 @@ window.fired = false; setTimeout(() => { window.fired = true; }, 300);
 </script></body>"""
 
 
+def _answer_after_a_while(request):
+	from werkzeug import Response
+
+	time.sleep(6)
+	return Response('ok')
+
+
 @pytest.fixture(scope='module')
 def games():
 	main, other = HTTPServer(), HTTPServer()
@@ -109,6 +116,15 @@ def games():
 		' requestAnimationFrame(f); });</script></body>',
 		content_type='text/html',
 	)
+	# a page whose frames take seconds of real work once told to (a sync request to an endpoint that answers slowly):
+	# slow, as a heavy game on a loaded machine is, but never stuck
+	main.expect_request('/sluggish').respond_with_data(
+		'<!doctype html><title>Sluggish</title><body><script>window.slow = false; window.drawn = 0;'
+		'requestAnimationFrame(function f() { window.drawn++; if (window.slow) { const x = new XMLHttpRequest();'
+		' x.open("GET", "/wait", false); x.send(); } requestAnimationFrame(f); });</script></body>',
+		content_type='text/html',
+	)
+	main.expect_request('/wait').respond_with_handler(_answer_after_a_while)
 	main.expect_request('/still').respond_with_data(
 		'<!doctype html><title>Still</title><p>Nothing here moves.</p>', content_type='text/html'
 	)
@@ -398,12 +414,28 @@ async def test_a_page_that_waits_on_its_clock_is_told_and_let_go(session, games)
 	began = time.monotonic()
 	with pytest.raises(PageStuck):
 		await pc.step(200)
-	assert time.monotonic() - began < 10, f'noticed after {time.monotonic() - began:.1f}s'
+	assert time.monotonic() - began < 15, f'noticed after {time.monotonic() - began:.1f}s'
 	cdp = await session.get_or_create_cdp_session(focus=False)
 	answer = cdp.cdp_client.send.Runtime.evaluate(
 		params={'expression': '1 + 1', 'returnByValue': True}, session_id=cdp.session_id
 	)
 	assert (await asyncio.wait_for(answer, 5))['result']['value'] == 2, 'the script holding the page was not stopped'
+	await pc.close()
+
+
+async def test_a_page_slow_to_draw_is_waited_for_and_its_scripts_left_running(session, games):
+	"""Found when a model played QWOP on a loaded machine: a frame took seconds to draw, the page took more than the 1 s
+	it was given to answer, and the clock stopped the game's script as if it hung, so the game never moved again. A
+	page that answers late is slow, not stuck: the step waits for it and its scripts go on."""
+	await _opened(session, games.url_for('/sluggish'))
+	pc = PageClock(session)
+	await pc.pause()
+	await _value(session, 'window.slow = true')
+	await pc.step(50)  # three frames, each of them seconds of work
+	await _value(session, 'window.slow = false')
+	drawn = await _value(session, 'window.drawn')
+	await pc.step(100)
+	assert await _value(session, 'window.drawn') > drawn, 'the page stopped drawing: its script was stopped'
 	await pc.close()
 
 

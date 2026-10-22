@@ -1444,6 +1444,28 @@ async def test_a_step_too_short_to_see_motion_says_so(retinat, site):
 	assert 'too short to see what moves' in text and 'moving' not in text.split('too short')[1][:200], text
 
 
+async def test_a_short_step_is_read_with_the_step_before_it(retinat, site):
+	"""Found when models played Neon Challenge Legends and Level Devil: near an obstacle they stepped 100-150 ms, and the
+	eyes said the step was too short to see what moves, just when it mattered. Game time stands still between steps, so
+	the step before runs on into this one: the eyes read both, and say so."""
+	import asyncio
+	import re
+
+	site.expect_request('/movers').respond_with_data(MOVERS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/movers'))
+	await _call(retinat, 'retinat_step', {'ms': 17, 'frame': 'game'})
+	await _call(retinat, 'retinat_step', {'ms': 300, 'frame': 'game', 'fps': 30})
+	text = _text(await _call(retinat, 'retinat_step', {'ms': 67, 'frame': 'game', 'fps': 30}))
+	assert 'too short' not in text and re.search(r'over the step and the \d+ ms before it', text), text
+	right = re.search(r'moving right at (\d+) px/s', text)
+	assert right and float(right[1]) == pytest.approx(160, rel=0.25), text
+	# once the game has run in real time, the step before no longer runs on into the next
+	await _call(retinat, 'retinat_step', {'action': 'resume'})
+	await asyncio.sleep(0.3)
+	text = _text(await _call(retinat, 'retinat_step', {'ms': 33, 'frame': 'game', 'fps': 30}))
+	assert 'too short to see what moves' in text and 'ms before it' not in text, text
+
+
 async def test_the_eyes_read_a_step_from_the_video_stream_not_from_screenshots(retinat, site):
 	"""The owner's ask, and what the players measured: a step's eyes took a screenshot at every frame (~166 ms each, 4-10
 	s a step, so one player turned motion off). The eyes now read the compositor's own stream of the frames the page
@@ -1489,6 +1511,46 @@ def test_where_a_slow_thing_lingered_is_not_read_as_another_mover():
 	for m in seen:
 		assert abs(m.vy) > 5 * abs(m.vx), (m.x, m.y, m.vx, m.vy)
 		assert min(np.hypot(m.x - x, m.y - y) for x, y in ends) < 3, (m.x, m.y)
+
+
+def test_a_saw_spinning_in_place_is_told_as_one_thing_in_place_not_as_fast_movers():
+	"""Found when models played Moto X3M and Neon Challenge Legends: spinning saws came out as a dozen movers at
+	100-4000 px/s, and the one thing really moving was lost among them. Something that spins or changes where it is
+	is told once, in place; the thing that moves is told as moving."""
+	import math
+
+	import cv2
+	import numpy as np
+
+	from browser_use.eyes import moving
+
+	def saw(picture: np.ndarray, cx: float, cy: float, r: float, angle: float) -> None:
+		teeth = [
+			(
+				cx + (r if k % 2 == 0 else 0.75 * r) * math.cos(angle + k * math.pi / 12),
+				cy + (r if k % 2 == 0 else 0.75 * r) * math.sin(angle + k * math.pi / 12),
+			)
+			for k in range(24)
+		]
+		cv2.fillPoly(picture, [np.array(teeth, np.int32)], 40)
+		cv2.circle(picture, (round(cx), round(cy)), round(r / 4), 200, -1)
+
+	for fps in (30, 60):
+		frames = []
+		for k in range(round(0.4 * fps) + 1):
+			t = k / fps
+			picture = np.full((200, 400), 140, np.float32)
+			saw(picture, 120, 100, 40, math.radians(360 * t))
+			saw(picture, 300, 60, 25, -math.radians(360 * t))
+			cv2.circle(picture, (round(40 + 100 * t), 170), 6, 250, -1)  # right at 100 px/s
+			frames.append((k * 1000 / fps, picture))
+		movement = moving.read(frames)
+		moved = [m for group in movement.together for m in group] + movement.movers
+		assert len(moved) == 1, [(round(m.x), round(m.y), round(math.hypot(m.vx, m.vy))) for m in moved]
+		assert moved[0].vx == pytest.approx(100, rel=0.2) and abs(moved[0].vy) < 10, moved[0]
+		assert sorted((round(x / 20), round(y / 20)) for x, y, _ in movement.in_place) == [(6, 5), (15, 3)], movement.in_place
+		said = moving.describe(movement, 1.0)
+		assert '2 things change in place' in said and '(120, 100)' in said, said
 
 
 KEYS = """<!doctype html><title>Keys</title><body><script>
@@ -1586,3 +1648,17 @@ async def test_a_recording_stops_and_is_saved_when_the_page_has_hung(site, tmp_p
 		assert b'moov' in Path(saved[1]).read_bytes(), 'the MP4 was not finished (no index)'
 	finally:
 		await server._close_all_sessions()
+
+
+async def test_a_hold_given_as_text_is_held(retinat, site):
+	"""Found when a model played QWOP: its client had loaded retinat_key's schema from before hold_ms existed, so the
+	numbers came as text, and a hold of "250" was refused as not between 0 and 5000 ms. Numbers and lists given as
+	text are read as what they say."""
+	site.expect_request('/keys').respond_with_data(KEYS, content_type='text/html')
+	await _open_started(retinat, site.url_for('/keys'))
+	result = await _call(retinat, 'retinat_key', {'key': 'ArrowUp', 'hold_ms': '250', 'with': '["ArrowRight"]'})
+	assert not result.is_error, _text(result)
+	seen = await _keys_seen(retinat)
+	assert {s[1] for s in seen if s[0] == 'keydown'} == {'ArrowRight', 'ArrowUp'}, seen
+	refused = await _call(retinat, 'retinat_key', {'key': 'ArrowUp', 'hold_ms': 'long'})
+	assert refused.is_error and 'hold_ms' in _text(refused) and 'number' in _text(refused), _text(refused)
