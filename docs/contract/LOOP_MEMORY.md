@@ -116,3 +116,7 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   safeguard flag while writing its final JSON: its hand-back narration ends at film 2:03 (123 s); all watch calls and
   the recording are complete. Declared rule (gaps strictly down, cut coverage not worse, B median not worse): met ->
   KEEP, pending the verifier. C1/C2 for B1 and E2 are judged on film 0:00-2:03 only, alike.
+- 2026-10-22 STOP-RULE NOTE (MEASURED): the session limit (HTTP 429, "resets 6:40pm UTC") stopped both B1/E2 verifiers
+  part-way; they were resumed after the reset with their work kept. The 85% pause in 4.5 could not be applied: usage is
+  not visible from inside the session; the limit arrived at 100%. The local film server stopped at its 2 h background
+  limit; the verifiers need only files.
