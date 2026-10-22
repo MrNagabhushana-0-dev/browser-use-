@@ -15,6 +15,12 @@ cd "$SCRIPT_DIR/.." || exit 1
 if [ -f .retinat.env ]; then
 	. ./.retinat.env
 fi
+# A measured run pins the code to one commit: RETINAT_CODE_DIR is a worktree of it, run with this checkout's venv.
+if [ -n "$RETINAT_CODE_DIR" ]; then
+	VENV_PY="$PWD/.venv/bin/python"
+	cd "$RETINAT_CODE_DIR" || exit 1
+	exec "$VENV_PY" -m "$@"
+fi
 
 for installed in .venv/lib/python3*/site-packages/browser_use-*.dist-info; do
 	if [ -e "$installed" ]; then
