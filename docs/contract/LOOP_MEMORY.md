@@ -50,3 +50,9 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   both watches said MEDIA_ERR_SRC_NOT_SUPPORTED, so there is nothing to measure. The same page played on a probe right
   after (covering 0.7-2.5 s). Cause not proven; suspect: E0's tab still playing the same stream (its last watch did not
   pause). Protocol addition for every run from here: a fresh browser (Retinat restarted) before the watcher starts.
+- 2026-10-22 E1 attempt 2 (fresh browser; until=event), MEASURED with measure_watch.py on
+  subagents/agent-a144a20df7cf8f44d.jsonl: 19 calls, window 195.3 s, film covered 176.6 s; A_added 10,008/min (E0 6,036:
+  +66%), A_processed 438,175/min; B call->answer median 4.98 s (E0 12.64); B event lower bound median 3.4 s, p90 8.3 s
+  (n=25; E0 7.9 / 14.1, n=33). Recording retinat-20261022-151008.mp4. Keep decision waits for C2 (verifiers running).
+  Per call (the product's own estimate in each result, INFERRED): percept ~565 tokens = sheet image ~376 (4 keyframes,
+  1292x200 every time) + text ~190; per turn ~1,313 new tokens and ~360 written: the product payload is under half.
