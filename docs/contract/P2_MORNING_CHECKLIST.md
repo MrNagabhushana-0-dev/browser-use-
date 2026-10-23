@@ -1,7 +1,9 @@
 # P2 morning checklist: Retinat in your own Chrome (about 10 minutes)
 
-You need: Google Chrome, Claude Code (logged in), and a terminal. Nothing below touches anything outside
-`~/retinat`, `~/retinat-extension` and uv; the last section undoes all of it.
+You need: Google Chrome, Claude Code (logged in), and a terminal. Works on: macOS (Apple Silicon, macOS 14 or
+later) or Linux or Windows on x86_64 for the watching tools; the bridge itself works on any Chromium-based browser.
+Nothing below touches anything outside `~/retinat`, `~/retinat-extension`, `~/.config/browseruse` (Retinat's
+recordings and logs) and uv; the last section undoes all of it.
 
 ## Steps
 
@@ -27,9 +29,9 @@ You need: Google Chrome, Claude Code (logged in), and a terminal. Nothing below 
    - in the terminal: `PASS  self-test through relay -> extension -> tab` with look 1 / click / look 2 times in ms and
      `button mean rgb (158, 158, 158) -> (47, 125, 50)`, and the command ends by itself (exit code 0).
 
-   FAIL prints the reason in both places. Run the command again, reload the self-test tab, press the extension button
-   -> **Share this tab with the AI**. If it says port 9333 is taken, a Claude session is already running Retinat:
-   stop it (Ctrl+C) and run the command again. Close the self-test tab when done.
+   FAIL prints the reason in both places. Run the command again; it opens the self-test tab itself. Do not share the
+   relay's own address by hand: the bridge refuses that. If it says port 9333 is taken, a Claude session is already
+   running Retinat: stop it (Ctrl+C) and run the command again. Close the self-test tab when done.
 4. **Open the YouTube video you were given.** Turn captions **off** (press `c`, or the CC button until it is not
    underlined). Leave it paused at the start.
 5. **Share that tab:** press the Retinat bridge button in the toolbar -> **Share this tab with the AI**. A pill at
@@ -50,9 +52,10 @@ You need: Google Chrome, Claude Code (logged in), and a terminal. Nothing below 
    Run the RUNBOOK in docs/contract/PROTOCOL_v3_P2.md, then report.
    ```
    It checks it can see your shared YouTube tab, plays the film from 0:00 twice (about 4 minutes each, once the
-   Milestone-1 way and once with the event gate), records both, measures them, has two fresh sub-agents label and
+   Milestone-1 way and once with the live narration), records both, measures them, has fresh sub-agents label and
    score them, and pushes the results to the branch. About 30-40 minutes; you can sleep. It acts only in the shared
-   tab; Cancel on the debugging bar stops it at once.
+   tab; Cancel on the debugging bar stops it at once. This is the first run on a real Chrome: if anything on screen
+   looks wrong, press Cancel and tell the session what you saw.
 
 ## What each extension permission is for
 
@@ -78,6 +81,8 @@ prompt; Chrome lists the permissions above under the extension's **Details**.
   run, and is given out only by `/json/version`, which answers only with a loopback Host header and no Origin header.
   Browsers always attach an Origin to cross-site requests and to every WebSocket, so a web page can neither read the
   token nor open the socket. The Host check also defeats DNS rebinding.
+- **The relay's own address is never shared**, not even by you: the bridge refuses it, so the AI cannot reach the
+  relay through a tab.
 - **Self-test page.** `/selftest` is a fixed page that cannot be framed. `/selftest/state` returns only the self-test
   result, only on a loopback Host, and refuses other sites' requests (Origin and Sec-Fetch-Site).
 - **What it cannot stop.** Any program already running on your laptop can reach loopback and drive the tabs you
@@ -96,6 +101,8 @@ prompt; Chrome lists the permissions above under the extension's **Details**.
 - **Stop sharing one tab:** extension button -> **Stop sharing this tab** (or Alt+Shift+A).
 - **Stop Claude:** Ctrl+C in the terminal running Claude.
 - **Remove the extension:** `chrome://extensions` -> Retinat bridge -> **Remove**.
-- **Delete everything:** macOS/Linux `rm -rf ~/retinat ~/retinat-extension`; Windows
-  `Remove-Item -Recurse -Force ~\retinat, ~\retinat-extension`. uv stays installed (`~/.local/bin/uv`); delete it
+- **Delete everything:** macOS/Linux `rm -rf ~/retinat ~/retinat-extension ~/.config/browseruse`; Windows
+  `Remove-Item -Recurse -Force ~\retinat, ~\retinat-extension` (Retinat's recordings and logs on Windows sit where
+  its config folder is; not checked on Windows). Claude Code keeps the run's transcripts under `~/.claude/projects`;
+  delete the folders named after this run if you want them gone. uv stays installed (`~/.local/bin/uv`); delete it
   and `~/.cache/uv` too if you want it gone.

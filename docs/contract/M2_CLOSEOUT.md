@@ -1,0 +1,109 @@
+# Milestone 2 close-out (P2 track, protocol v2b in the container)
+
+Status: PARTIAL. The measurement and verification are done for the container bridge path. The P2 baseline on the
+owner's own Chrome (protocol v3) has NOT been run. E6 is blocked, not measured. Every number below is MEASURED
+unless marked otherwise; each was re-derived by a fresh verifier (VERIFIED) unless marked otherwise.
+
+## Results (protocol v2b: container Chromium + bridge extension, local copy of Big Buck Bunny, film 0-185 s)
+
+| Run | Product commit | Change | A tok/min | B lower bound median / p90 (n) | C1 | C2 strict missed | C2 lenient missed | Decision |
+|---|---|---|---|---|---|---|---|---|
+| B2 | c1bef95 | baseline (E2 kept) | 9,370 | 3.9 / 8.5 s (37) | 84/88 = 0.955 | 54/142 = 38.0% (30-47%) | 1/142 = 0.7% | baseline |
+| E3 | 13039f1 | live narration per result | 10,996 | 3.75 / 6.46 s (38) | 94/98 = 0.959 | 49/142 = 34.5% | 2/142 = 1.4% | KEEP |
+| E4 | 7b9bc1e | INV-2 reservoir component | 10,691 | 3.9 / 6.92 s (39) | 95/101 = 0.941 | 45/143 = 31.5% | 1/143 = 0.7% | KEEP |
+| E5 | 0fa303c | event gate wakes the model | 4,253 | 11.95 / 18.15 s (36) | 63/80 = 0.79 | 71/143 = 49.7% | 1/143 = 0.7% | REVERT (wake policy) |
+| E6 | 3504321 | gate plus salient-event wake | not measured | not measured | - | - | - | BLOCKED, void |
+
+Other measures, all MEASURED: gaps between watch windows 0 in every run; cuts reached the model 33/33 (B2) and
+34/34 (E3, E4, E5); evidence erased 0 s (E4, E5, none reported); film covered 184.9-185.9 s per run.
+
+Keep rules, as declared before measuring (LOOP_MEMORY):
+- E3 (narration per result): every result narrated before the next call, and C1 and C2 not worse than B2. Met on
+  the delivered lines (the final result's narration was lost to a missing tool in E3 and E4; see Caveats). KEEP.
+- E4 (reservoir): gaps 0, evidence erased 0, cuts not worse, C2 not worse than E3 (31.5% vs 34.5%). KEEP.
+  The C2 comparison is inside the judgement range (23-47%); "not worse" is the weakest part of this keep.
+- E5 (gate): A strictly down and in band (yes), gaps 0 (yes), C2 not worse (NO: 31.5% to 49.7%). REVERT. The gate
+  module and gate_replay stay as measurement tools; the wake policy is out.
+- E6: declared on E5, void with E5's revert, never measured.
+
+## Milestone bars (from contract section 5, M2)
+
+- A into the 2,000-8,600 band: NOT MET. The only run in the band was E5, and it lost on C2. The kept runs sit at
+  9,400-11,000 tok/min, above the band.
+- C2 not worse than the P2 baseline: met (E3, E4 vs B2) within the judgement range.
+- Zero gap-window loss: met (gaps 0 in every run).
+- Flapping pair reported: reported for the gate only (see below). The reservoir and narration runs have no gate.
+- Narration per result: met for the delivered results; the last result was not narrated in E3 and E4.
+
+## Flapping pair (the gate: 4-state Schmitt vs single threshold; MEASURED, gate_replay.py)
+
+- Live, E5's own signal (1,488 frames, 0.053 h): 4-state 9 flips (170/h), 5 episodes; single threshold 69 flips
+  (1,307/h), 35 episodes.
+- Film replay, bbb480 0-190 s (1,901 frames): 4-state 21 flips (398/h), 11 episodes, 8 cuts begun while closed,
+  onset clipping without reservoir 0.37 s max (2.62 s total); single threshold 71 flips (1,346/h), 36 episodes,
+  11 clipped, 0.07 s max. With the reservoir the commit starts at the cursor, before any onset: 0 clipped.
+- Borderline synthetic page (120 s, pulse 0-60): 4-state 0-30 flips/h, single threshold 0-7,596/h. At high pulse the
+  4-state gate opens once and stays open (no flapping, no close either).
+- The contract's target (TPH below 2.0/h) needs at least an hour of signal to measure; the runs here are minutes.
+
+## E6: blocked, not measured
+
+Reason, logged in LOOP_MEMORY (2026-10-22 STOP-RULE EVENT and E6 BLOCKED): this session's Retinat MCP client failed
+to reconnect after the container reboot (CONNECT_TIMEOUT 30 s). /mcp reconnect is not available in this web session.
+One genuine retry returned no Retinat tools. Respawning Retinat under a separate headless Claude Code client was
+refused by the session's permission classifier and not pursued. Later the MCP client did reconnect, but the browser
+extension had gone with the rig; the rig was restarted, and the E6 run was not repeated under the owner's steering
+(small steps only). E6's keep rule is not applied.
+
+## Recording-quality caveat (MEASURED, ground_truth.py)
+
+- The recordings are 8 fps, and frames arrive about 4 a second: 46-49% of frames are identical. Cut timing is good to
+  about 0.25-0.36 s, and a few real cuts appear 0.3 s late (E2 at 60.5; E4 at 20.2, 60.5, 172.4, 174.0).
+- The recording-to-film offset is not constant within a run: E3 is 5.31 s overall, but about 4.95-5.03 s for film
+  0-45 s and 5.3 s after 52 s (scorer's frame check). Scorers used each run's own alignment.
+- B1's recording has a 4 s frozen stretch before film 39.77; E5 has frozen stretches at film 73.8 and the tail.
+- One labelled set (143 events, sha256 23db2c52...) from B2's recording serves all four runs. Labels are judgement:
+  scorers' C2 ranges span 23-47% depending on how a line "describes" an event. Headline numbers use each scorer's own
+  judgement call; they are not from a rule that could be checked mechanically.
+- Single run per arm: no run has a repeat. Differences of a few points in C2 are not established.
+- The C1 misses are wrong details inside otherwise true lines (a nut called a stick, a pine cone called an acorn, a
+  butterfly placed wrongly). Glance-size keyframes limit detail; narration lines follow the sheet keyframes, so
+  events between keyframes are missed by construction.
+- Token counts come from the watcher's own transcript: A is the watch-turn tokens only. The E5 counter excludes
+  the first call's turn (151 tokens; negligible).
+
+## Narration
+
+- Per-result narration held for 25 of 25 results in E3 and 24 of 25 in E4, both with live logs; the last result's
+  narration was not delivered in either (retinat_narrate was not in the client's tool list). E5: 10 of 10.
+- B2 wrote all narration at the end, in one final answer, despite the prompt. That is why B2 is a baseline, not an
+  instance of per-result narration.
+
+## Known defects not fixed (found by the adversarial reviews; not in any kept number)
+
+- The keyframe density rule (since..now, per item) shrinks keyframes instead of adding evidence. It lived in E5 only
+  and was reverted with E5.
+- The reservoir's erasure counter can over-count (a held video's hops; other items' evicted samples on a shared
+  ring) and can re-count the same loss on a cursor that cannot advance. The E4 measured 0 s stands for those runs, but
+  the counter is not yet trustworthy in general.
+- The gate closes only on a frame arrival (not when the item changes or ends); E5-only.
+- The gate log is unbounded and synchronous (E5 only).
+- The counter-integrity review and the hooks and ground-truth reviews did not complete (session limit).
+
+## Commits (branch claude/laughing-hawking-2cj3a6)
+
+- c1bef95 E2 kept (baseline product); 13039f1 E3; 7b9bc1e E4; 0fa303c E5 (policy reverted in b12bcc5); 3504321 E6 (void)
+- f2312e0 ground-truth tool and protocol v3 text; 4531d56 protocol v3 runbook; ba4a1a7 v3 amendment
+- 7269d38 bridge setup, self-test, checklist; 30a4537 bridge review fixes (relay-address share refused; retry and PASS
+  instructions; the eyes extra non-fatal in setup)
+- 08d4645, d63610a task_complete.py (4.6 completion gate; under review, not complete)
+- 53985bb labels frozen; 3645814 stop-rule event; 9971b66 E6 blocked; 7dfa7cd, aa8c2d5, 8a0d4c1 scoring entries; b12bcc5 E5 revert
+
+## Not done
+
+- Protocol v3: the P2 baseline on the owner's own Chrome, with a real YouTube video. Not run. The checklist sets it up;
+  it is the owner's install that gates it.
+- The bridge self-test on the final worker.js: the rig carries the new code (grep-verified), but no hands-on re-run
+  of the self-test followed the 30a4537 fixes.
+- Windows and the macOS setup path: not run end to end (setup.ps1 never ran).
+- Bridge security review re-check of the fix: the relay-address refusal is by reading and syntax only.
