@@ -267,3 +267,9 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   sub-agent aa835b693867c20c9 (Sonnet), which opened no narration, transcript, measurement or edit list. It labelled
   one fade the detector does not flag (title -> sky, film 4.09) and listed its uncertain moments. Copies (with the
   alignment and cuts it used): docs/contract/evidence/. One label set serves B2, E3, E4 and E5 alike.
+- 2026-10-23 B2 SCORED (MEASURED + VERIFIED, scorer ab30accb5855a3d5d, labels sha256 23db2c52 checked first): A 9,370/min
+  and B 3.9/8.5 s (n=37), gaps 0, cuts 33/33: all reproduced by an independent script. C1 84/88 = 0.955 (four lines have a
+  wrong detail: a leaf, a pine cone called an acorn, a nut's side, a nut called a ball; the main scene in each is true).
+  C2 strict 54/142 missed = 38.0% (judgement range 30-47%), lenient 1/142 = 0.7%. Narration: all 88 lines in one batch
+  in the final answer, zero text blocks between results, so B measures percept arrival, not narration. Scorer's files:
+  scratchpad/score_B2/. Labels: no count-changing disputes.
