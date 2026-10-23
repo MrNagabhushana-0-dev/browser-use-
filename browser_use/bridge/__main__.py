@@ -147,13 +147,13 @@ def _log_result(t: SelfTest, port: int) -> str:
 	if t.state == 'pass':
 		lines.append(
 			'Next: open the YouTube video you were given (captions off), press the Retinat bridge button in the toolbar,\n'
-			'      then "Share this tab with the AI". Then, in a terminal:  cd ~/retinat && claude remote-control'
+			'      then "Share this tab with the AI". Then start Claude as checklist step 6 says\n'
+			'      (cd ~/retinat, then claude --remote-control --permission-mode auto).'
 		)
 	else:
 		lines.append(
-			'To retry: run this command again, reload the self-test tab (or open '
-			f'http://127.0.0.1:{port}/selftest),\n'
-			'          then press the Retinat bridge button and "Share this tab with the AI".'
+			'To retry: run this command again. It opens the self-test tab itself; do not share the relay\'s own\n'
+			'          address by hand (the bridge refuses that).'
 		)
 	return '\n'.join(lines)
 

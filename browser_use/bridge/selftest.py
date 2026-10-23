@@ -190,7 +190,7 @@ function show(s) {
 			(s.before ? ' \\u00b7 button rgb ' + s.before.join(',') + ' \\u2192 ' + (s.after ? s.after.join(',') : '?') : '');
 		next.textContent = s.state === 'pass'
 			? 'Next: open the YouTube video you were given (captions off), press the Retinat bridge button in the toolbar, then "Share this tab with the AI". This tab is no longer shared; you can close it.'
-			: 'To retry: run the setup command again, reload this page, then press the Retinat bridge button and "Share this tab with the AI".';
+			: 'To retry: run the setup command again. It opens this page itself; close this tab first if it is still open.';
 	}
 }
 async function poll() {

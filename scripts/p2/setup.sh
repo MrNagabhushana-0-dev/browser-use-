@@ -34,8 +34,14 @@ fi
 cd "$DIR"
 # The eyes extra (numpy, opencv, faster-whisper, ...) is what lets Retinat watch and hear: without it its MCP server
 # does not start (browser_use/eyes imports numpy).
-say "Installing packages (uv sync --extra eyes; the first time takes a few minutes)"
-uv sync --extra eyes || die "uv sync failed"
+say "Installing packages (the first time takes a few minutes)"
+uv sync || die "uv sync failed"
+# The eyes extra is what lets Retinat see and hear. Its onnxruntime has wheels only for Apple Silicon on macOS 14+;
+# elsewhere it cannot install, and Retinat then cannot start. The bridge itself still works, so say so and go on.
+if ! uv sync --extra eyes; then
+	say "WARNING: the eyes extra did not install on this machine (it needs Apple Silicon on macOS 14 or later, or Linux/Windows x86_64)."
+	say "The bridge self-test below still runs. Retinat's watch tools will not start here until this is fixed."
+fi
 
 say "Writing the extension and waiting for Chrome"
 exec uv run --no-sync python -m browser_use.bridge setup "$@"

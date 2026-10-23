@@ -74,6 +74,12 @@ function globToRegExp(glob) {
 
 // A site is a web origin: scheme://host:port. about:blank has none, so an empty tab needs no leave. Anything that
 // isn't a web page (data:, an opaque origin, chrome:, this extension's own pages) is never a site the AI may use.
+// The relay's own address (http://127.0.0.1:<port>, from settings.relay): its pages are the bridge's, never a site.
+function relayOrigin() {
+	const u = new URL(state.settings.relay);
+	return `http://${u.hostname}:${u.port}`;
+}
+
 function siteOf(url) {
 	if (!url || /^about:(blank|srcdoc)([?#]|$)/.test(url)) return '';
 	try {
@@ -572,6 +578,7 @@ async function share(tabId, why) {
 	const tab = await call(C.tabs, 'get', tabId);
 	const url = tab.pendingUrl || tab.url;
 	if ((url || '').startsWith(C.runtime.getURL(''))) throw new Error("the bridge's own pages are never shared");
+	if (why !== 'self-test' && siteOf(url) === relayOrigin()) throw new Error("the bridge's own address is never shared: it would let the AI reach the relay itself");
 	if (BY_PERSON.has(why)) await allowSite(url, tabId);
 	else if (!allowedUrl(url, tabId)) throw new Error(notAllowed(url, 'the tab was not shared'));
 	state.offered.delete(tabId);
