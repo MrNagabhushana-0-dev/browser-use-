@@ -126,3 +126,26 @@ extension had gone with the rig; the rig was restarted, and the E6 run was not r
      Allow window is opened (the refusal comes before the ask). Before f555102 the same probe opened an Allow window.
    - Not run: the FAIL path on the final code (it passed on 30a4537's worker by the builder's hands-on), Windows,
      and the owner's own Chrome.
+
+## Hooks and completion gate (debt item 1, MEASURED)
+
+- Gate (`scripts/contract/task_complete.py`, fixed in e8faf64): PASS case (real verifier file, recording, measurement
+  object, "E11 DECISION: KEEP") appends one TASK_COMPLETE line; FAIL cases refuse with exit 1 and append nothing: a
+  pending decision ("KEEP, pending the verifier"), an empty verifier file, and a `null` measurement. Run ids match as
+  whole tokens (E1 does not match E10 or E1b). Tests ran against a throwaway memory copy; the real LOOP_MEMORY was not
+  touched. Fixed: the measurement check accepted any parseable JSON, so `null` or `{}` passed.
+- Hook (`.claude/hooks/contract_guard.py`), behaviour checked in a scratch git repo with real staged and modified files:
+  docs/ outside docs/contract/ staged: denied; a measure-script change without the words "correction" and "verifier":
+  denied, and with them: allowed; a multi-file pytest run: denied; the same command after 3 identical failures:
+  denied; an unrelated command: allowed. (An earlier battery of mine used files that were not staged or modified and
+  so tested nothing; it is not counted.)
+- HOLE 1, not small: the hook is NOT installed. `.claude/settings.json` does not exist in this repository, so none of
+  the 4.6 hook rules is enforced in any session here. The install snippet is in the hook's docstring. Installing it
+  changes what every session may run, so it is the owner's call; until then, 4.6 compliance rests on discipline.
+- HOLE 2, inherent to a file check: the gate proves that a verifier file, a recording and a measurement object exist,
+  not that they are right. The verifier file is any non-empty file; the measurement is any non-empty object; the
+  KEEP/REVERT line is written by the agent that ran the experiment, so the gate cannot tell a derived decision from an
+  asserted one. Only the process (a fresh verifier reading the evidence, as the scorers did for B2 to E5) catches this.
+- HOLE 3: nothing forces a "done" claim through the gate. No Stop hook checks for it; a plain-text "done" is not
+  blocked. The gate is enforced only when someone runs it.
+
