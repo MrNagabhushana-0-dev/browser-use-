@@ -300,3 +300,8 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   components: eyes/gate.py and scripts/contract/gate_replay.py (the flapping ablation tool; its numbers stand). The live
   gate log (E5) stays a measurement, not a policy. E6 (3504321, declared on E5) is void with the revert.
   The 4.6 completion gate and the RESERVOIR (E4) are KEPT. Scorer's files: scratchpad/score_E5/.
+- 2026-10-23 COUNTER INTEGRITY CHECK 1 (owner steering): the reservoir erasure counter's defects, fixed in the reservoir,
+  retina (per-item eviction at ingest) and service code. Synthetic cases, MEASURED: held hops 0 (old ~20 s); shared-ring
+  flood 0 (old 190 s); own eviction 5.5 s (15.5 - 10); stuck cursor 9 s then 0 (old 9 s each start). The fixed counter
+  is never above the old, so E4's measured 0 stands (0 erasure lines in its transcript). Verifier: none run (owner
+  steering: one check at a time; the synthetic cases are the test). Commit: see git log (counter fix).

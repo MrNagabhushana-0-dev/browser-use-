@@ -30,26 +30,39 @@ class Reservoir:
 	erased_s: float = 0.0  # all evidence lost past a cursor so far
 	last_erased_s: float = 0.0  # what the latest start found lost
 
-	def start(self, start: float, vid: int, rings: Sequence[Sequence[Any]], page_since: float) -> float:
+	def start(
+		self,
+		start: float,
+		vid: int,
+		rings: Sequence[Sequence[Any]],
+		page_since: float,
+		evicted: dict[int, float] | None = None,
+	) -> float:
 		"""Where a commit for item `vid`, asked at `start`, begins: its cursor, or where the item began, never before the
-		page or BACKFILL back. Counts as erased the item's samples between its cursor and that point (cut by the limit)
-		and the span a full ring evicted past the cursor."""
+		page or BACKFILL back. `rings[0]` is the frame ring: the film's evidence is its frames, so the loss span counts
+		frames only (audio hops keep arriving while a held video is paused, and are not film played). `evicted` maps an
+		item to the newest sample of its own that its ring dropped (the retina keeps it at ingest), so one item's loss is
+		not charged to another. Counts as erased the item's frames between its cursor and the floor (cut by the limit)
+		and what its own eviction took past the cursor; then the cursor moves to the floor, so a loss is counted once."""
 		assert start > 0, start
 		walls = [s.wall for ring in rings for s in ring if s.vid == vid] if vid else []
 		self.last_erased_s = 0.0
-		if not walls:
-			return start
 		floor = max(page_since, start - self.backfill_max_s)
-		since = min(start, max(min(walls), self.cursor.get(vid, 0.0), floor))
-		if vid in self.cursor:
-			cut = [w for w in walls if self.cursor[vid] < w < floor]
+		if vid and vid in self.cursor:
+			# counted even when none of the item's samples is left: a ring that evicted all of them still lost them
+			frame_walls = [s.wall for s in rings[0] if s.vid == vid] if rings else []
+			cut = [w for w in frame_walls if self.cursor[vid] < w < floor]
 			lost = (max(cut) - min(cut)) if len(cut) > 1 else 0.0
-			for ring in rings:
-				maxlen = getattr(ring, 'maxlen', None)
-				if ring and maxlen and len(ring) >= maxlen and ring[0].wall > self.cursor[vid]:
-					lost = max(lost, ring[0].wall - self.cursor[vid])  # a full ring dropped samples past the cursor
+			if evicted and evicted.get(vid, 0.0) > self.cursor[vid]:
+				lost = max(lost, min(evicted[vid], floor) - self.cursor[vid])
+			lost = max(0.0, lost)
 			self.last_erased_s = lost
 			self.erased_s += lost
+			if self.cursor[vid] < floor:
+				self.cursor[vid] = floor  # counted once: the next start looks from here
+		if not walls:
+			return start
+		since = min(start, max(min(walls), self.cursor.get(vid, 0.0), floor))
 		assert since <= start
 		return since
 

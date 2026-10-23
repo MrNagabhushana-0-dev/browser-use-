@@ -83,9 +83,13 @@ extension had gone with the rig; the rig was restarted, and the E6 run was not r
 
 - The keyframe density rule (since..now, per item) shrinks keyframes instead of adding evidence. It lived in E5 only
   and was reverted with E5.
-- The reservoir's erasure counter can over-count (a held video's hops; other items' evicted samples on a shared
-  ring) and can re-count the same loss on a cursor that cannot advance. The E4 measured 0 s stands for those runs, but
-  the counter is not yet trustworthy in general.
+- FIXED (counter integrity check 1, see LOOP_MEMORY): the erasure counter counted held-video hops (frames only now),
+  charged other items' evictions to a shared ring (now per item, at ingest), and re-counted a stuck cursor (the cursor
+  now moves to the floor once counted). Four synthetic cases: held hops 0 (was ~20 s); shared-ring flood 0 (was 190 s);
+  own eviction 5.5 s exactly (15.5 - 10); stuck cursor counted once (9 s, then 0). An early-return bug, found by the
+  own-eviction test, was fixed too. E4's measured 0 s stands: the fixed counter is never above the old one, and E4's
+  transcript holds 0 erasure lines. Still open: `last_erased_s` is a side channel, so two concurrent watches can
+  read each other's value (not seen in any run).
 - The gate closes only on a frame arrival (not when the item changes or ends); E5-only.
 - The gate log is unbounded and synchronous (E5 only).
 - The counter-integrity review and the hooks and ground-truth reviews did not complete (session limit).

@@ -207,7 +207,9 @@ class Eyes:
 		"""Where a watch of item `vid` starting at `start` picks up: the end of the last percept of it, or where it
 		began, up to BACKFILL_MAX_S back. Starting at the call would leave the caller's latency as a blind gap: a beep
 		or a toast between opening a page and the first watch would never be reported."""
-		return self.reservoir.start(start, vid, (self.retina.frames, self.retina.hops), self.retina.page_since)
+		return self.reservoir.start(
+			start, vid, (self.retina.frames, self.retina.hops), self.retina.page_since, evicted=self.retina.evicted
+		)
 
 	def _text_since(self, start: float) -> float:
 		"""Text that appeared after the last percept, on this page, up to BACKFILL_MAX_S back, is still news."""
