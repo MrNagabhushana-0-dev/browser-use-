@@ -156,6 +156,7 @@ function notAllowed(url, more) {
 async function ask(url, tabId) {
 	const site = siteOf(url);
 	if (site === 'null') return `${url} is refused through the extension bridge: only web pages can be opened there`;
+	if (site === relayOrigin()) return `${url} is refused through the extension bridge: the bridge's own address is never shared`;
 	if (state.declined.has(site)) return notAllowed(url, 'they declined it. They can share a tab on it themselves if they change their mind');
 	if (state.asking && state.asking.origin !== site) return notAllowed(url, `another ask (${state.asking.origin}) is waiting for them`);
 	const once = asksEveryTime(site); // asked about every visit: no Always
