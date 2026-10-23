@@ -273,3 +273,11 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   C2 strict 54/142 missed = 38.0% (judgement range 30-47%), lenient 1/142 = 0.7%. Narration: all 88 lines in one batch
   in the final answer, zero text blocks between results, so B measures percept arrival, not narration. Scorer's files:
   scratchpad/score_B2/. Labels: no count-changing disputes.
+- 2026-10-23 E3 SCORED (MEASURED + VERIFIED, scorer a3c32d0870d6d5c62, labels sha256 checked first): A 10,996/min, B
+  3.75/6.46 s (n=38), gaps 0 (overlaps 0.1-0.2 s), cuts 34/34: all reproduced by an independent script. Narration
+  delivered 94 of 98 lines; C1 94/98 = 0.959 (delivered lines 90/94 = 0.957). Four wrong details: a black frame said to
+  show a logo, a red apple called a flower, the rabbit's flank called a rock, a nut called a stick. C2 strict 49/142
+  missed = 34.5%, lenient 2/142 = 1.4% (both at 144.6 s, where the interrupted call left a 4.5 s gap in narration).
+  Judgement sensitivity: 52-54/142 if the undelivered lines and disputed covers are counted. Narration: after each
+  result (median 3.7 s), except the last result, which the retinat_narrate tool did not exist for (tool missing from
+  the client's list, a harness gap). Scorer's files: scratchpad/score_E3/.
