@@ -288,3 +288,15 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   hand held out, a posture, a butterfly 'lands', a head direction reversed). C2 strict 45/143 missed = 31.5% (judgement
   range 23-47%), lenient 1/143 = 0.7% (the bite, label 57, has no line at all). Narration came after each result. Scorer
   files: scratchpad/score_E4/.
+- 2026-10-23 E5 SCORED (MEASURED + VERIFIED, scorer a49fa8e154d529b0a, labels sha256 checked first): A 4,253/min (own
+  code 4,259 with the other span end), B 11.95/18.15 s (n=36), gaps 0, cuts 34/34 (33/34 counting only 'cut->' rows):
+  reproduced. Narration 10/10 results, per result. C1 63/80 = 0.79 (lenient 70/80 = 0.875): the gate-woken windows
+  carry more stale or wrong detail (a feather called a bird, a red butterfly called a flower, the apple core called a
+  crest). C2 strict 71/143 missed = 49.7% (with one duplicate dropped 70/142 = 49.3%), lenient 1/143 = 0.7%. E4 was
+  31.5% strict, 0.7% lenient.
+  E5 DECISION (declared rule: A strictly down AND 2,000-8,600 AND C2 not worse AND gaps 0): A down 60% and in band: yes;
+  gaps 0: yes; C2 strict 31.5% -> 49.7%: NOT NOT-WORSE. REVERT the wake policy (until='gate' and its salient wake,
+  E5 and E6's code in eyes/service.py, retinat/server.py, retinat/tools.py restored to E4's state). Kept as measured
+  components: eyes/gate.py and scripts/contract/gate_replay.py (the flapping ablation tool; its numbers stand). The live
+  gate log (E5) stays a measurement, not a policy. E6 (3504321, declared on E5) is void with the revert.
+  The 4.6 completion gate and the RESERVOIR (E4) are KEPT. Scorer's files: scratchpad/score_E5/.

@@ -51,7 +51,6 @@ from browser_use.browser.capture import capture_screenshot
 from browser_use.eyes import asr, hearing, motion, ocr, sight
 from browser_use.eyes.archive import FrameArchive
 from browser_use.eyes.console import ConsoleLog
-from browser_use.eyes.gate import Gate, GateLog
 from browser_use.eyes.percept import (
 	ItemPercept,
 	Keyframe,
@@ -84,7 +83,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-Until = Literal['time', 'event', 'bored', 'item', 'gate']
+Until = Literal['time', 'event', 'bored', 'item']
 Detail = Literal['glance', 'look', 'study']
 
 # Below this marginal coverage for BORED_WINDOW_S, an item is showing nothing new.
@@ -113,13 +112,6 @@ ARCHIVE_BACKLOG_LIMIT = 150  # unarchived keyframes; the page's ring holds 240
 ARCHIVE_BACKOFF_S = 30.0  # after the page failed to hand over keyframes, archiving leaves it alone this long
 # Keyframes per item on the sheet, by detail.
 KEYFRAMES = {'glance': 4, 'look': 6, 'study': 8}
-# until='gate': the model is woken when the event gate closes an episode, but not sooner than GATE_MIN_S into the call,
-# or once an episode has gone on GATE_FLUSH_S into it; what played meanwhile waits in the reservoir, none of it dropped.
-GATE_MIN_S = 8.0
-GATE_FLUSH_S = 15.0
-# ...and the sheet keeps the density of evidence a gated percept spans: keyframes per second of what it commits, as the
-# event-stopped watches measured (protocol v2b, B2: 88 keyframes over 189.1 s of film)
-GATE_KEYFRAMES_PER_S = 0.465
 
 
 def default_now_path() -> Path:
@@ -179,12 +171,6 @@ class Eyes:
 		self._items_seen = 0
 		# INV-2: per item, the last sample a percept committed; the next watch commits from there (eyes/reservoir.py)
 		self.reservoir = Reservoir(backfill_max_s=BACKFILL_MAX_S)
-		# The always-on event gate over the attended item's per-frame change score (eyes/gate.py), and its log
-		self.gate = Gate()
-		self.gate_log = GateLog(
-			self.now_path.with_name(f'gate-{time.strftime("%Y%m%d-%H%M%S")}.jsonl') if self.now_path is not None else None
-		)
-		self._gate_last: dict[int, FrameSample] = {}  # item id -> the frame the next score is taken against
 		self._last_percept_end = 0.0
 		self._sounds_noted: dict[int, str] = {}  # item id -> the distinct-sounds line last journaled for it
 		self._pages = None
@@ -197,8 +183,6 @@ class Eyes:
 		await self.console.start(self.retina.target_id)
 		if self.now_path is not None and self._update_now not in self.retina._listeners:
 			self.retina.on_batch(self._update_now)
-		if self._feed_gate not in self.retina._listeners:
-			self.retina.on_batch(self._feed_gate)
 		if self.archive is not None and (self._archiver is None or self._archiver.done()):
 			self._archiver = asyncio.create_task(self._archive_loop())
 		return state
@@ -300,37 +284,6 @@ class Eyes:
 			return None  # discrete sounds still coming: the next beep is as unpredictable as the last
 		return f'nothing new for {window:.0f}s (novelty {gain:.3f})'
 
-	def _feed_gate(self, frames: list[FrameSample], hops: list[AudioHop], events: list[RetinaEvent]) -> None:
-		"""Score each new frame of the attended item against the one before (as sight scores frames) and step the gate."""
-		vid = self.retina.attended.get('vid', 0)
-		for f in frames:
-			if not vid or f.vid != vid:
-				continue
-			before = self._gate_last.get(vid)
-			self._gate_last[vid] = f
-			if before is None:
-				continue
-			pair = [before, f]
-			score = float(sight.deltas(sight.grids(pair), sight.colour_grids(pair))[1])
-			was = self.gate.state
-			self.gate.feed(f.wall, score)
-			self.gate_log.write('signal', f.wall, vid=vid, score=round(score, 3), state=self.gate.state)
-			if self.gate.state != was:
-				self.gate_log.write('transition', f.wall, vid=vid, frm=was, to=self.gate.state)
-
-	def _gate_wake(self, start: float, frames: list[FrameSample], hops: list[AudioHop], start_vid: int) -> str | None:
-		"""Why a watch with until='gate' should give the model what it gathered now, or None (asked from GATE_MIN_S on).
-		A salient event (a cut, a new item, a change in sound) wakes it too: the model hears of it within a turn."""
-		salient = self._salient(frames, hops, start_vid)
-		if salient:
-			return salient
-		ended = [e for e in self.gate.episodes if e.end is not None and e.end >= start]
-		if ended:
-			return f'event over (gate: {len(ended)} closed)'
-		if self.gate.state in ('ACTIVE', 'HANGOVER') and time.monotonic() - start >= GATE_FLUSH_S:
-			return f'event going on for {time.monotonic() - start:.0f}s (gate)'
-		return None
-
 	async def watch(self, *args: Any, **kwargs: Any) -> Percept:
 		"""Watch what plays: see `_watch` for the parameters."""
 		self._watching += 1
@@ -361,9 +314,7 @@ class Eyes:
 		"""Watch for up to `seconds`, stopping early per `until`, and return a percept. With a `deadline`, it stops in
 		time to pause and describe what it saw, and says how much of what was asked it watched."""
 		assert seconds > 0, 'seconds must be positive'
-		assert until in ('time', 'event', 'bored', 'item', 'gate'), f'unknown until={until!r}'
-		if until == 'gate':
-			min_seconds = max(min_seconds, GATE_MIN_S)
+		assert until in ('time', 'event', 'bored', 'item'), f'unknown until={until!r}'
 		dl = deadline or Deadline.unbounded()
 		if not self.retina.running:
 			await self.open()
@@ -398,8 +349,6 @@ class Eyes:
 				why = self._salient(frames, hops, start_vid)
 			elif until == 'bored':
 				why = self._bored(frames, hops, start_vid)
-			elif until == 'gate':
-				why = self._gate_wake(start, frames, hops, start_vid)
 			if why:
 				reason = why
 				break
@@ -409,8 +358,6 @@ class Eyes:
 		# percept was done left out what played while it was built (0.2-0.5 s a call, measured: real cuts fell there)
 		taken_frames, taken_hops, _ = self._since(since)
 		erased = self.reservoir.last_erased_s
-		if until == 'gate' and keyframes is None:
-			keyframes = max(KEYFRAMES[detail], round(GATE_KEYFRAMES_PER_S * (time.monotonic() - since)))
 		percept = await self.perceive(
 			since=since,
 			detail=detail,

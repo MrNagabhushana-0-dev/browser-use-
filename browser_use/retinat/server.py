@@ -486,8 +486,6 @@ class RetinatServer(BrowserUseServer):
 				blocks.append(types.ImageContent(type='image', data=base64.b64encode(sheet).decode(), mime_type='image/jpeg'))
 			return blocks
 		if name == 'retinat_record':
-			if args.get('narration') and str(args['narration']).strip():
-				self._narration.take(str(args['narration']))  # the last result's narration, given with the stop
 			return await self._record(str(args['action']), int(args.get('framerate', 8)))
 		if name == 'retinat_narrate':
 			text = str(args.get('text') or '').strip()

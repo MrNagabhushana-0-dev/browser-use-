@@ -192,13 +192,7 @@ def _browser_tools() -> list['types.Tool']:
 				'type': 'object',
 				'properties': {
 					'seconds': {'type': 'number', 'default': 12, 'minimum': 1, 'maximum': 45},
-					'until': {
-						'type': 'string',
-						'enum': ['bored', 'event', 'time', 'item', 'gate'],
-						'default': 'bored',
-						'description': 'gate: woken by a cut, a new item or a change in sound, or by the event gate (an event '
-						'over, or one going on 15 s), never before 8 s; nothing played meanwhile is dropped.',
-					},
+					'until': {'type': 'string', 'enum': ['bored', 'event', 'time', 'item'], 'default': 'bored'},
 					'detail': _DETAIL,
 					'hold': {'type': 'boolean', 'default': True, 'description': 'Pause when done so nothing plays unseen.'},
 					'narrate': {
@@ -489,7 +483,6 @@ def _browser_tools() -> list['types.Tool']:
 				'properties': {
 					'action': {'type': 'string', 'enum': ['start', 'stop']},
 					'framerate': {'type': 'integer', 'default': 8, 'minimum': 1, 'maximum': 30},
-					'narration': {'type': 'string', 'description': 'With stop, in live narration: the last result narrated.'},
 				},
 				'required': ['action'],
 			},
