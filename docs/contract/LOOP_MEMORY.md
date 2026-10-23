@@ -281,3 +281,10 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   Judgement sensitivity: 52-54/142 if the undelivered lines and disputed covers are counted. Narration: after each
   result (median 3.7 s), except the last result, which the retinat_narrate tool did not exist for (tool missing from
   the client's list, a harness gap). Scorer's files: scratchpad/score_E3/.
+- 2026-10-23 E4 SCORED (MEASURED + VERIFIED, scorer a69b92184f0f63abe, labels sha256 checked first): A 10,691/min
+  (own code 10,711, 0.2% apart), B 3.9/6.92 s (n=39), gaps 0, cuts 34/34: reproduced. Narration: 101 lines, 97 delivered
+  (results 1-24, log = transcript); the last result's 4 lines were never delivered (retinat_narrate missing). C1 95/101 =
+  0.941 (delivered 91/97 = 0.938). Six wrong or unconfirmed lines (a logo on black, motion read into a slow push-in, a
+  hand held out, a posture, a butterfly 'lands', a head direction reversed). C2 strict 45/143 missed = 31.5% (judgement
+  range 23-47%), lenient 1/143 = 0.7% (the bite, label 57, has no line at all). Narration came after each result. Scorer
+  files: scratchpad/score_E4/.
