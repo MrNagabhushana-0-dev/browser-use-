@@ -149,3 +149,22 @@ extension had gone with the rig; the rig was restarted, and the E6 run was not r
 - HOLE 3: nothing forces a "done" claim through the gate. No Stop hook checks for it; a plain-text "done" is not
   blocked. The gate is enforced only when someone runs it.
 
+## Ground-truth tool review (debt item 2, MEASURED)
+
+- Reviewed: the alignment matching and offset search (`_match`, `align`), freeze and its validation, the label schema
+  (`Labels`, `Event`), the cut scoring and detection (`_scores`, `detect_cuts`), and the frame reader (`_frames`).
+  Not reviewed in depth: the region finder (`_find_roi`), the sheet tile selection (read only from its comment), and the
+  template command. Those are the gaps; the tool's behaviour on the recordings is measured elsewhere in this document.
+- Defect found and fixed (`ground_truth.py`, this commit): the label validator and three safety checks were `assert`
+  statements. Python strips asserts under `-O`, so the schema stopped validating under that flag. MEASURED: the committed
+  pre-fix tool froze a label set with events out of order and an inconsistent film_s under `-O` (exit 0). The fixed
+  tool rejects it under `-O` (exit 1, "events must be in rec_s order"). The overwrite guard for templates and the
+  cuts-file identity check in align are explicit errors now too.
+- Labels: NOT changed. The frozen labels re-freeze to sha256 23db2c52559f45fc87a45491d987535b7f0d77cf2e999661548ec610de0799d4
+  under the fixed tool (a copy, MEASURED). The fix changes only which invalid inputs are refused, never what a valid
+  label file means. No re-labelling is needed and none was done.
+- Not a defect, documented: freeze does not record its own hash (the guard is the LOOP_MEMORY line, a process rule); a
+  label file frozen while its recording is absent from the machine carries no recording hash (freeze prints that).
+- Measurement confidence: no reported M2 number changes. The cut detector, the alignment and the cuts files are
+  unchanged; the labels are unchanged; the scores in LOOP_MEMORY stand.
+

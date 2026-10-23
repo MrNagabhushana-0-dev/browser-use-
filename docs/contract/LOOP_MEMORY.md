@@ -310,3 +310,8 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   -> (47,125,50). A CDP probe of the relay's own address is refused with "the bridge's own address is never shared" and
   opens no window (before f555102 it opened one). Found and fixed in the same check: the refusal was reached only at share
   time; now also at ask time. FAIL path on the final code not re-run.
+- 2026-10-23 DEBT ITEMS (owner steering): (1) completion gate verified (PASS and FAIL shown; measure check tightened, e8faf64);
+  hook behaviour checked in a scratch repo; the hook is NOT installed in this repository (no .claude/settings.json), so 4.6
+  hook rules are not enforced here; recorded in M2_CLOSEOUT.md. (2) ground_truth.py review: validation asserts replaced
+  by explicit errors (labels were stripped under python -O: a bad label set froze before, is refused now); frozen labels
+  re-freeze to 23db2c52...; no label or measured number changes.

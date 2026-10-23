@@ -399,7 +399,8 @@ def cmd_sheets(args: argparse.Namespace) -> None:
 	size, duration = _probe(args.recording)
 	if args.cuts:
 		cuts = json.loads(Path(args.cuts).read_text())
-		assert Path(cuts['recording']).resolve() == Path(args.recording).resolve(), 'cuts.json is for another file'
+		if not (Path(cuts['recording']).resolve() == Path(args.recording).resolve()):
+			raise ValueError('cuts.json is for another file')
 		cut_times = [c['rec_s'] for c in cuts['cuts']]
 	if args.roi == 'full':
 		roi = {'x': 0, 'y': 0, 'w': size[0], 'h': size[1]}
@@ -494,8 +495,10 @@ def cmd_sheets(args: argparse.Namespace) -> None:
 
 
 def _not_placeholder(v: str) -> str:
-	assert v.strip(), 'must not be empty'
-	assert PLACEHOLDER not in v, f'still holds the template placeholder "{PLACEHOLDER}"'
+	if not (v.strip()):
+		raise ValueError('must not be empty')
+	if not (PLACEHOLDER not in v):
+		raise ValueError(f'still holds the template placeholder "{PLACEHOLDER}"')
 	return v
 
 
@@ -529,28 +532,28 @@ class Labels(BaseModel):
 	@model_validator(mode='after')
 	def _consistent(self) -> 'Labels':
 		times = [e.rec_s for e in self.events]
-		assert times == sorted(times), 'events must be in rec_s order'
+		if not (times == sorted(times)):
+			raise ValueError('events must be in rec_s order')
 		seen = set()
 		for e in self.events:
 			key = (e.rec_s, e.kind, e.what)
-			assert key not in seen, f'duplicate event {key}'
+			if not (key not in seen):
+				raise ValueError(f'duplicate event {key}')
 			seen.add(key)
 			if self.offset_s is None:
-				assert e.film_s is None, f'film_s given at rec {e.rec_s} but offset_s is null (no alignment)'
-			elif e.film_s is not None:
-				assert abs(e.film_s - (e.rec_s - self.offset_s)) <= 0.05, (
-					f'film_s {e.film_s} != rec_s {e.rec_s} - offset_s {self.offset_s} (+-0.05)'
-				)
-			if self.span_rec_s:
-				assert self.span_rec_s[0] - 1e-6 <= e.rec_s <= self.span_rec_s[1] + 1e-6, (
-					f'event at {e.rec_s} is outside span_rec_s {self.span_rec_s}'
-				)
+				if e.film_s is not None:
+					raise ValueError(f'film_s given at rec {e.rec_s} but offset_s is null (no alignment)')
+			elif e.film_s is not None and abs(e.film_s - (e.rec_s - self.offset_s)) > 0.05:
+				raise ValueError(f'film_s {e.film_s} != rec_s {e.rec_s} - offset_s {self.offset_s} (+-0.05)')
+			if self.span_rec_s and not (self.span_rec_s[0] - 1e-6 <= e.rec_s <= self.span_rec_s[1] + 1e-6):
+				raise ValueError(f'event at {e.rec_s} is outside span_rec_s {self.span_rec_s}')
 		return self
 
 
 def cmd_template(args: argparse.Namespace) -> None:
 	out = Path(args.out)
-	assert not out.exists() or args.force, f'{out} exists (use --force to overwrite)'
+	if not (not out.exists() or args.force):
+		raise ValueError(f'{out} exists (use --force to overwrite)')
 	example = {
 		'rec_s': 0.0,
 		'film_s': None if args.offset is None else round(0.0 - args.offset, 3),
