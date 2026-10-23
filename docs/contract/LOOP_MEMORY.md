@@ -305,3 +305,8 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   flood 0 (old 190 s); own eviction 5.5 s (15.5 - 10); stuck cursor 9 s then 0 (old 9 s each start). The fixed counter
   is never above the old, so E4's measured 0 stands (0 erasure lines in its transcript). Verifier: none run (owner
   steering: one check at a time; the synthetic cases are the test). Commit: see git log (counter fix).
+- 2026-10-23 INTEGRITY CHECK 2 (owner steering): bridge self-test re-run hands-on on the final code (f555102, extension
+  0.6.1), owner's install path (setup, exit 0): PASS, look 1 55.7 ms, click 136.9 ms, look 2 51.4 ms, button rgb (158,158,158)
+  -> (47,125,50). A CDP probe of the relay's own address is refused with "the bridge's own address is never shared" and
+  opens no window (before f555102 it opened one). Found and fixed in the same check: the refusal was reached only at share
+  time; now also at ask time. FAIL path on the final code not re-run.

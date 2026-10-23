@@ -107,7 +107,22 @@ extension had gone with the rig; the rig was restarted, and the E6 run was not r
 
 - Protocol v3: the P2 baseline on the owner's own Chrome, with a real YouTube video. Not run. The checklist sets it up;
   it is the owner's install that gates it.
-- The bridge self-test on the final worker.js: the rig carries the new code (grep-verified), but no hands-on re-run
-  of the self-test followed the 30a4537 fixes.
-- Windows and the macOS setup path: not run end to end (setup.ps1 never ran).
-- Bridge security review re-check of the fix: the relay-address refusal is by reading and syntax only.
+- Windows and the macOS setup path: not run end to end (setup.ps1 never ran). The macOS path needs Apple Silicon on macOS 14+ for the eyes extra; not run on a Mac.
+
+## Integrity checks after the close-out (owner steering, one at a time)
+
+1. Counter integrity: the reservoir erasure counter is FIXED (commit 59472e8): frames-only loss, per-item eviction,
+   the cursor moves once a loss is counted. Synthetic cases (MEASURED): held hops 0 (old ~20 s), shared-ring flood 0
+   (old 190 s), own eviction 5.5 s exact, stuck cursor 9 s once. E4's measured 0 s stands (the fixed counter is never
+   above the old; E4's transcript has 0 erasure lines). One residual: `last_erased_s` is a side channel.
+2. Bridge self-test on the final code (commit f555102, extension 0.6.1), MEASURED with the owner's install path in a
+   container on a separate display and port (Xvfb :97, relay 9444, setup's own browser):
+   - `python -m browser_use.bridge setup --port 9444`, exit code 0; the log says:
+     "Self-test 1 PASS: look 1 55.7 ms, click 136.9 ms, look 2 51.4 ms, button rgb (158, 158, 158) -> (47, 125, 50)";
+     "PASS  self-test through relay -> extension -> tab". Earlier runs on 0.6.0 gave the same PASS (look 1 111.8 ms, click
+     137.8 ms, look 2 61.1 ms, exit 0).
+   - The relay-address refusal, probed as a CDP client against the final relay: Target.createTarget to
+     http://127.0.0.1:9444/json/list and to /selftest both return "the bridge's own address is never shared"; no
+     Allow window is opened (the refusal comes before the ask). Before f555102 the same probe opened an Allow window.
+   - Not run: the FAIL path on the final code (it passed on 30a4537's worker by the builder's hands-on), Windows,
+     and the owner's own Chrome.
