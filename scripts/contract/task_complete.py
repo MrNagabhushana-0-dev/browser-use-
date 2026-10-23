@@ -77,10 +77,12 @@ def check_measure(path: Path) -> Check:
 	if not path.is_file():
 		return Check('measurement JSON', False, f'{path} is not an existing file')
 	try:
-		json.loads(path.read_text(encoding='utf-8'))
+		value = json.loads(path.read_text(encoding='utf-8'))
 	except (OSError, ValueError) as exc:
 		return Check('measurement JSON', False, f'{path} is not readable JSON ({type(exc).__name__}: {str(exc)[:80]})')
-	return Check('measurement JSON', True, f'{path} ({path.stat().st_size} bytes, parses)')
+	if not isinstance(value, (dict, list)) or not value:
+		return Check('measurement JSON', False, f'{path} holds no measurement (an empty or non-object JSON value)')
+	return Check('measurement JSON', True, f'{path} ({path.stat().st_size} bytes, parses to a non-empty object)')
 
 
 def decision_line(memory_text: str, run_id: str) -> str | None:
