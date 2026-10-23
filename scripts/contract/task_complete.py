@@ -16,9 +16,9 @@ Preconditions:
 	verifier    --verifier FILE exists, is a regular file and is non-empty (the verifier agent's output).
 	recording   --recording PATH exists (a file, or a directory of frames); a zero-byte file does not count.
 	measure     --measure FILE exists and is a non-empty JSON document (it must parse).
-	decision    the memory file has a line holding the whole word KEEP or REVERT (upper case) and RUN_ID as a whole
-	            token (E1 does not match E10 or E1-b). The matching line is printed so you can audit it: a line like
-	            "E6 declared: KEEP if ..." would match too, so read it.
+	decision    the memory file has a line that states a final KEEP or REVERT (upper case) right next to RUN_ID, as
+	            a whole token (E1 does not match E10 or E1-b): "RUN_ID DECISION: KEEP", "RUN_ID: REVERT" or "KEEP RUN_ID".
+	            "KEEP, pending the verifier" and "KEEP if ..." do not count. The matching line is printed: read it.
 
 Behaviour:
 	--memory FILE  override the memory file (default docs/contract/LOOP_MEMORY.md of this repository); use a throwaway
@@ -45,7 +45,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_MEMORY = REPO / 'docs' / 'contract' / 'LOOP_MEMORY.md'
 TOKEN_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:+-]*$')
-DECISION_RE = re.compile(r'\b(?:KEEP|REVERT)\b')
 GIT_TIMEOUT_S = 10
 
 
@@ -85,12 +84,18 @@ def check_measure(path: Path) -> Check:
 
 
 def decision_line(memory_text: str, run_id: str) -> str | None:
-	"""First line holding KEEP or REVERT and the run id as a whole token, else None."""
-	named = re.compile(rf'(?<![A-Za-z0-9_-])(?:{re.escape(run_id)})(?![A-Za-z0-9_]|[-.][A-Za-z0-9])')
+	"""First line that states a final KEEP or REVERT for the run id, else None.
+
+	The id must be a whole token and the verdict must sit next to it: "E2 DECISION: KEEP", "E2: REVERT", "KEEP E2".
+	A verdict that is still pending ("KEEP, pending the verifier") or conditional ("KEEP if ...") does not count.
+	"""
+	named = rf'(?<![A-Za-z0-9_-])(?:{re.escape(run_id)})(?![A-Za-z0-9_]|[-.][A-Za-z0-9])'
+	verdict = r'(?:KEEP|REVERT)\b(?!\W*pending\b)(?!\s+(?:if|when|unless)\b)'
+	asserted = re.compile(rf'{named}\W{{0,3}}(?:DECISION\W{{0,3}})?{verdict}|\b{verdict}\W{{0,3}}{named}')
 	for line in memory_text.splitlines():
 		if line.startswith('TASK_COMPLETE '):
 			continue
-		if DECISION_RE.search(line) and named.search(line):
+		if asserted.search(line):
 			return line.strip()
 	return None
 
@@ -102,7 +107,7 @@ def check_decision(memory: Path, run_id: str) -> Check:
 		return Check('KEEP/REVERT line', False, f'cannot read {memory}: {exc.strerror or exc}')
 	line = decision_line(text, run_id)
 	if line is None:
-		return Check('KEEP/REVERT line', False, f'no line in {memory.name} has KEEP or REVERT and names {run_id}')
+		return Check('KEEP/REVERT line', False, f'no line in {memory.name} states a final KEEP or REVERT for {run_id}')
 	shown = line if len(line) <= 110 else line[:107] + '...'
 	return Check('KEEP/REVERT line', True, f'{memory.name}: "{shown}"')
 
@@ -120,7 +125,9 @@ def git_head_short(repo: Path) -> str | None:
 
 def completion_line(milestone: str, run_id: str, head: str, verifier: str, recording: str) -> str:
 	stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-	return f'TASK_COMPLETE {milestone} {run_id} {head} {stamp} verifier={shlex.quote(verifier)} recording={shlex.quote(recording)}'
+	return (
+		f'TASK_COMPLETE {milestone} {run_id} {head} {stamp} verifier={shlex.quote(verifier)} recording={shlex.quote(recording)}'
+	)
 
 
 def append_once(memory: Path, milestone: str, run_id: str, line: str) -> str | None:
@@ -177,7 +184,9 @@ def main(argv: list[str] | None = None) -> int:
 	try:
 		existing = append_once(args.memory, args.milestone, args.run_id, line)
 	except OSError as exc:
-		print(f'NOT COMPLETE: all preconditions met but {args.memory} is not appendable ({exc.strerror or exc}); nothing appended')
+		print(
+			f'NOT COMPLETE: all preconditions met but {args.memory} is not appendable ({exc.strerror or exc}); nothing appended'
+		)
 		return 1
 	if existing is not None:
 		print(f'ALREADY RECORDED in {args.memory}: {existing}')
