@@ -323,3 +323,12 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   A rises by a similar factor and falls outside the 2,000-8,600 tok/min band. Rate limits: none found in Retinat; the
   Tor cooldown (10 s, Tor's rule), the reflex cooldown (the owner's setting), the archive backlog cap and the 512 KB JSON
   parse cap were kept. The bridge's consent holds were kept too.
+- 2026-10-30 OWNER: "remove all limiting; name it eye mcp unlimited; start server". DONE: .mcp.json server key is
+  eye-mcp-unlimited; all 25 schema maxima and the swipe fraction maximum removed from browser_use/retinat/tools.py (minimums
+  kept). MEASURED: the server starts (MCP initialize answered, serverInfo retinat 0.13.10) and lists 28 tools. NOT removed,
+  and why: the 60 s per-call limit of the MCP client (the server cannot lift it; a call past it is dropped by the client);
+  the call budget of 50 s, which stops a call early so the client gets an answer (already overridable with
+  BROWSER_USE_MCP_CALL_BUDGET_S); the JSON parse cap (512 KB, keeps secrets out of logs); Tor's 10 s circuit cooldown
+  (Tor's rule); the reflex cooldown (the owner's setting); the bridge consent holds (payments, deletes, grants on the
+  owner's own browser). Note: a stdio server is started by its client from .mcp.json; a standalone process cannot keep
+  stdin open for another client.

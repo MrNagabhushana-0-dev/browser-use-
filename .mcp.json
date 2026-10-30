@@ -1,6 +1,6 @@
 {
 	"mcpServers": {
-		"eyes": {
+		"eye-mcp-unlimited": {
 			"command": "bash",
 			"args": ["bin/mcp-serve.sh", "browser_use.retinat"],
 			"env": {"BROWSER_USE_PROXY_CA_CERT": "${BROWSER_USE_PROXY_CA_CERT:-/root/.ccr/agent-proxy-ca.crt}"}

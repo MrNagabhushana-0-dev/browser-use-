@@ -54,7 +54,7 @@ def _control_tools() -> list['types.Tool']:
 				'properties': {
 					**point,
 					'button': {'type': 'string', 'enum': ['left', 'middle', 'right'], 'default': 'left'},
-					'count': {'type': 'integer', 'minimum': 1, 'maximum': 3, 'default': 1},
+					'count': {'type': 'integer', 'minimum': 1, 'default': 1},
 					'expect': {
 						'type': 'string',
 						'description': "Text in the target app's name or window title; the click is refused if it lands elsewhere.",
@@ -96,7 +96,7 @@ def _control_tools() -> list['types.Tool']:
 				'properties': {
 					**point,
 					'direction': {'type': 'string', 'enum': ['up', 'down', 'left', 'right'], 'default': 'down'},
-					'amount': {'type': 'integer', 'minimum': 1, 'maximum': 30, 'default': 3},
+					'amount': {'type': 'integer', 'minimum': 1, 'default': 3},
 				},
 				'required': ['x', 'y'],
 			},
@@ -155,7 +155,7 @@ def _desktop_tools() -> list['types.Tool']:
 			),
 			input_schema={
 				'type': 'object',
-				'properties': {'seconds': {'type': 'number', 'default': 8, 'minimum': 1, 'maximum': 45}},
+				'properties': {'seconds': {'type': 'number', 'default': 8, 'minimum': 1}},
 			},
 			annotations=ro,
 		),
@@ -191,7 +191,7 @@ def _browser_tools() -> list['types.Tool']:
 			input_schema={
 				'type': 'object',
 				'properties': {
-					'seconds': {'type': 'number', 'default': 12, 'minimum': 1, 'maximum': 45},
+					'seconds': {'type': 'number', 'default': 12, 'minimum': 1},
 					'until': {'type': 'string', 'enum': ['bored', 'event', 'time', 'item'], 'default': 'bored'},
 					'detail': _DETAIL,
 					'hold': {'type': 'boolean', 'default': True, 'description': 'Pause when done so nothing plays unseen.'},
@@ -229,8 +229,8 @@ def _browser_tools() -> list['types.Tool']:
 			input_schema={
 				'type': 'object',
 				'properties': {
-					'max_screens': {'type': 'integer', 'default': 25, 'minimum': 1, 'maximum': 80},
-					'keyframes': {'type': 'integer', 'default': 6, 'minimum': 1, 'maximum': 16},
+					'max_screens': {'type': 'integer', 'default': 25, 'minimum': 1},
+					'keyframes': {'type': 'integer', 'default': 6, 'minimum': 1},
 					'from_screen': {
 						'type': 'number',
 						'default': 0,
@@ -250,9 +250,9 @@ def _browser_tools() -> list['types.Tool']:
 			input_schema={
 				'type': 'object',
 				'properties': {
-					'items': {'type': 'integer', 'default': 5, 'minimum': 1, 'maximum': 30},
-					'max_seconds': {'type': 'number', 'default': 12, 'minimum': 2, 'maximum': 45},
-					'min_seconds': {'type': 'number', 'default': 3, 'minimum': 0.5, 'maximum': 30},
+					'items': {'type': 'integer', 'default': 5, 'minimum': 1},
+					'max_seconds': {'type': 'number', 'default': 12, 'minimum': 2},
+					'min_seconds': {'type': 'number', 'default': 3, 'minimum': 0.5},
 					'detail': _DETAIL,
 				},
 			},
@@ -278,7 +278,7 @@ def _browser_tools() -> list['types.Tool']:
 				'type': 'object',
 				'properties': {
 					'text': {'type': 'string'},
-					'limit': {'type': 'integer', 'default': 5, 'minimum': 1, 'maximum': 20},
+					'limit': {'type': 'integer', 'default': 5, 'minimum': 1},
 				},
 				'required': ['text'],
 			},
@@ -293,9 +293,9 @@ def _browser_tools() -> list['types.Tool']:
 			input_schema={
 				'type': 'object',
 				'properties': {
-					'screens': {'type': 'number', 'minimum': -50, 'maximum': 50},
+					'screens': {'type': 'number', 'minimum': -50},
 					'to': {'type': 'string'},
-					'nth': {'type': 'integer', 'default': 1, 'minimum': 1, 'maximum': 20},
+					'nth': {'type': 'integer', 'default': 1, 'minimum': 1},
 				},
 			},
 		),
@@ -351,7 +351,7 @@ def _browser_tools() -> list['types.Tool']:
 				'type': 'object',
 				'properties': {
 					'direction': {'type': 'string', 'enum': ['up', 'down', 'left', 'right'], 'default': 'up'},
-					'fraction': {'type': 'number', 'default': 0.55, 'minimum': 0.05, 'maximum': 0.9},
+					'fraction': {'type': 'number', 'default': 0.55, 'minimum': 0.05},
 				},
 			},
 		),
@@ -391,7 +391,7 @@ def _browser_tools() -> list['types.Tool']:
 				'properties': {
 					't0': {'type': 'number', 'minimum': 0},
 					't1': {'type': 'number', 'minimum': 0},
-					'frames': {'type': 'integer', 'default': 4, 'minimum': 1, 'maximum': 8},
+					'frames': {'type': 'integer', 'default': 4, 'minimum': 1},
 					'item': {'type': 'integer', 'description': 'item id from a watch/browse percept; default: the one attended'},
 				},
 				'required': ['t0', 't1'],
@@ -410,7 +410,7 @@ def _browser_tools() -> list['types.Tool']:
 				'type': 'object',
 				'properties': {
 					'query': {'type': 'string', 'description': 'what to look for, in English'},
-					'frames': {'type': 'integer', 'default': 4, 'minimum': 1, 'maximum': 8},
+					'frames': {'type': 'integer', 'default': 4, 'minimum': 1},
 					'item': {'type': 'integer', 'description': 'limit to one item id from a percept'},
 				},
 				'required': ['query'],
@@ -427,7 +427,7 @@ def _browser_tools() -> list['types.Tool']:
 			),
 			input_schema={
 				'type': 'object',
-				'properties': {'limit': {'type': 'integer', 'default': 20, 'minimum': 1, 'maximum': 100}},
+				'properties': {'limit': {'type': 'integer', 'default': 20, 'minimum': 1}},
 			},
 			annotations=ro,
 		),
@@ -446,9 +446,9 @@ def _browser_tools() -> list['types.Tool']:
 					'since': {'type': 'integer', 'default': 0, 'description': 'Only requests after this #n (the cursor).'},
 					'only': {'type': 'string', 'enum': ['all', 'failed', 'api'], 'default': 'all'},
 					'pattern': {'type': 'string', 'description': 'A regular expression the URL must match.'},
-					'limit': {'type': 'integer', 'default': 30, 'minimum': 1, 'maximum': 200},
+					'limit': {'type': 'integer', 'default': 30, 'minimum': 1},
 					'body': {'type': 'integer', 'description': 'Return the response body of request #n instead.'},
-					'max_chars': {'type': 'integer', 'default': 3000, 'minimum': 200, 'maximum': 20000},
+					'max_chars': {'type': 'integer', 'default': 3000, 'minimum': 200},
 				},
 			},
 			annotations=ro,
@@ -466,7 +466,7 @@ def _browser_tools() -> list['types.Tool']:
 					'since': {'type': 'integer', 'default': 0, 'description': 'Only entries after this #n (the cursor).'},
 					'level': {'type': 'string', 'enum': ['all', 'warning', 'error'], 'default': 'all'},
 					'pattern': {'type': 'string', 'description': 'A regular expression the text must match.'},
-					'limit': {'type': 'integer', 'default': 30, 'minimum': 1, 'maximum': 200},
+					'limit': {'type': 'integer', 'default': 30, 'minimum': 1},
 				},
 			},
 			annotations=ro,
@@ -482,7 +482,7 @@ def _browser_tools() -> list['types.Tool']:
 				'type': 'object',
 				'properties': {
 					'action': {'type': 'string', 'enum': ['start', 'stop']},
-					'framerate': {'type': 'integer', 'default': 8, 'minimum': 1, 'maximum': 30},
+					'framerate': {'type': 'integer', 'default': 8, 'minimum': 1},
 				},
 				'required': ['action'],
 			},
@@ -517,7 +517,6 @@ def _browser_tools() -> list['types.Tool']:
 						'type': 'integer',
 						'default': 240,
 						'minimum': 120,
-						'maximum': 1920,
 						'description': "How wide the picture {from: 'screen'} reads. 240 sees a game's player and "
 						'obstacles; ask for more to read small things (an on-screen key, a score), at a cost each frame.',
 					},
@@ -534,7 +533,7 @@ def _browser_tools() -> list['types.Tool']:
 			),
 			input_schema={
 				'type': 'object',
-				'properties': {'timeout': {'type': 'number', 'default': 30, 'minimum': 0.1, 'maximum': 50}},
+				'properties': {'timeout': {'type': 'number', 'default': 30, 'minimum': 0.1}},
 			},
 			annotations=ro,
 		),
@@ -560,7 +559,6 @@ def _browser_tools() -> list['types.Tool']:
 						'type': 'number',
 						'default': 250,
 						'minimum': 17,
-						'maximum': 5000,
 						'description': 'Game time to play, played at about real speed (a frame each 1/60 s).',
 					},
 					'tap': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Keys pressed for the first ~50 ms.'},
@@ -588,7 +586,6 @@ def _browser_tools() -> list['types.Tool']:
 						'type': 'number',
 						'default': 60,
 						'minimum': 10,
-						'maximum': 60,
 						'description': 'Frames drawn per second of game time. Lower (20-30) on pages slow to draw: same game '
 						'time, fewer frames, each a longer tick.',
 					},
@@ -608,7 +605,7 @@ def _browser_tools() -> list['types.Tool']:
 				'type': 'object',
 				'properties': {
 					'url': {'type': 'string'},
-					'max_pages': {'type': 'integer', 'default': 25, 'minimum': 1, 'maximum': 100},
+					'max_pages': {'type': 'integer', 'default': 25, 'minimum': 1},
 				},
 				'required': ['url'],
 			},
