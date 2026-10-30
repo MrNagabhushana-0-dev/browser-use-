@@ -43,7 +43,7 @@ class NarrationLog:
 		assert self.due is not None
 		return (
 			f'Narrate watch result {self.due["n"]} (covering {self.due["covering"]}) first: pass what its pictures showed as '
-			'narration="[m:ss] what is seen" lines (one per visual event) with this call, or with retinat_narrate if you '
+			'narration="[m:ss] what is seen" lines (one per visual event) with this call, or with eye_narrate if you '
 			'are not watching again. Nothing was watched.'
 		)
 

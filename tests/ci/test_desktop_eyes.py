@@ -74,7 +74,7 @@ async def test_desktop_eyes_see_a_window_change_colour_as_a_cut(display, monkeyp
 		server.stop()
 
 
-async def test_retinat_lists_desktop_tools_only_when_desktop_eyes_are_on(display, monkeypatch):
+async def test_eye_lists_desktop_tools_only_when_desktop_eyes_are_on(display, monkeypatch):
 	import base64
 	import io
 
@@ -93,9 +93,9 @@ async def test_retinat_lists_desktop_tools_only_when_desktop_eyes_are_on(display
 	monkeypatch.setenv('BROWSER_USE_DESKTOP_EYES', '1')
 	monkeypatch.setenv('DISPLAY', display)
 	server = RetinatServer()
-	assert {'retinat_desktop_look', 'retinat_desktop_watch'} <= await names(server)
+	assert {'eye_desktop_look', 'eye_desktop_watch'} <= await names(server)
 	handler = server.server.get_request_handler('tools/call')
-	result = await handler.handler(None, types.CallToolRequestParams(name='retinat_desktop_look', arguments={}))  # type: ignore[arg-type]
+	result = await handler.handler(None, types.CallToolRequestParams(name='eye_desktop_look', arguments={}))  # type: ignore[arg-type]
 	assert isinstance(result, types.CallToolResult), result
 	images = [b for b in result.content if isinstance(b, types.ImageContent)]
 	assert images, result.content

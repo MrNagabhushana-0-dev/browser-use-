@@ -60,7 +60,7 @@ def measure(path: str, edits: str | None = None, transcript: str | None = None) 
 		for line in open(transcript):
 			msg = json.loads(line).get('message') or {}
 			for block in msg.get('content') or [] if isinstance(msg.get('content'), list) else []:
-				if block.get('type') == 'tool_use' and block.get('name', '').endswith(('retinat_watch', 'retinat_narrate')):
+				if block.get('type') == 'tool_use' and block.get('name', '').endswith(('eye_watch', 'eye_narrate', 'retinat_watch', 'retinat_narrate')):
 					calls.append(
 						(
 							block['name'].rsplit('_', 1)[-1],

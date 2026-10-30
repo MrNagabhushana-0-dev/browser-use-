@@ -289,7 +289,7 @@ class DesktopControl:
 		if self.stopped:
 			raise Refused(
 				'the person pressed Escape, which stops the AI on this desktop; ask them to let you carry on '
-				'(retinat_desktop_request_access)'
+				'(eye_desktop_request_access)'
 			)
 		quiet = self.person.quiet_for()
 		if quiet < self.resume_after_s:
@@ -374,7 +374,7 @@ class DesktopControl:
 			raise Refused(
 				f'Not clicked: ({x:.0f}, {y:.0f}) is in "{app.app}"'
 				+ (f' ("{app.title}")' if app.title else '')
-				+ f', not "{expect}". Look again (retinat_desktop_look) and click where it is now.'
+				+ f', not "{expect}". Look again (eye_desktop_look) and click where it is now.'
 			)
 		before = await asyncio.to_thread(self._signature)
 		await self._glide(sx, sy)

@@ -5,19 +5,19 @@ indices, HTML, extracted text. Retinat is its vision-first sibling. Every tool a
 the page *looks like* and *sounds like*, compressed for a model that takes images and text a
 turn at a time:
 
-- `retinat_watch` / `retinat_browse`: a playing video or a short-video feed, from the video's own
+- `eye_watch` / `eye_browse`: a playing video or a short-video feed, from the video's own
   frames and sound (heard even when muted), as one sheet plus a timeline and transcript.
-- `retinat_look` / `retinat_scan`: any page as the compositor draws it - canvas, WebGL, CSS
+- `eye_look` / `eye_scan`: any page as the compositor draws it - canvas, WebGL, CSS
   animation - one frame, or the whole page scrolled top to bottom as a few covering keyframes.
-- `retinat_tap` / `retinat_swipe` / `retinat_next` / `retinat_click` / `retinat_type` /
-  `retinat_key`: real touch, mouse and keyboard input, with feed moves confirmed by sight.
-- `retinat_explore`: a whole site crawled and checked, with a bug report and a page sheet.
-- `retinat_now`: one line on what is on screen and audible right now.
-- `retinat_console`: what the page logged and threw, masked like the requests.
-- `retinat_record`: a video of what the browser showed, started and stopped by the agent.
-- `retinat_reflex` / `retinat_wait`: rules the page runs every frame, firing real input in milliseconds; the agent
+- `eye_tap` / `eye_swipe` / `eye_next` / `eye_click` / `eye_type` /
+  `eye_key`: real touch, mouse and keyboard input, with feed moves confirmed by sight.
+- `eye_explore`: a whole site crawled and checked, with a bug report and a page sheet.
+- `eye_now`: one line on what is on screen and audible right now.
+- `eye_console`: what the page logged and threw, masked like the requests.
+- `eye_record`: a video of what the browser showed, started and stopped by the agent.
+- `eye_reflex` / `eye_wait`: rules the page runs every frame, firing real input in milliseconds; the agent
   sleeps until one notifies.
-- `retinat_requests`: what the page fetched (status, type, size, time, failures), and one response body,
+- `eye_requests`: what the page fetched (status, type, size, time, failures), and one response body,
   with tokens, passwords and keys masked.
 
 It never runs page scripts on the model's behalf and has no Playwright anywhere. Bot walls are
@@ -58,30 +58,30 @@ if TYPE_CHECKING:
 	from browser_use.desktop.service import DesktopControl
 	from browser_use.eyes.clock import PageClock
 
-TOOL_PREFIX = 'retinat_'
-# Said on what a seeing tool returns when it was asked while a retinat_wait was pending: a client may send both at
+TOOL_PREFIX = 'eye_'
+# Said on what a seeing tool returns when it was asked while a eye_wait was pending: a client may send both at
 # once, and the answer is then from before what the wait is for (found live: read as a stale picture for an hour)
 _WAIT_PENDING_NOTE = (
-	'\n⏳ asked while a retinat_wait was still waiting: this is from before what that wait is for. '
+	'\n⏳ asked while a eye_wait was still waiting: this is from before what that wait is for. '
 	'Ask again after the wait returns.'
 )
 # Tools that send input, navigate, scroll or play: refused up front while the person holds the wheel.
 ACTING = frozenset(
 	{
-		'retinat_open',
-		'retinat_explore',
-		'retinat_watch',
-		'retinat_scan',
-		'retinat_browse',
-		'retinat_next',
-		'retinat_tap',
-		'retinat_click',
-		'retinat_swipe',
-		'retinat_scroll',
-		'retinat_type',
-		'retinat_key',
-		'retinat_reflex',
-		'retinat_step',
+		'eye_open',
+		'eye_explore',
+		'eye_watch',
+		'eye_scan',
+		'eye_browse',
+		'eye_next',
+		'eye_tap',
+		'eye_click',
+		'eye_swipe',
+		'eye_scroll',
+		'eye_type',
+		'eye_key',
+		'eye_reflex',
+		'eye_step',
 	}
 )
 
@@ -89,23 +89,23 @@ ACTING = frozenset(
 # Every tool, these or not, is stopped BACKSTOP_GRACE_S past the budget if it has not ended (the client's 60 s minus
 # room for the answer)
 LONG_TOOLS = frozenset(
-	{'retinat_scan', 'retinat_browse', 'retinat_watch', 'retinat_explore', 'retinat_desktop_watch', 'retinat_step'}
+	{'eye_scan', 'eye_browse', 'eye_watch', 'eye_explore', 'eye_desktop_watch', 'eye_step'}
 )
-# Tools whose eyes run on the page's own timers, which stand still on a page paused by retinat_step: they would report
+# Tools whose eyes run on the page's own timers, which stand still on a page paused by eye_step: they would report
 # a frozen page as it is, so they are refused there with the reason
 NEEDS_PAGE_TIME = frozenset(
 	{
-		'retinat_watch',
-		'retinat_browse',
-		'retinat_next',
-		'retinat_scan',
-		'retinat_now',
-		'retinat_changes',
-		'retinat_reflex',
-		'retinat_wait',
+		'eye_watch',
+		'eye_browse',
+		'eye_next',
+		'eye_scan',
+		'eye_now',
+		'eye_changes',
+		'eye_reflex',
+		'eye_wait',
 	}
 )
-_PAUSED = 'The page is paused by retinat_step: step it on, or give it real time back with retinat_step action=resume.'
+_PAUSED = 'The page is paused by eye_step: step it on, or give it real time back with eye_step action=resume.'
 _NOT_OURS = (
 	"Step mode takes a tab's clock over for good (Chrome has no way to give it back), so Retinat uses it only in a "
 	'browser it started itself, never in your own browser (--bridge or --cdp-url).'
@@ -127,7 +127,7 @@ MOTION_SETTLE_S = 0.15  # after a step, for the stream's last frames of it to ar
 # Game time stands still between steps, so the end of one step runs on into the next: this much of it is read with the
 # next step, so a short step near an obstacle still shows what moves
 MOTION_BEFORE_MS = 300.0
-KEY_HOLD_MAX_MS = 5000.0  # the longest retinat_key holds keys down (a step plays at most as long)
+KEY_HOLD_MAX_MS = 5000.0  # the longest eye_key holds keys down (a step plays at most as long)
 KEY_WITH_MAX = 4  # keys held down along with the key
 KEY_ANSWER_S = 1.0  # what a key hold keeps of its call to let the keys go and answer
 # The largest canvas, frame or video in view (its visible part), where a game is drawn, as [x, y, width, height]
@@ -142,7 +142,7 @@ _GAME_REGION_JS = r"""(() => {
 	}
 	return best;
 })()"""
-START_RESERVE_S = 15.0  # a first retinat_open after its launch took 13-15 s more (eyes, navigation, the wall check)
+START_RESERVE_S = 15.0  # a first eye_open after its launch took 13-15 s more (eyes, navigation, the wall check)
 _START_STOPPED = 'The browser start was stopped (the route changed, or the server is closing). Nothing was done; call again.'
 
 # What a click at (x, y) lands on: the topmost element there (into open shadow roots), lifted to the control that owns
@@ -222,10 +222,10 @@ class RetinatServer(BrowserUseServer):
 		self.bridge = bridge
 		self.cdp_url = bridge.cdp_url if bridge else cdp_url
 		self._control: 'DesktopControl | None' = None  # computer use, made on first use
-		self._waits = 0  # retinat_wait calls in progress
+		self._waits = 0  # eye_wait calls in progress
 		self._starting: asyncio.Task[None] | None = None  # the browser start in flight, which calls join
 		self._starting_since = 0.0
-		self._clocks: dict[str, 'PageClock'] = {}  # per tab, once retinat_step has paused it
+		self._clocks: dict[str, 'PageClock'] = {}  # per tab, once eye_step has paused it
 		# the last step's looks for the next one to run on from: (its clock, the clock's moved_ms then, area, looks)
 		self._motion_before: tuple[Any, float, tuple[float, ...], list[tuple[float, Any]]] | None = None
 		from browser_use.config import CONFIG
@@ -233,12 +233,12 @@ class RetinatServer(BrowserUseServer):
 
 		# live narration: each watch result owed a narration before the next watch (see eyes/narration.py)
 		self._narration = NarrationLog(CONFIG.BROWSER_USE_CONFIG_DIR / 'narration' / f'{time.strftime("%Y%m%d-%H%M%S")}.jsonl')
-		self.server = Server('retinat', version=get_browser_use_version())
-		self._setup_retinat_handlers()
+		self.server = Server('eye-mcp-unlimited', version=get_browser_use_version())
+		self._setup_eye_handlers()
 
-	def _setup_retinat_handlers(self) -> None:
+	def _setup_eye_handlers(self) -> None:
 		async def list_tools(_context: Any, _params: 'types.PaginatedRequestParams') -> 'types.ListToolsResult':
-			return types.ListToolsResult(tools=[*_tools(), *self._network_tool_entries('retinat')])
+			return types.ListToolsResult(tools=[*_tools(), *self._network_tool_entries('eye')])
 
 		async def call_tool(_context: Any, params: 'types.CallToolRequestParams') -> 'types.CallToolResult':
 			from browser_use.mcp import effects
@@ -254,9 +254,9 @@ class RetinatServer(BrowserUseServer):
 			)
 			backstop: asyncio.Timeout | None = None
 			token = effects.begin()
-			listed = {t.name: t for t in [*_tools(), *self._network_tool_entries('retinat')]}
+			listed = {t.name: t for t in [*_tools(), *self._network_tool_entries('eye')]}
 			looking = {name for name, t in listed.items() if t.annotations and t.annotations.read_only_hint}
-			waiting = params.name == 'retinat_wait'
+			waiting = params.name == 'eye_wait'
 			before_a_wait = self._waits > 0 and params.name in looking and not waiting
 			self._waits += waiting
 			try:
@@ -432,34 +432,34 @@ class RetinatServer(BrowserUseServer):
 
 		if not name.startswith(TOOL_PREFIX):
 			raise Refused(f'Unknown tool: {name}')
-		if name == 'retinat_network':
+		if name == 'eye_network':
 			return await act(self._network_set(args))
-		if name == 'retinat_network_status':
+		if name == 'eye_network_status':
 			return await self.network.status()
-		if name in ('retinat_desktop_look', 'retinat_desktop_watch'):
+		if name in ('eye_desktop_look', 'eye_desktop_watch'):
 			from browser_use.eyes.desktop import DesktopEyes
 
 			if not _desktop_allowed():
 				raise Refused('Desktop eyes are off on this server (start it with BROWSER_USE_DESKTOP_EYES=1).')
 			# With computer use on, the eyes cover the windows of apps the person did not grant, like the actions do.
 			desktop = DesktopEyes(enabled=True, mask=self._desktop_control().hide_ungranted if _control_allowed() else None)
-			if name == 'retinat_desktop_look':
+			if name == 'eye_desktop_look':
 				seen = await desktop.look()
 				if _control_allowed() and seen.image_size:
 					desk = self._desktop_control()
 					desk.scale = desk.x.width / seen.image_size[0]  # actions take this image's pixels
 				return self._content(seen)
 			return self._content(await desktop.watch(seconds=float(args.get('seconds', 8))))
-		if name.startswith('retinat_desktop_'):
+		if name.startswith('eye_desktop_'):
 			return await self._call_control(name, args)
-		if name == 'retinat_step' and (self.bridge is not None or self.cdp_url):
+		if name == 'eye_step' and (self.bridge is not None or self.cdp_url):
 			raise Refused(_NOT_OURS)
 		await self._ensure_session(deadline)
 		assert self.browser_session is not None
 		# in use: the idle-session cleanup shared with browser-use counted only its own calls, and closed a browser
 		# used through Retinat 30 minutes after it started, mid-game
 		self._update_session_activity(self.browser_session.id)
-		if name in ('retinat_open', 'retinat_browse', 'retinat_next', 'retinat_explore'):
+		if name in ('eye_open', 'eye_browse', 'eye_next', 'eye_explore'):
 			self._motion_before = None  # another page: the last step does not run on into the next
 		if self.bridge is not None and name in ACTING:
 			self._check_wheel()
@@ -467,14 +467,14 @@ class RetinatServer(BrowserUseServer):
 			clock = await self._clock(create=False)
 			if clock is not None and clock.paused:
 				raise Refused(_PAUSED)
-		if name == 'retinat_open':
+		if name == 'eye_open':
 			resumed = await self._resume_paused_tab()
 			if not args.get('new_tab'):
 				await self._eyes()  # watch from the page's first moment: what appears right after load counts
 			note = await act(self._navigate_routed(args['url'], bool(args.get('new_tab')), strict=True))
 			await asyncio.sleep(1.0)
 			return await self._wall_note() + resumed + note
-		if name == 'retinat_explore':
+		if name == 'eye_explore':
 			from browser_use.explore import Explorer, render_markdown, render_sheet
 
 			resumed = await self._resume_paused_tab()
@@ -485,21 +485,21 @@ class RetinatServer(BrowserUseServer):
 			if sheet:
 				blocks.append(types.ImageContent(type='image', data=base64.b64encode(sheet).decode(), mime_type='image/jpeg'))
 			return blocks
-		if name == 'retinat_record':
+		if name == 'eye_record':
 			return await self._record(str(args['action']), int(args.get('framerate', 8)))
-		if name == 'retinat_narrate':
+		if name == 'eye_narrate':
 			text = str(args.get('text') or '').strip()
 			if not text:
 				raise Refused('Nothing to log: pass what the last watch result showed as text.')
 			n = self._narration.take(text)
 			return f'Narration of watch result {n} logged.' if n else 'Narration logged (no watch result was waiting for one).'
 
-		if name in ('retinat_reflex', 'retinat_wait'):
+		if name in ('eye_reflex', 'eye_wait'):
 			return await self._reflex(name, args, deadline)
-		if name == 'retinat_step':
+		if name == 'eye_step':
 			return await self._step(args, deadline)
 		eyes = await self._eyes()
-		if name == 'retinat_console':
+		if name == 'eye_console':
 			from browser_use.eyes.console import render as render_console
 
 			log = eyes.console
@@ -509,7 +509,7 @@ class RetinatServer(BrowserUseServer):
 			)
 			limit = max(1, int(args.get('limit', 30)))
 			return render_console(picked[-limit:], since, log.last_seq, matched=len(picked))
-		if name == 'retinat_requests':
+		if name == 'eye_requests':
 			from browser_use.eyes.requests import render
 
 			log = eyes.requests
@@ -521,9 +521,9 @@ class RetinatServer(BrowserUseServer):
 			url = await self.browser_session.get_current_page_url()
 			return render(picked[-limit:], since, log.last_seq, url, matched=len(picked))
 		detail = args.get('detail', 'glance')
-		if name == 'retinat_look':
+		if name == 'eye_look':
 			return self._content(await eyes.look(detail=detail if detail != 'glance' else 'look'))
-		if name == 'retinat_watch':
+		if name == 'eye_watch':
 			narration = str(args.get('narration') or '').strip()
 			if args.get('narrate'):
 				self._narration.start()
@@ -546,7 +546,7 @@ class RetinatServer(BrowserUseServer):
 			lag = round(percept.ended_at - last, 3) if last is not None else None
 			self._narration.result(covering[1] if covering else 'nothing played', lag)
 			return self._content(percept)
-		if name == 'retinat_scan':
+		if name == 'eye_scan':
 			return self._content(
 				await act(
 					eyes.scan(
@@ -557,7 +557,7 @@ class RetinatServer(BrowserUseServer):
 					)
 				)
 			)
-		if name == 'retinat_browse':
+		if name == 'eye_browse':
 			return self._content(
 				await act(
 					eyes.browse(
@@ -569,7 +569,7 @@ class RetinatServer(BrowserUseServer):
 					)
 				)
 			)
-		if name == 'retinat_next':
+		if name == 'eye_next':
 			moved = await act(eyes.next(direction=args.get('direction', 'down')))
 			head = (
 				f'Moved by {moved.method} in {moved.seconds:.1f}s'
@@ -577,9 +577,9 @@ class RetinatServer(BrowserUseServer):
 				else f'The feed did not move (tried {", ".join(moved.tries)})'
 			)
 			return f'{head}{"; " + moved.note if moved.note else ""}. {eyes.now_line()}'
-		if name == 'retinat_find':
+		if name == 'eye_find':
 			return self._content(await eyes.find(str(args['text']), limit=int(args.get('limit', 5))))
-		if name == 'retinat_scroll':
+		if name == 'eye_scroll':
 			screens, to = args.get('screens'), str(args.get('to') or '').strip()
 			if (screens is None) == (not to):
 				raise Refused(
@@ -592,25 +592,25 @@ class RetinatServer(BrowserUseServer):
 					)
 				)
 			)
-		if name == 'retinat_zoom':
+		if name == 'eye_zoom':
 			return self._content(await eyes.zoom(float(args['x']), float(args['y']), float(args['width']), float(args['height'])))
-		if name == 'retinat_tap':
+		if name == 'eye_tap':
 			await act(eyes.tap(float(args['x']), float(args['y'])))
 			return f'Tapped ({args["x"]}, {args["y"]}). {eyes.now_line()}'
-		if name == 'retinat_click':
+		if name == 'eye_click':
 			x, y, expect = float(args['x']), float(args['y']), str(args.get('expect') or '').strip()
 			there = await self._what_is_at(x, y, strict=bool(expect))
 			if expect and (there is None or expect.casefold() not in there.casefold()):
 				raise Refused(
 					f'Not clicked: at ({args["x"]}, {args["y"]}) there is {there or "nothing the page will name"}, not '
-					f'"{expect}". Look again (retinat_look, or retinat_find "{expect}") and click where it is now.'
+					f'"{expect}". Look again (eye_look, or eye_find "{expect}") and click where it is now.'
 				)
 			await act(eyes.hand.click(x, y))
 			return f'Clicked ({args["x"]}, {args["y"]}){" on " + there if there else ""}.'
-		if name == 'retinat_swipe':
+		if name == 'eye_swipe':
 			info = await act(eyes.swipe(args.get('direction', 'up'), float(args.get('fraction', 0.55))))
 			return f'Swiped {args.get("direction", "up")} {info["distance_px"]:.0f}px in {info["duration_ms"]:.0f}ms. {eyes.now_line()}'
-		if name == 'retinat_type':
+		if name == 'eye_type':
 			if self.bridge and await self._secret_field_focused():
 				raise Refused(
 					"Refusing to type into a password, card or one-time-code field in the person's own browser: "
@@ -619,11 +619,11 @@ class RetinatServer(BrowserUseServer):
 			if self.network.uses_tor and await self._secret_field_focused():
 				raise Refused(
 					'Refusing to type into a password or payment field while routed through Tor: the exit relay is '
-					'on the path. Set the route to off (retinat_network), or ask the person to enter it themselves.'
+					'on the path. Set the route to off (eye_network), or ask the person to enter it themselves.'
 				)
 			await act(eyes.hand.type_text(str(args['text'])))
 			return f'Typed {len(str(args["text"]))} characters.'
-		if name == 'retinat_key':
+		if name == 'eye_key':
 			# a client with a schema from before hold_ms and with existed sends them as text
 			key, hold_ms, also = str(args['key']), _as_number(args.get('hold_ms')), _as_list(args.get('with'))
 			if hold_ms is None and not also:
@@ -641,7 +641,7 @@ class RetinatServer(BrowserUseServer):
 				raise Refused(f'hold_ms is how long to hold the keys down, more than 0 and at most {max(0.0, fits):.0f} ms')
 			await act(eyes.hand.hold(key, hold_ms / 1000, also=also))
 			return f'Held {" + ".join([*also, key])} down for {hold_ms:.0f} ms, then let go.'
-		if name == 'retinat_recall':
+		if name == 'eye_recall':
 			t0, t1 = float(args['t0']), float(args['t1'])
 			if t1 < t0:
 				raise Refused('t1 must be at or after t0')
@@ -649,23 +649,23 @@ class RetinatServer(BrowserUseServer):
 			return self._content(
 				await eyes.recall(t0, t1, frames=int(args.get('frames', 4)), item=int(item) if item is not None else None)
 			)
-		if name == 'retinat_search':
+		if name == 'eye_search':
 			item = args.get('item')
 			return self._content(
 				await eyes.search(
 					str(args['query']), frames=int(args.get('frames', 4)), item=int(item) if item is not None else None
 				)
 			)
-		if name == 'retinat_changes':
+		if name == 'eye_changes':
 			from browser_use.eyes import hook
 
 			await eyes.retina.wait_for_data(1.2)  # let the latest batch land in the journal
 			eyes.note_sounds()  # the count of discrete sounds, even if no pause was seen to trigger it
 			eyes.note_requests()  # a fetch refused after the page settled: no batch came along to journal it
 			assert eyes.now_path is not None, 'the eyes keep no journal (now_path=False)'
-			lines = hook.new_entries(eyes.now_path, limit=int(args.get('limit', 20)), reader='retinat')
+			lines = hook.new_entries(eyes.now_path, limit=int(args.get('limit', 20)), reader='eye')
 			return 'Changes since last asked:\n' + '\n'.join(lines) if lines else 'No changes since last asked.'
-		if name == 'retinat_now':
+		if name == 'eye_now':
 			await eyes.retina.wait_for_data(1.0)
 			return eyes.now_line()
 		raise Refused(f'Unknown tool: {name}')
@@ -700,7 +700,7 @@ class RetinatServer(BrowserUseServer):
 		except RuntimeError as e:  # one already running, or no viewport yet
 			raise Refused(str(e)) from e
 		self._narration.recording('start', str(out))
-		return f'Recording to {out} at {framerate} fps. Call retinat_record with action=stop to finish the file.'
+		return f'Recording to {out} at {framerate} fps. Call eye_record with action=stop to finish the file.'
 
 	async def _reflex(self, name: str, args: dict[str, Any], deadline: Deadline | None = None) -> str:
 		"""Install, clear or report the tab's reflexes, or wait for one to notify."""
@@ -711,7 +711,7 @@ class RetinatServer(BrowserUseServer):
 		reflexes = getattr(self, '_reflexes', None)
 		if reflexes is None or reflexes.session is not self.browser_session:
 			reflexes = self._reflexes = Reflexes(self.browser_session)
-		if name == 'retinat_wait':
+		if name == 'eye_wait':
 			timeout = float(args.get('timeout', 30))
 			if deadline is not None and deadline.bounded:
 				# Within the call's budget: opening the browser first spends the same time the client counts
@@ -719,7 +719,7 @@ class RetinatServer(BrowserUseServer):
 			if not reflexes.installed:
 				# A plain wait, as for a loader to finish (agents reached for this and were refused)
 				await asyncio.sleep(timeout)
-				return f'Waited {timeout:.1f}s; nothing was watched (no reflex rules are installed: retinat_reflex adds some).'
+				return f'Waited {timeout:.1f}s; nothing was watched (no reflex rules are installed: eye_reflex adds some).'
 			event = await reflexes.wait(timeout=timeout)
 			stats = reflexes.stats()
 			done = f'{stats["actions"]} input actions so far, decision to input p50 {stats["latency_ms_p50"]} ms'
@@ -740,7 +740,7 @@ class RetinatServer(BrowserUseServer):
 			count = await reflexes.install(rules, screen_width=int(args.get('screen_width') or 240))
 		except (ValueError, AssertionError) as e:
 			raise Refused(str(e)) from e
-		return f'{count} reflex rule(s) running every frame on this tab. retinat_wait sleeps until one notifies.'
+		return f'{count} reflex rule(s) running every frame on this tab. eye_wait sleeps until one notifies.'
 
 	async def _step(self, args: dict[str, Any], deadline: Deadline | None = None) -> str | list['types.ContentBlock']:
 		"""Pause, step or resume the focused tab's clock: the model plays a real-time page turn by turn."""
@@ -809,7 +809,7 @@ class RetinatServer(BrowserUseServer):
 				live = watcher.live
 			except Exception as e:
 				assert self.browser_session is not None
-				self.browser_session.logger.debug(f'retinat_step: no stream to watch the step on: {type(e).__name__}: {e}')
+				self.browser_session.logger.debug(f'eye_step: no stream to watch the step on: {type(e).__name__}: {e}')
 			if live is not None:
 				began = live.clock()
 				stream = live
@@ -996,14 +996,14 @@ class RetinatServer(BrowserUseServer):
 		return [float(v) for v in value] if isinstance(value, list) and len(value) == 4 else None
 
 	async def _resume_paused_tab(self) -> str:
-		"""Give a tab paused by retinat_step its clock back before it is navigated (a paused page commits no new one),
+		"""Give a tab paused by eye_step its clock back before it is navigated (a paused page commits no new one),
 		and a note saying so."""
 		clock = await self._clock(create=False)
 		if clock is None or not clock.virtual:
 			return ''
 		was_paused = clock.paused
 		await clock.resume()  # also starts the pump again if it stopped
-		return ' (the page was paused by retinat_step: it runs on real time again)' if was_paused else ''
+		return ' (the page was paused by eye_step: it runs on real time again)' if was_paused else ''
 
 	async def _clock(self, create: bool = True) -> 'PageClock | None':
 		"""The focused tab's clock, made on first use."""
@@ -1048,9 +1048,9 @@ class RetinatServer(BrowserUseServer):
 		if not _control_allowed():
 			raise Refused('Desktop control is off on this server (start it with BROWSER_USE_DESKTOP_CONTROL=1).')
 		desk = self._desktop_control()
-		if name == 'retinat_desktop_status':
+		if name == 'eye_desktop_status':
 			return desk.status()
-		if name == 'retinat_desktop_request_access':
+		if name == 'eye_desktop_request_access':
 			from browser_use.desktop import consent
 			from browser_use.desktop.service import parse_grants
 
@@ -1060,10 +1060,10 @@ class RetinatServer(BrowserUseServer):
 			if allowed:
 				desk.resume()  # an approval is the person's go-ahead, also after an Escape
 			return consent.describe(wanted, allowed)
-		if name == 'retinat_desktop_zoom':
+		if name == 'eye_desktop_zoom':
 			png = await desk.zoom(float(args['x']), float(args['y']), float(args['width']), float(args['height']))
 			return [types.ImageContent(type='image', data=base64.b64encode(png).decode(), mime_type='image/png')]
-		if name == 'retinat_desktop_click':
+		if name == 'eye_desktop_click':
 			return await act(
 				desk.click(
 					float(args['x']),
@@ -1073,18 +1073,18 @@ class RetinatServer(BrowserUseServer):
 					str(args.get('expect') or '').strip(),
 				)
 			)
-		if name == 'retinat_desktop_move':
+		if name == 'eye_desktop_move':
 			return await act(desk.move(float(args['x']), float(args['y'])))
 		expect = str(args.get('expect') or '').strip()
-		if name == 'retinat_desktop_type':
+		if name == 'eye_desktop_type':
 			return await act(desk.type_text(str(args['text']), expect=expect))
-		if name == 'retinat_desktop_key':
+		if name == 'eye_desktop_key':
 			return await act(desk.key(str(args['keys']), expect=expect))
-		if name == 'retinat_desktop_scroll':
+		if name == 'eye_desktop_scroll':
 			return await act(
 				desk.scroll(float(args['x']), float(args['y']), str(args.get('direction', 'down')), int(args.get('amount', 3)))
 			)
-		if name == 'retinat_desktop_drag':
+		if name == 'eye_desktop_drag':
 			return await act(desk.drag(float(args['x1']), float(args['y1']), float(args['x2']), float(args['y2'])))
 		raise Refused(f'Unknown tool: {name}')
 

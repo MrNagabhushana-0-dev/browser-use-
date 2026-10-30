@@ -885,7 +885,7 @@ async def test_a_look_says_how_its_image_maps_to_click_coordinates(eyes, session
 
 
 async def test_a_look_maps_to_click_coordinates_on_a_page_with_a_scrollbar(eyes, session, site):
-	"""Found on Poki: "Temple Run 2" was at (329, 400) by retinat_find and at (322, 394) by a look's pixels times its
+	"""Found on Poki: "Temple Run 2" was at (329, 400) by eye_find and at (322, 394) by a look's pixels times its
 	factor, 1.45 = 945/650. The look image showed the page's scrollbar: it spanned more than the 945 px client width
 	the factor was taken from, so clicks from a look drifted toward the top-left, ~15 px at the far edge, and reflex
 	regions taken from looks missed what they were aimed at."""
@@ -1526,7 +1526,7 @@ async def test_a_scan_stopped_by_max_screens_says_what_it_did_not_see(eyes, sess
 
 
 async def test_a_scan_out_of_time_says_how_far_it_got_and_where_to_go_on(eyes, session, site):
-	"""MCP clients give a call 60 s, and a long scan was simply lost (retinat_scan "timed out after 60s", twice). With a
+	"""MCP clients give a call 60 s, and a long scan was simply lost (eye_scan "timed out after 60s", twice). With a
 	deadline a scan stops in time with what it saw, and says what to call to go on."""
 	from browser_use.eyes.views import Deadline
 
@@ -2005,7 +2005,7 @@ async def test_a_player_built_on_click_from_another_origin_is_watched(eyes, sess
 
 
 def test_the_journal_folds_a_ticking_clock_but_keeps_a_peak_and_every_slide():
-	"""retinat_changes listed a player's clock once per second ("0:09", "0:10", ...). After a readout's first values,
+	"""eye_changes listed a player's clock once per second ("0:09", "0:10", ...). After a readout's first values,
 	a counter that only rises is folded away; a figure that moves both ways is still noted at a new high or low (the
 	one-tick peak eyesbench asks about), and a short sequence (a carousel's slides) is kept whole."""
 	from browser_use.eyes.service import _journal_worthy
@@ -2048,7 +2048,7 @@ async def test_page_content_filling_in_as_it_loads_is_one_line_and_a_later_toast
 		'</script></body>'
 	)
 	site.expect_request('/filling-in').respond_with_data(page, content_type='text/html')
-	await eyes.open()  # as retinat_open does: the eyes are on before the page starts, and see it fill in
+	await eyes.open()  # as eye_open does: the eyes are on before the page starts, and see it fill in
 	await session.navigate_to(site.url_for('/filling-in'))
 	await asyncio.sleep(3.0)
 	p = await eyes.look()
@@ -2088,7 +2088,7 @@ async def test_a_film_page_names_its_video_by_the_page_not_by_the_player_badges(
 
 
 async def test_a_look_during_a_recording_costs_what_a_look_costs(eyes, session, site, tmp_path):
-	"""Found at retinat_record's first live use: while a recording ran, a look sent the recorder's own frame, the
+	"""Found at eye_record's first live use: while a recording ran, a look sent the recorder's own frame, the
 	whole viewport as PNG (1920x1080, ~2,700 tokens where a look is ~330). The eyes share the recorder's stream, so
 	the recording is not cut short, and fit what they send to their own size."""
 	await _open(eyes, session, site.url_for('/none'))

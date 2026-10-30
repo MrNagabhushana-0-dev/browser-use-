@@ -287,7 +287,7 @@ async def test_reflexes_keep_their_speed_while_the_eyes_watch_the_same_tab(sessi
 
 
 async def test_reflexes_keep_their_speed_while_the_session_is_recorded(session, game, tmp_path):
-	"""Found live on the T-Rex runner: with retinat_record running, decision to input went from ~2 ms to ~150 ms. The
+	"""Found live on the T-Rex runner: with eye_record running, decision to input went from ~2 ms to ~150 ms. The
 	recording took every repaint of the moving game as a full-size PNG and decoded it on the event loop the reflexes'
 	input goes out on."""
 	await session.navigate_to(game.url_for('/follow'))

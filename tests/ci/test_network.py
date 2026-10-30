@@ -250,7 +250,7 @@ async def test_both_servers_offer_the_route_tools(retinat):
 		assert {f'{prefix}_network', f'{prefix}_network_status'} <= names
 
 
-async def test_retinat_defaults_to_auto_and_the_library_to_off(monkeypatch):
+async def test_eye_defaults_to_auto_and_the_library_to_off(monkeypatch):
 	monkeypatch.delenv('BROWSER_USE_NETWORK', raising=False)
 	from browser_use.mcp.server import BrowserUseServer
 
@@ -259,20 +259,20 @@ async def test_retinat_defaults_to_auto_and_the_library_to_off(monkeypatch):
 
 
 async def test_status_and_setting_the_route_need_no_browser(retinat):
-	status = await _call(retinat, 'retinat_network_status', {})
+	status = await _call(retinat, 'eye_network_status', {})
 	assert 'auto' in _text(status) and 'direct' in _text(status)
-	changed = await _call(retinat, 'retinat_network', {'mode': 'off', 'exit_country': 'de', 'reason': 'test'})
+	changed = await _call(retinat, 'eye_network', {'mode': 'off', 'exit_country': 'de', 'reason': 'test'})
 	assert not changed.is_error and 'off' in _text(changed) and retinat.network.mode is NetworkMode.OFF
 	assert retinat.browser_session is None, 'choosing a route must not launch a browser'
 
 
 async def test_a_bad_country_or_mode_comes_back_as_an_error_the_agent_can_read(retinat):
-	assert _text(await _call(retinat, 'retinat_network', {'mode': 'auto', 'exit_country': 'germany'})).startswith('Error:')
-	nonsense = await _call(retinat, 'retinat_network', {'mode': 'sometimes'})
+	assert _text(await _call(retinat, 'eye_network', {'mode': 'auto', 'exit_country': 'germany'})).startswith('Error:')
+	nonsense = await _call(retinat, 'eye_network', {'mode': 'sometimes'})
 	assert _text(nonsense).startswith('Error:') and nonsense.is_error
 	assert (nonsense.structured_content or {}).get('effect_state') == 'none', 'a refused route change changed nothing'
 	# A blind agent left out `mode` and was told "effect unknown", though nothing could have started.
-	forgot = await _call(retinat, 'retinat_network', {'exit_country': 'de'})
+	forgot = await _call(retinat, 'eye_network', {'exit_country': 'de'})
 	assert forgot.is_error and (forgot.structured_content or {}).get('effect_state') == 'none', _text(forgot)
 	assert 'mode' in _text(forgot)
 	assert retinat.network.mode is NetworkMode.AUTO
@@ -280,32 +280,32 @@ async def test_a_bad_country_or_mode_comes_back_as_an_error_the_agent_can_read(r
 
 async def test_an_attached_chrome_keeps_its_own_connection(retinat):
 	retinat.cdp_url = 'http://127.0.0.1:9222'
-	refused = _text(await _call(retinat, 'retinat_network', {'mode': 'always'}))
+	refused = _text(await _call(retinat, 'eye_network', {'mode': 'always'}))
 	assert refused.startswith('Error:') and '--cdp-url' in refused
 	assert retinat.network.mode is NetworkMode.AUTO
 
 
 async def test_a_normal_page_opens_direct_with_no_route_note(retinat, site):
-	opened = _text(await _call(retinat, 'retinat_open', {'url': site.url_for('/')}))
+	opened = _text(await _call(retinat, 'eye_open', {'url': site.url_for('/')}))
 	assert opened.startswith('Opened "Hello"') and 'Tor' not in opened
 	assert retinat.network.route == 'direct'
 
 
 @no_tor
 async def test_a_geo_block_in_auto_tries_tor_and_says_plainly_that_there_is_none(retinat, site):
-	opened = _text(await _call(retinat, 'retinat_open', {'url': site.url_for('/geo')}))
+	opened = _text(await _call(retinat, 'eye_open', {'url': site.url_for('/geo')}))
 	assert 'Tor fallback unavailable' in opened and 'Install Tor' in opened, opened
 	assert retinat.network.last_outcome == 'geo_blocked' and retinat.network.route == 'direct'
 
 
 async def test_the_same_geo_block_is_left_alone_when_the_route_is_off(retinat, site):
-	await _call(retinat, 'retinat_network', {'mode': 'off'})
-	opened = _text(await _call(retinat, 'retinat_open', {'url': site.url_for('/geo')}))
+	await _call(retinat, 'eye_network', {'mode': 'off'})
+	opened = _text(await _call(retinat, 'eye_open', {'url': site.url_for('/geo')}))
 	assert 'Tor' not in opened and retinat.network.route == 'direct'
 
 
 async def test_a_bot_wall_is_reported_and_never_sent_through_tor(retinat, site):
-	opened = _text(await _call(retinat, 'retinat_open', {'url': site.url_for('/wall')}))
+	opened = _text(await _call(retinat, 'eye_open', {'url': site.url_for('/wall')}))
 	assert opened.startswith('BLOCKED:') and 'Tor fallback' not in opened, opened
 	assert retinat.network.last_outcome == 'walled' and retinat.network.route == 'direct'
 
@@ -315,7 +315,7 @@ async def test_a_refused_connection_in_auto_reports_the_error_and_the_missing_to
 	with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
 		sock.bind(('127.0.0.1', 0))
 		closed_port = sock.getsockname()[1]
-	result = await _call(retinat, 'retinat_open', {'url': f'http://127.0.0.1:{closed_port}/'})
+	result = await _call(retinat, 'eye_open', {'url': f'http://127.0.0.1:{closed_port}/'})
 	assert result.is_error
 	text = _text(result)
 	assert 'ERR_CONNECTION_REFUSED' in text and 'Tor fallback unavailable' in text, text
@@ -418,13 +418,13 @@ async def _focus_and_type(server, element_id: str, text: str):
 	await cdp.cdp_client.send.Runtime.evaluate(
 		params={'expression': f'document.getElementById("{element_id}").focus()'}, session_id=cdp.session_id
 	)
-	return await _call(server, 'retinat_type', {'text': text})
+	return await _call(server, 'eye_type', {'text': text})
 
 
 async def test_nothing_is_typed_into_a_password_field_while_routed_through_tor(retinat, site):
 	site.expect_request('/form').respond_with_data(FORM, content_type='text/html')
-	await _call(retinat, 'retinat_network', {'mode': 'off'})
-	await _call(retinat, 'retinat_open', {'url': site.url_for('/form')})
+	await _call(retinat, 'eye_network', {'mode': 'off'})
+	await _call(retinat, 'eye_open', {'url': site.url_for('/form')})
 
 	direct = await _focus_and_type(retinat, 'pw', 'hunter2')  # direct: the person's own business
 	assert not direct.is_error

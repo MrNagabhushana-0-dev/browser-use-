@@ -440,7 +440,7 @@ class PageClock:
 			'the page stopped answering during the step: a script on it ran without yielding. Such a script mostly waits '
 			'for its clock to move (a busy loop on performance.now()), and in step mode the clock moves only between '
 			'scripts, so it never ends. Retinat stopped that script, but the page will do it again: it cannot be played '
-			'turn by turn. Open it again with new_tab: true and play it live, without retinat_step.'
+			'turn by turn. Open it again with new_tab: true and play it live, without eye_step.'
 		)
 
 	async def _frame_in_world(self) -> dict[str, Any]:

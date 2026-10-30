@@ -40,20 +40,20 @@ The repo also ships a Claude Code skill (`.claude/skills/retinat`) and an agent 
 
 | Want to... | Tool |
 |---|---|
-| Open a page | `retinat_open` |
-| See the page as drawn (canvas and WebGL included) | `retinat_look`, `retinat_scan` (whole page) |
-| Watch a video or reel, with its sound | `retinat_watch`: one sheet of keyframes, the sound timeline, cuts, captions, and a transcript if the speech extra is installed |
-| Scroll a short-video feed | `retinat_browse`, `retinat_next`, `retinat_swipe` (touch) |
-| Look back at a moment already seen | `retinat_recall` (by media time; frames kept on disk) |
-| Find frames by what they show | `retinat_search` (a local CLIP image-text model) |
-| Hear what changed since you last asked | `retinat_changes` (from the journal: new page, item, sound, toast) |
-| Find and read fine print | `retinat_find`, `retinat_zoom` |
-| Act | `retinat_click`, `retinat_tap`, `retinat_type`, `retinat_key` |
-| See what the page fetched | `retinat_requests` (secrets in bodies are masked) |
-| Read the page's console | `retinat_console` (errors, warnings, logs; masked) |
-| Check the state now | `retinat_now` |
-| Audit a whole site for bugs | `retinat_explore` (live token meter and time estimate) |
-| Choose the network route | `retinat_network`, `retinat_network_status` |
+| Open a page | `eye_open` |
+| See the page as drawn (canvas and WebGL included) | `eye_look`, `eye_scan` (whole page) |
+| Watch a video or reel, with its sound | `eye_watch`: one sheet of keyframes, the sound timeline, cuts, captions, and a transcript if the speech extra is installed |
+| Scroll a short-video feed | `eye_browse`, `eye_next`, `eye_swipe` (touch) |
+| Look back at a moment already seen | `eye_recall` (by media time; frames kept on disk) |
+| Find frames by what they show | `eye_search` (a local CLIP image-text model) |
+| Hear what changed since you last asked | `eye_changes` (from the journal: new page, item, sound, toast) |
+| Find and read fine print | `eye_find`, `eye_zoom` |
+| Act | `eye_click`, `eye_tap`, `eye_type`, `eye_key` |
+| See what the page fetched | `eye_requests` (secrets in bodies are masked) |
+| Read the page's console | `eye_console` (errors, warnings, logs; masked) |
+| Check the state now | `eye_now` |
+| Audit a whole site for bugs | `eye_explore` (live token meter and time estimate) |
+| Choose the network route | `eye_network`, `eye_network_status` |
 
 Every tool says what happened when it fails: effect `none` (nothing was done), `unknown`, or `committed`. A call missing a required argument is refused before anything runs.
 
@@ -119,7 +119,7 @@ It was tested on Chromium 141, Chrome 155, Edge 154, Brave 1.97 and Vivaldi 8.2.
 
 ### Desktop (opt-in, `browser_use/desktop`)
 
-- **Desktop eyes:** start Retinat with `BROWSER_USE_DESKTOP_EYES=1` to get `retinat_desktop_look` and `retinat_desktop_watch`.
+- **Desktop eyes:** start Retinat with `BROWSER_USE_DESKTOP_EYES=1` to get `eye_desktop_look` and `eye_desktop_watch`.
 - **Desktop control:** set `BROWSER_USE_DESKTOP_CONTROL=1 BROWSER_USE_DESKTOP_APPS="gedit,xterm:click"`. The AI then acts only in the apps you list, and others need your approval first.
 
 ### Library fixes
@@ -164,7 +164,7 @@ BROWSER_USE_PROXY_CA_CERT=/path/ca.crt uv run pytest tests/ci  # behind a TLS-in
 1. The bridge security item above.
 2. A blind-agent A/B test of the contact sheet, recall and journal on feed pages: answer accuracy and tokens. The tools to build on are in `docs/agent-notes/e2e/` (`host*.py`, `score.py`).
 3. Colour-aware cuts, measured on a real, rights-cleared clip.
-4. A blind fine-print run where `retinat_scan` can't read the page text, so `retinat_find` alone is measured.
+4. A blind fine-print run where `eye_scan` can't read the page text, so `eye_find` alone is measured.
 
 **Ground rules this work kept:**
 - no bot-detection or CAPTCHA bypass;

@@ -432,7 +432,7 @@ async def test_doctor_names_what_is_missing_and_how_to_fix_it(bridge):
 	lonely = await BridgeRelay(port=0).start()
 	try:
 		alone = {c.name: c for c in await diagnose(lonely.port)}
-		said = await _call(RetinatServer(bridge=lonely), 'retinat_open', {'url': 'about:blank'})  # type: ignore[arg-type]
+		said = await _call(RetinatServer(bridge=lonely), 'eye_open', {'url': 'about:blank'})  # type: ignore[arg-type]
 	finally:
 		await lonely.stop()
 	assert alone['relay'].status == 'ok'
@@ -526,19 +526,19 @@ async def _call(server: BrowserUseServer, name: str, arguments: dict) -> str:
 	return '\n'.join(b.text for b in result.content if isinstance(b, types.TextContent))
 
 
-async def test_retinat_mcp_works_in_the_persons_browser_but_leaves_passwords_to_them(bridge, site, tmp_path, monkeypatch):
+async def test_eye_mcp_works_in_the_persons_browser_but_leaves_passwords_to_them(bridge, site, tmp_path, monkeypatch):
 	relay, proc = bridge
 	monkeypatch.setenv('BROWSER_USE_EYES_NOW', str(tmp_path / 'now.json'))
 	server = RetinatServer(bridge=relay)
 	try:
-		assert 'Sign in' in await _call(server, 'retinat_open', {'url': site.url_for('/shared/login')})
-		assert 'Sign in to continue' in await _call(server, 'retinat_find', {'text': 'Sign in to continue'})
-		await _call(server, 'retinat_click', {'x': 160, 'y': 60})
-		refused = await _call(server, 'retinat_type', {'text': 'hunter2'})
+		assert 'Sign in' in await _call(server, 'eye_open', {'url': site.url_for('/shared/login')})
+		assert 'Sign in to continue' in await _call(server, 'eye_find', {'text': 'Sign in to continue'})
+		await _call(server, 'eye_click', {'x': 160, 'y': 60})
+		refused = await _call(server, 'eye_type', {'text': 'hunter2'})
 		assert 'they enter those themselves' in refused
 		relay.set_holder('human')
 		try:
-			held = await _call(server, 'retinat_click', {'x': 160, 'y': 60, 'expect': 'Sign in'})
+			held = await _call(server, 'eye_click', {'x': 160, 'y': 60, 'expect': 'Sign in'})
 		finally:
 			relay.set_holder('agent')
 		assert 'the person is using the browser' in held, f'a checked click under a hold gives the real reason: {held}'
@@ -1274,7 +1274,7 @@ async def test_browser_navigate_says_a_site_is_waiting_for_the_person_instead_of
 
 	retinat = RetinatServer(bridge=relay)  # Retinat's open takes the same road
 	try:
-		opened = await _call(retinat, 'retinat_open', {'url': new.url_for('/page')})
+		opened = await _call(retinat, 'eye_open', {'url': new.url_for('/page')})
 		assert 'declined' in opened and 'effect: none' in opened, opened
 	finally:
 		await retinat._close_all_sessions()

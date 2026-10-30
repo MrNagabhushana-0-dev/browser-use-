@@ -94,7 +94,7 @@ BORED_WINDOW_S = 2.0
 # cross-origin page), 2 s ended 72% and 30% of the watches while more shots were coming within them, losing ~6 shots
 # each; 8 s ended none early, and stopped only in end credits.
 BORED_LONG_WINDOW_S = 8.0
-# Longer than this is longer than any watch (retinat_watch takes 90 s at most).
+# Longer than this is longer than any watch (eye_watch takes 90 s at most).
 LONG_FORM_S = 90.0
 # Discrete sounds this recent (beeps, knocks, notifications) keep a still picture worth watching.
 BORED_SOUND_S = 4.0
@@ -857,7 +857,7 @@ class Eyes:
 			f'{head}: best {len(got)} of {len(index)} archived frames'
 			+ (f' ({added} newly indexed)' if added else '')
 			+ f': {listing}\n~{tokens + 30} tokens (strip {w}x{h} ~{tokens}; estimates). '
-			+ 'Use retinat_recall around a time for more frames of that moment.'
+			+ 'Use eye_recall around a time for more frames of that moment.'
 		)
 		return Percept([], text, jpeg, (w, h), tokens, len(text) // 4, frames=[(t, j) for t, j, _, _ in got])
 
@@ -1271,7 +1271,7 @@ class Eyes:
 	def note_sounds(self) -> None:
 		"""Journal the current item's distinct sounds now if they changed since last noted.
 
-		For a reader asking between pauses (retinat_changes): the pause that would have noted them can come late
+		For a reader asking between pauses (eye_changes): the pause that would have noted them can come late
 		or not be seen at all, and the count should not depend on catching that transition.
 		"""
 		vid = self.retina.attended.get('vid') or self._journaled.get('vid')

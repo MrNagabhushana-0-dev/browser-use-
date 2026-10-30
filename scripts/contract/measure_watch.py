@@ -2,7 +2,7 @@
 
 Definitions are fixed in docs/contract/LOOP_MEMORY.md; do not change them to move a number.
 
-usage: python scripts/contract/measure_watch.py <agent transcript .jsonl> [--tool retinat_watch]
+usage: python scripts/contract/measure_watch.py <agent transcript .jsonl> [--tool eye_watch]
 """
 
 import argparse
@@ -11,6 +11,9 @@ import re
 import statistics
 from datetime import datetime
 
+# tool names: the watch tool was retinat_watch until the 2026-10-30 rename to eye_watch; both are read, so every
+# earlier transcript measures the same (correction logged in LOOP_MEMORY, 2026-10-30)
+_ALIASES = {'eye_watch': ('eye_watch', 'retinat_watch')}
 CUT_MATCH_S = 0.7  # the eyes report a cut up to ~0.5 s late (6 samples a second), measured by both E0/E1 verifiers
 
 
@@ -58,7 +61,7 @@ def measure(path: str, tool: str, edits: str | None = None) -> dict:
 			usage.setdefault(msg['id'], (when, msg['usage']))
 			last_id = msg['id']
 		for block in msg.get('content') or [] if isinstance(msg.get('content'), list) else []:
-			if block.get('type') == 'tool_use' and block.get('name', '').endswith(tool):
+			if block.get('type') == 'tool_use' and block.get('name', '').endswith(_ALIASES.get(tool, (tool,))):
 				calls[block['id']] = when
 			elif block.get('type') == 'tool_result' and block.get('tool_use_id') in calls:
 				results.append((calls[block['tool_use_id']], when, _text(block.get('content'))))
@@ -153,7 +156,7 @@ def measure(path: str, tool: str, edits: str | None = None) -> dict:
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
 	parser.add_argument('transcript')
-	parser.add_argument('--tool', default='retinat_watch')
+	parser.add_argument('--tool', default='eye_watch')
 	parser.add_argument('--edits', help='the film edit list (JSON with "cuts" in film seconds)')
 	args = parser.parse_args()
 	print(json.dumps(measure(args.transcript, args.tool, args.edits), indent=1))

@@ -366,3 +366,11 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
 - 2026-10-30 RENAME (partial): server key eye-mcp-unlimited in .mcp.json; the serverInfo name, the CLI prog, TOOL_PREFIX,
   tool names and the module path still say retinat. Full rename is one change with an alias and a logged correction for
   the protected counters (measure_watch.py matches retinat_watch). Not done.
+- 2026-10-30 RENAME DONE (owner): tool names retinat_* -> eye_*; server name eye-mcp-unlimited (serverInfo and CLI);
+  network tool prefix eye. Module path browser_use.retinat and the env vars RETINAT_BRIDGE, RETINAT_CDP_URL,
+  RETINAT_CODE_DIR are unchanged (aliases for the owner's setup). CORRECTION (protected counter, logged before any new
+  measurement): measure_watch.py and measure_narration.py now read both names (eye_watch and retinat_watch), so every
+  earlier transcript measures the same. MEASURED: all 8 watch transcripts give byte-identical counter output before and
+  after (saved baseline vs after). Functional check over MCP with the new names: eye_open 31.7 s before, look 0.4 s, a
+  300 s watch clamped to 36 s. SMOKE FILE (tests/ci/test_retinat.py) did NOT finish: it hung more than 4 minutes and was
+  stopped by PID; no pass or fail recorded. Open.

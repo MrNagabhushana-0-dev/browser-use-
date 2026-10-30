@@ -34,7 +34,7 @@ def _browsers_of(pid: int) -> list[psutil.Process]:
 
 
 @pytest.mark.parametrize('stop', ['SIGTERM', 'client leaves'])
-async def test_a_stopped_retinat_server_closes_its_browser(page, tmp_path, stop):
+async def test_a_stopped_eye_server_closes_its_browser(page, tmp_path, stop):
 	from mcp import ClientSession, StdioServerParameters
 	from mcp.client.stdio import stdio_client
 
@@ -45,7 +45,7 @@ async def test_a_stopped_retinat_server_closes_its_browser(page, tmp_path, stop)
 	async with stdio_client(params) as (read, write):
 		async with ClientSession(read, write) as client:
 			await client.initialize()
-			opened = await client.call_tool('retinat_open', {'url': page.url_for('/')})
+			opened = await client.call_tool('eye_open', {'url': page.url_for('/')})
 			assert not opened.is_error, opened
 			server_pid = next(
 				p.pid for p in psutil.Process().children(recursive=True) if 'browser_use.retinat' in ' '.join(p.cmdline())
@@ -72,8 +72,8 @@ async def test_a_stopped_retinat_server_closes_its_browser(page, tmp_path, stop)
 	assert not alive, f'browser processes outlived the server ({stop}): {alive}'
 
 
-async def test_a_restarted_retinat_tells_its_client_to_list_the_tools_again(tmp_path):
-	"""Found hands-on: Retinat was restarted with a new tool (retinat_step); Claude Code reconnected in 1.7 s but kept the
+async def test_a_restarted_eye_tells_its_client_to_list_the_tools_again(tmp_path):
+	"""Found hands-on: Retinat was restarted with a new tool (eye_step); Claude Code reconnected in 1.7 s but kept the
 	tool list of the first connection, so the new tool could not be called for the rest of the session. A client
 	re-lists the tools when told the list changed: each server process says so once, on its first tool call."""
 	import mcp.types as types
@@ -94,15 +94,15 @@ async def test_a_restarted_retinat_tells_its_client_to_list_the_tools_again(tmp_
 			init = await client.initialize()
 			assert init.capabilities.tools is not None and init.capabilities.tools.list_changed, init.capabilities
 			for _ in range(2):
-				status = await client.call_tool('retinat_network_status', {})
+				status = await client.call_tool('eye_network_status', {})
 				assert not status.is_error, status
 			await asyncio.sleep(0.5)
 			assert told == ['notifications/tools/list_changed'], told
 			listed = await client.list_tools()
-			assert 'retinat_step' in {t.name for t in listed.tools}
+			assert 'eye_step' in {t.name for t in listed.tools}
 
 
-async def test_a_restarted_retinat_tells_a_listening_client_to_list_the_tools_again(tmp_path):
+async def test_a_restarted_eye_tells_a_listening_client_to_list_the_tools_again(tmp_path):
 	"""The same on the 2026-07-28 protocol, which Claude Code speaks: change notices go out on the stream a client opens
 	with subscriptions/listen, so Retinat serves one and tells each new listener once that the tool list changed."""
 	from mcp.client.client import Client
@@ -120,7 +120,7 @@ async def test_a_restarted_retinat_tells_a_listening_client_to_list_the_tools_ag
 			event = await asyncio.wait_for(anext(sub), 10)
 			assert isinstance(event, ToolsListChanged), event
 		listed = await client.list_tools()
-		assert 'retinat_step' in {t.name for t in listed.tools}
+		assert 'eye_step' in {t.name for t in listed.tools}
 
 
 async def test_browser_use_answers_the_handshake_and_tool_list_without_loading_anything_heavy():
