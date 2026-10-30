@@ -351,3 +351,18 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   can connect to the eye server.
   CONSTRAINT: no model-in-the-loop watch can run in this session (the eye server does not connect here). Offline work only
   until then.
+- 2026-10-30 CONNECT TIMEOUT, DIAGNOSED (client log /tmp/claude-code.log and diagnostics file /tmp/claude-code-4004891281.diag.log,
+  MEASURED): the stdio server connected once in 28.4 s and failed once at 30.6 s ("reason": "timeout"). The earlier
+  "stale config" explanation was wrong. Cause: the server's startup imports the whole agent stack (browser_use.mcp.server
+  imports Agent, the OpenAI and Bedrock clients and telemetry), about 2.5 s warm and far slower on a cold disk after a
+  reboot, under the client's 30 s limit. Warm, the server answers in about 1 s (MEASURED twice).
+  FIX 1 (done): .retinat.env deleted. It pinned RETINAT_CODE_DIR to the E6 worktree (old code) and RETINAT_BRIDGE. The
+  served tools now match HEAD: 28 tools, zero "maximum" keys, no "gate" wake (MEASURED over MCP).
+  FIX 2 (open): slim the server's import chain so startup does not load the agent stack. Not done.
+- 2026-10-30 FUNCTIONAL CHECK (scripted stdio client, no model, MEASURED): retinat_open -> 31.7 s (no error; the first call
+  starts the browser and is at the client's limit: a risk); retinat_look -> 0.4 s; retinat_watch seconds=300 -> 36.2 s,
+  "out of time: watched 36s of the asked 300s" (the clamp to the call budget works; no client timeout). The watch did not
+  press play, so this tests the clamp only, not the video path.
+- 2026-10-30 RENAME (partial): server key eye-mcp-unlimited in .mcp.json; the serverInfo name, the CLI prog, TOOL_PREFIX,
+  tool names and the module path still say retinat. Full rename is one change with an alias and a logged correction for
+  the protected counters (measure_watch.py matches retinat_watch). Not done.
