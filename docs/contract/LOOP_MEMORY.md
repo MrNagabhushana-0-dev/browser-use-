@@ -315,3 +315,11 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   hook rules are not enforced here; recorded in M2_CLOSEOUT.md. (2) ground_truth.py review: validation asserts replaced
   by explicit errors (labels were stripped under python -O: a bad label set froze before, is refused now); frozen labels
   re-freeze to 23db2c52...; no label or measured number changes.
+- 2026-10-30 OWNER REQUEST (renamed server, ultra vision, local use only): the MCP server key in .mcp.json is now "eyes"
+  (tools keep the retinat_ prefix for now; the protocol v3 prompts still name mcp__retinat__ and must be updated before any
+  v3 run). New detail level 'ultra': 540 px tiles, the row widened to the model's 2576 px edge (before: one row shrunk to
+  1400 px, so more keyframes meant smaller pictures, the defect the E5 review found). INFERRED from the sizing code, not
+  measured: a 4-keyframe ultra sheet is about 1,470 image tokens against about 350 for glance, roughly 4x per sheet, so
+  A rises by a similar factor and falls outside the 2,000-8,600 tok/min band. Rate limits: none found in Retinat; the
+  Tor cooldown (10 s, Tor's rule), the reflex cooldown (the owner's setting), the archive backlog cap and the 512 KB JSON
+  parse cap were kept. The bridge's consent holds were kept too.

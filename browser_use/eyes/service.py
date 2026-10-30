@@ -111,7 +111,7 @@ JOURNAL_MAX_BYTES = 512_000
 ARCHIVE_BACKLOG_LIMIT = 150  # unarchived keyframes; the page's ring holds 240
 ARCHIVE_BACKOFF_S = 30.0  # after the page failed to hand over keyframes, archiving leaves it alone this long
 # Keyframes per item on the sheet, by detail.
-KEYFRAMES = {'glance': 4, 'look': 6, 'study': 8}
+KEYFRAMES = {'glance': 4, 'look': 6, 'study': 8, 'ultra': 4}
 
 
 def default_now_path() -> Path:
