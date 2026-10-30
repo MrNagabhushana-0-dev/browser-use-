@@ -332,3 +332,8 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   (Tor's rule); the reflex cooldown (the owner's setting); the bridge consent holds (payments, deletes, grants on the
   owner's own browser). Note: a stdio server is started by its client from .mcp.json; a standalone process cannot keep
   stdin open for another client.
+- 2026-10-30 OWNER: the MCP server name in every live file is mcp__eye-mcp-unlimited__ (was mcp__retinat__); PROTOCOL_v3_P2.md
+  removed from the repo (its text stays in git history: commit 4531d56 and earlier). The owner-Chrome run is not in the
+  checklist now. Entries above that name v3 or mcp__retinat__ are history and stay unchanged (append-only). Owner note:
+  ultra vision costs about 4x tokens per sheet; glance stays the default (ultra is opt-in per call); the goal is fewer
+  tokens per minute, so ultra stays off the default path. Whether ultra is removed entirely: awaiting the owner.

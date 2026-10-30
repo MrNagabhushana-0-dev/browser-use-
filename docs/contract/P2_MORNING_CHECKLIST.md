@@ -49,7 +49,7 @@ recordings and logs) and uv; the last section undoes all of it.
    The AI works only in the shared YouTube tab.
 7. **Start the run.** In that Claude session (the terminal, or the app), paste this one line and press Enter:
    ```text
-   Run the RUNBOOK in docs/contract/PROTOCOL_v3_P2.md, then report.
+   (The owner-Chrome run protocol was removed on 2026-10-30; it is not part of this checklist.)
    ```
    It checks it can see your shared YouTube tab, plays the film from 0:00 twice (about 4 minutes each, once the
    Milestone-1 way and once with the live narration), records both, measures them, has fresh sub-agents label and
