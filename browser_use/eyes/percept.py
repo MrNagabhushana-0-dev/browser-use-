@@ -31,7 +31,7 @@ MAX_LONG_EDGE = 2576
 PATCH = 28
 
 # Row height of keyframes on the sheet, by how closely the agent wants to look.
-DETAIL_HEIGHT = {'glance': 200, 'look': 320, 'study': 520, 'ultra': 540}  # ultra: the widest row the model takes
+DETAIL_HEIGHT = {'glance': 200, 'look': 320, 'study': 520}
 SPECTRUM_HEIGHT = {'glance': 40, 'look': 56, 'study': 72}
 GAP = 4
 LABEL_BG = (0, 0, 0)
@@ -316,7 +316,7 @@ def render_sheet(items: list[ItemPercept], detail: str = 'glance', max_width: in
 	"""One JPEG: a keyframe row plus a sound strip per item. None if there is nothing to show."""
 	assert detail in DETAIL_HEIGHT, f'detail must be one of {list(DETAIL_HEIGHT)}'
 	if max_width is None:
-		max_width = MAX_LONG_EDGE if detail == 'ultra' else 1400  # a row is shrunk to fit: ultra gets the model's full edge
+		max_width = 1400
 	rows: list[Image.Image] = []
 	for item in items:
 		frames = [Image.open(io.BytesIO(k.jpeg)).convert('RGB') for k in item.keyframes if k.jpeg]

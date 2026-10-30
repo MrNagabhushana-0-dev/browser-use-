@@ -10,7 +10,7 @@ from browser_use.eyes.desktop import OPT_IN_ENV as DESKTOP_OPT_IN_ENV
 
 _DETAIL = {
 	'type': 'string',
-	'enum': ['glance', 'look', 'study', 'ultra'],
+	'enum': ['glance', 'look', 'study'],
 	'default': 'glance',
 	'description': 'Keyframe size on the sheet: glance (cheapest), look, study.',
 }

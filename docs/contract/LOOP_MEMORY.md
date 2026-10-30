@@ -337,3 +337,17 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   checklist now. Entries above that name v3 or mcp__retinat__ are history and stay unchanged (append-only). Owner note:
   ultra vision costs about 4x tokens per sheet; glance stays the default (ultra is opt-in per call); the goal is fewer
   tokens per minute, so ultra stays off the default path. Whether ultra is removed entirely: awaiting the owner.
+- 2026-10-30 ULTRA REVERTED (owner: the goal is fewer tokens; ultra costs about 4x per sheet). The rename stays.
+- 2026-10-30 GOAL BARS (owner: near-zero tokens, human-like vision, act on items without screenshots, DOM dumps or Playwright;
+  target: beat Playwright, browser-use, computer use and WebMCP). Each bar is measured by the ratchet, not asserted:
+  A: target 1,700 tok/min (the contract's event-gated number). Zero is not reachable while a model must react: one short
+     text line per event is the floor. INFERRED.
+  C2: not worse than E4's 31.5% strict (judgement range 23-47%).
+  INTERACTION (new metric, none exists yet): tokens per completed action and success rate on local pages, with the same counter.
+  COMPETITORS: measured on the same local task through each tool, never recalled.
+  Token breakdown, MEASURED on E2 and B2: about 1,200 new tokens per watch turn: sheet about 450, text 130-150, model output 330.
+  Two levers: fewer turns (the gate: E5 measured -60% A), and smaller results (no image in the default percept).
+  Open: the gate with keyframes held at glance pixels (wrapped rows, not shrunk), declared, first live run when a session
+  can connect to the eye server.
+  CONSTRAINT: no model-in-the-loop watch can run in this session (the eye server does not connect here). Offline work only
+  until then.
