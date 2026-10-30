@@ -374,3 +374,7 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   after (saved baseline vs after). Functional check over MCP with the new names: eye_open 31.7 s before, look 0.4 s, a
   300 s watch clamped to 36 s. SMOKE FILE (tests/ci/test_retinat.py) did NOT finish: it hung more than 4 minutes and was
   stopped by PID; no pass or fail recorded. Open.
+- 2026-10-30 AGENT MEMORY (owner: automatic memory, not forced store/retrieve, before any repo review): Mem0 (mem0ai 2.2.1)
+  installed in a separate venv, ~/agent-memory, outside the repo (MEASURED: import ok). Chosen because it extracts
+  memories from conversation on its own. NOT tested: it needs an LLM key and an embedding model, neither configured.
+  Vendor benchmark numbers disagree; no independent comparison decided it (search, 2026-10-30).
