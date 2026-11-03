@@ -404,3 +404,9 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   NOTE: tests/ci/test_retinat.py::test_no_tool_offers_a_wait_longer_than_a_client_waits_for_a_call now passes vacuously
   (it reads schema maxima, which were removed on 2026-10-30); the budget tests (test_every_tool_that_can_run_long_is_under_
   the_call_budget and the long scan and browse tests) are the real guard and passed.
+- 2026-11-03 SMOKE FILE RESULT (tests/ci/test_retinat.py, 65 tests, after the rename, MEASURED): run 1 with a 60 s per-test limit
+  passed 52, then the limit killed the run at the next test (test_things_moving_together_are_told_as_one_group); that test
+  passes alone in 6.7 s, and the remaining 13 tests passed in 127 s on an idle machine. Total 65 of 65 passed, in two runs.
+  CORRECTION: I guessed the earlier hang came from the deleted .retinat.env forcing bridge mode. That is wrong: the hang
+  came after the file was deleted. Not isolated. Candidate causes, unproven: the cold start of a freshly resumed VM (the
+  same state that timed out the MCP connect), and CPU contention from memory tests I ran during run 1.
