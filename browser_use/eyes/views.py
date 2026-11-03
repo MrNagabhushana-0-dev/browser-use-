@@ -1,7 +1,7 @@
 """A call's deadline, and the line a tool writes when it stops for time.
 
 MCP clients (Claude Code among them) give a tool call 60 s and then report it as failed, whatever the server did: a
-retinat_scan was lost that way twice. A long tool now gets a Deadline when its call begins and stops in time with what
+eye_scan was lost that way twice. A long tool now gets a Deadline when its call begins and stops in time with what
 it has, saying how far it got and how to go on. Library callers pass none and nothing changes for them.
 """
 

@@ -127,6 +127,7 @@ class Retina:
 		self.options = {'fps': fps, 'audio': audio, 'pcm': pcm, 'listen': listen, 'thumbWidth': keyframe_width}
 		self.frames: deque[FrameSample] = deque(maxlen=MAX_FRAMES)
 		self.hops: deque[AudioHop] = deque(maxlen=MAX_HOPS)
+		self.evicted: dict[int, float] = {}  # item id -> newest of its frames or hops a full ring has dropped
 		self.events: deque[RetinaEvent] = deque(maxlen=MAX_EVENTS)
 		self.state: dict[str, Any] = {}
 		self.keyframes_timeout = 20.0  # seconds to wait for the page to hand over keyframe images
@@ -556,6 +557,14 @@ class Retina:
 			logger.debug(f'retina: dropped a malformed batch: {type(e).__name__}: {e}')
 		return None
 
+	def _note_evictions(self, ring: deque, new: Sequence[Any]) -> None:
+		"""Before `new` is appended to a full ring: remember, per item, the newest of its samples the ring is about to drop."""
+		overflow = len(ring) + len(new) - (ring.maxlen or 0)
+		if ring.maxlen is None or overflow <= 0:
+			return
+		for s in list(ring)[:overflow]:
+			self.evicted[s.vid] = max(self.evicted.get(s.vid, 0.0), s.wall)
+
 	def _ingest(self, batch: dict[str, Any]) -> None:
 		now = time.monotonic()
 		frames: list[FrameSample] = []
@@ -598,6 +607,8 @@ class Retina:
 					self._stop_compositor()
 			elif kind == 'tainted':
 				self._watch_compositor(int(e.get('vid') or 0))
+		self._note_evictions(self.frames, frames)
+		self._note_evictions(self.hops, hops)
 		self.frames.extend(frames)
 		self.hops.extend(hops)
 		self.events.extend(events)

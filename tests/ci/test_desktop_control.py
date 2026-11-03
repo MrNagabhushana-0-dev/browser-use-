@@ -295,7 +295,7 @@ async def test_zoom_shows_a_region_at_full_resolution(apps, control):
 	assert (await apps['notes'].eval('hits.left')) == before + 1, 'coordinates are in the pixels of the last image'
 
 
-async def test_retinat_offers_computer_use_only_when_turned_on(apps, screen, monkeypatch):
+async def test_eye_offers_computer_use_only_when_turned_on(apps, screen, monkeypatch):
 	import mcp.types as types
 
 	from browser_use.retinat import RetinatServer
@@ -318,12 +318,12 @@ async def test_retinat_offers_computer_use_only_when_turned_on(apps, screen, mon
 		assert isinstance(result, types.CallToolResult)
 		return result
 
-	assert not {n for n in await names() if n.startswith('retinat_desktop_')}, 'nothing on the desktop unless asked for'
+	assert not {n for n in await names() if n.startswith('eye_desktop_')}, 'nothing on the desktop unless asked for'
 	monkeypatch.setenv('BROWSER_USE_DESKTOP_CONTROL', '1')
 	monkeypatch.setenv('BROWSER_USE_DESKTOP_APPS', 'testnotes, xterm:click')
-	assert {'retinat_desktop_look', 'retinat_desktop_click', 'retinat_desktop_type', 'retinat_desktop_status'} <= await names()
+	assert {'eye_desktop_look', 'eye_desktop_click', 'eye_desktop_type', 'eye_desktop_status'} <= await names()
 	try:
-		looked = await call('retinat_desktop_look', {})
+		looked = await call('eye_desktop_look', {})
 		image = next(b for b in looked.content if isinstance(b, types.ImageContent))
 		from base64 import b64decode
 		from io import BytesIO
@@ -334,16 +334,16 @@ async def test_retinat_offers_computer_use_only_when_turned_on(apps, screen, mon
 			factor = 1280 / img.width  # the look image is smaller than the screen
 		before = await apps['notes'].eval('hits.left')
 		bx, by = _page_box(apps['notes'], 'b')
-		clicked = await call('retinat_desktop_click', {'x': bx / factor, 'y': by / factor})
+		clicked = await call('eye_desktop_click', {'x': bx / factor, 'y': by / factor})
 		assert not clicked.is_error and 'testnotes' in clicked.content[0].text, clicked  # type: ignore[union-attr]
 		assert (await apps['notes'].eval('hits.left')) == before + 1, 'the click landed where the look image said'
 
 		tx, ty = _page_box(apps['term'], 't')
-		await call('retinat_desktop_click', {'x': tx / factor, 'y': ty / factor})
-		refused = await call('retinat_desktop_type', {'text': 'echo hi'})
+		await call('eye_desktop_click', {'x': tx / factor, 'y': ty / factor})
+		refused = await call('eye_desktop_type', {'text': 'echo hi'})
 		assert refused.is_error and (refused.structured_content or {}).get('effect_state') == 'none', refused
 		assert (await apps['term'].eval('t.value')) == ''
-		status = (await call('retinat_desktop_status', {})).content[0].text  # type: ignore[union-attr]
+		status = (await call('eye_desktop_status', {})).content[0].text  # type: ignore[union-attr]
 		assert 'testnotes (full)' in status and 'xterm (click)' in status and 'Focused: xterm' in status, status
 	finally:
 		await server._close_all_sessions()

@@ -4058,3 +4058,32 @@ CPU only, a separate environment).
 **Next, in order:** the detector bake-off and, if one earns it, a detector in the eyes for what motion cannot show
 (the player, still hazards); the five games again on the new eyes, with the final video; full `tests/ci`, then the PR
 body.
+
+## Round 67 (owner's ask and the hourly loop, 2026-10-22 10:45 to 14:00): the five games on the stream eyes; detectors measured
+
+- **Detectors measured** (`cb949a5`): RF-DETR nano and YOLO26n (COCO), OWLv2 and Grounding DINO tiny (open vocabulary)
+  on 50 frames from the five games, one at a time on 4 CPU cores, judged frame by frame: 0.07-0.23 s a frame for the
+  COCO models, which do not see sprites (YOLO26n boxed nothing on any World's Hardest Game frame); 11-15 s for the
+  open-vocabulary ones, which find the player but no spike or opening pit. Not added: the model playing already sees
+  the picture; what it lacks is time, which the eyes give.
+- **The five games on the stream eyes** (`3454931`, notes in `docs/hands-on/2026-10-22/`): 28 of 33 obstacles cleared
+  (85%), no better than the first eyes runs; QWOP gave no result.
+- **Found from the models' reports and fixed, test first:**
+  - QWOP was stopped as if it hung: the clock gave a page that drew no frame 1 s to answer, then stopped its script;
+    on this loaded machine a QWOP frame took seconds. A page that answers late is slow, not stuck (12 s), and a
+    frame's budget spent late is checked the same way instead of failing the step.
+  - Ghost movers (`ece77b9`): where a slow thing lingered over a short step the median kept a copy of it, and where the
+    thing had gone that copy read as a group moving sideways at 180 px/s (World's Hardest Game, level 2). A group that
+    stands out twice as much in the still picture as in the frame is a ghost; the first cut (any more) dropped half a
+    rising player at random, and is fixed.
+  - Spinning saws as a dozen movers at 100-4000 px/s (Moto X3M, Neon): tracks whose legs turn back a quarter of the
+    time or more are pieces of something in place, told once as "changes in place" and circled.
+  - "Too short to see what moves" at 100-150 ms: the last 300 ms of the step before is read with the step, when no
+    game time passed between them.
+  - `retinat_key` refused `hold_ms` given as text (a client with the tool's old schema).
+  - Tracks are followed across a frame or two with no difference (a thing as slow as it is small).
+
+**Not yet measured:** the five games on these eyes (next replay); why the browser reset mid-run twice (Moto, Neon);
+whether a detector trained on these games would earn its place.
+
+**Next, in order:** the replay on these eyes and the final video; full `tests/ci`, then the PR body; the browser resets.

@@ -206,6 +206,9 @@ GEO = '<!doctype html><title>Video unavailable</title><body>This video is not av
 WALL = '<!doctype html><title>Just a moment...</title><body>Checking your browser before accessing the site.</body>'
 
 
+ABROAD = 'geo-blocked.test'  # not a local name: the browser maps it to the test server
+
+
 @pytest.fixture(scope='module')
 def site():
 	server = HTTPServer()
@@ -241,7 +244,7 @@ def _text(result) -> str:
 async def test_both_servers_offer_the_route_tools(retinat):
 	from browser_use.mcp.server import BrowserUseServer
 
-	for server, prefix in ((retinat, 'retinat'), (BrowserUseServer(), 'browser')):
+	for server, prefix in ((retinat, 'eye'), (BrowserUseServer(), 'browser')):
 		handler = server.server.get_request_handler('tools/list')
 		assert handler is not None
 		listed = await handler.handler(None, types.PaginatedRequestParams())  # type: ignore[arg-type]
@@ -250,7 +253,7 @@ async def test_both_servers_offer_the_route_tools(retinat):
 		assert {f'{prefix}_network', f'{prefix}_network_status'} <= names
 
 
-async def test_retinat_defaults_to_auto_and_the_library_to_off(monkeypatch):
+async def test_eye_defaults_to_auto_and_the_library_to_off(monkeypatch):
 	monkeypatch.delenv('BROWSER_USE_NETWORK', raising=False)
 	from browser_use.mcp.server import BrowserUseServer
 
@@ -259,20 +262,20 @@ async def test_retinat_defaults_to_auto_and_the_library_to_off(monkeypatch):
 
 
 async def test_status_and_setting_the_route_need_no_browser(retinat):
-	status = await _call(retinat, 'retinat_network_status', {})
+	status = await _call(retinat, 'eye_network_status', {})
 	assert 'auto' in _text(status) and 'direct' in _text(status)
-	changed = await _call(retinat, 'retinat_network', {'mode': 'off', 'exit_country': 'de', 'reason': 'test'})
+	changed = await _call(retinat, 'eye_network', {'mode': 'off', 'exit_country': 'de', 'reason': 'test'})
 	assert not changed.is_error and 'off' in _text(changed) and retinat.network.mode is NetworkMode.OFF
 	assert retinat.browser_session is None, 'choosing a route must not launch a browser'
 
 
 async def test_a_bad_country_or_mode_comes_back_as_an_error_the_agent_can_read(retinat):
-	assert _text(await _call(retinat, 'retinat_network', {'mode': 'auto', 'exit_country': 'germany'})).startswith('Error:')
-	nonsense = await _call(retinat, 'retinat_network', {'mode': 'sometimes'})
+	assert _text(await _call(retinat, 'eye_network', {'mode': 'auto', 'exit_country': 'germany'})).startswith('Error:')
+	nonsense = await _call(retinat, 'eye_network', {'mode': 'sometimes'})
 	assert _text(nonsense).startswith('Error:') and nonsense.is_error
 	assert (nonsense.structured_content or {}).get('effect_state') == 'none', 'a refused route change changed nothing'
 	# A blind agent left out `mode` and was told "effect unknown", though nothing could have started.
-	forgot = await _call(retinat, 'retinat_network', {'exit_country': 'de'})
+	forgot = await _call(retinat, 'eye_network', {'exit_country': 'de'})
 	assert forgot.is_error and (forgot.structured_content or {}).get('effect_state') == 'none', _text(forgot)
 	assert 'mode' in _text(forgot)
 	assert retinat.network.mode is NetworkMode.AUTO
@@ -280,45 +283,50 @@ async def test_a_bad_country_or_mode_comes_back_as_an_error_the_agent_can_read(r
 
 async def test_an_attached_chrome_keeps_its_own_connection(retinat):
 	retinat.cdp_url = 'http://127.0.0.1:9222'
-	refused = _text(await _call(retinat, 'retinat_network', {'mode': 'always'}))
+	refused = _text(await _call(retinat, 'eye_network', {'mode': 'always'}))
 	assert refused.startswith('Error:') and '--cdp-url' in refused
 	assert retinat.network.mode is NetworkMode.AUTO
 
 
 async def test_a_normal_page_opens_direct_with_no_route_note(retinat, site):
-	opened = _text(await _call(retinat, 'retinat_open', {'url': site.url_for('/')}))
+	opened = _text(await _call(retinat, 'eye_open', {'url': site.url_for('/')}))
 	assert opened.startswith('Opened "Hello"') and 'Tor' not in opened
 	assert retinat.network.route == 'direct'
 
 
 @no_tor
 async def test_a_geo_block_in_auto_tries_tor_and_says_plainly_that_there_is_none(retinat, site):
-	opened = _text(await _call(retinat, 'retinat_open', {'url': site.url_for('/geo')}))
+	"""Through a name that is not local (the browser maps it to the test server): a local address is never sent
+	through Tor, so the geo-block path needs a host that would be."""
+	retinat.config['browser_profile'].setdefault('args', []).append(f'--host-resolver-rules=MAP {ABROAD} 127.0.0.1')
+	opened = _text(await _call(retinat, 'eye_open', {'url': f'http://{ABROAD}:{site.port}/geo'}))
 	assert 'Tor fallback unavailable' in opened and 'Install Tor' in opened, opened
 	assert retinat.network.last_outcome == 'geo_blocked' and retinat.network.route == 'direct'
 
 
 async def test_the_same_geo_block_is_left_alone_when_the_route_is_off(retinat, site):
-	await _call(retinat, 'retinat_network', {'mode': 'off'})
-	opened = _text(await _call(retinat, 'retinat_open', {'url': site.url_for('/geo')}))
+	await _call(retinat, 'eye_network', {'mode': 'off'})
+	opened = _text(await _call(retinat, 'eye_open', {'url': site.url_for('/geo')}))
 	assert 'Tor' not in opened and retinat.network.route == 'direct'
 
 
 async def test_a_bot_wall_is_reported_and_never_sent_through_tor(retinat, site):
-	opened = _text(await _call(retinat, 'retinat_open', {'url': site.url_for('/wall')}))
+	opened = _text(await _call(retinat, 'eye_open', {'url': site.url_for('/wall')}))
 	assert opened.startswith('BLOCKED:') and 'Tor fallback' not in opened, opened
 	assert retinat.network.last_outcome == 'walled' and retinat.network.route == 'direct'
 
 
-@no_tor
-async def test_a_refused_connection_in_auto_reports_the_error_and_the_missing_tor(retinat):
+async def test_a_refused_local_connection_reports_the_error_and_is_never_sent_through_tor(retinat):
+	"""Found live: eye_open on a loopback port with nothing listening answered "Tor fallback unavailable". Nothing
+	listening there is not censorship, and Tor would send a local address to an exit node: the error is plain."""
 	with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
 		sock.bind(('127.0.0.1', 0))
 		closed_port = sock.getsockname()[1]
-	result = await _call(retinat, 'retinat_open', {'url': f'http://127.0.0.1:{closed_port}/'})
+	result = await _call(retinat, 'eye_open', {'url': f'http://127.0.0.1:{closed_port}/'})
 	assert result.is_error
 	text = _text(result)
-	assert 'ERR_CONNECTION_REFUSED' in text and 'Tor fallback unavailable' in text, text
+	assert 'ERR_CONNECTION_REFUSED' in text and 'Tor' not in text, text
+	assert retinat.network.route == 'direct'
 
 
 # --- Chromium against a real SOCKS5 proxy: what the Tor route relies on -----------
@@ -418,13 +426,13 @@ async def _focus_and_type(server, element_id: str, text: str):
 	await cdp.cdp_client.send.Runtime.evaluate(
 		params={'expression': f'document.getElementById("{element_id}").focus()'}, session_id=cdp.session_id
 	)
-	return await _call(server, 'retinat_type', {'text': text})
+	return await _call(server, 'eye_type', {'text': text})
 
 
 async def test_nothing_is_typed_into_a_password_field_while_routed_through_tor(retinat, site):
 	site.expect_request('/form').respond_with_data(FORM, content_type='text/html')
-	await _call(retinat, 'retinat_network', {'mode': 'off'})
-	await _call(retinat, 'retinat_open', {'url': site.url_for('/form')})
+	await _call(retinat, 'eye_network', {'mode': 'off'})
+	await _call(retinat, 'eye_open', {'url': site.url_for('/form')})
 
 	direct = await _focus_and_type(retinat, 'pw', 'hunter2')  # direct: the person's own business
 	assert not direct.is_error
@@ -435,3 +443,24 @@ async def test_nothing_is_typed_into_a_password_field_while_routed_through_tor(r
 
 	ordinary = await _focus_and_type(retinat, 'user', 'hello')
 	assert not ordinary.is_error, _text(ordinary)
+
+
+def test_local_and_private_addresses_never_fall_back_to_tor():
+	"""Found live: a refused connection to http://127.0.0.1:8765 (nothing listening) was retried through Tor. A local
+	address is not censored, and Tor would send it to an exit node."""
+	from browser_use.net.policy import is_local_host
+
+	for host in (
+		'127.0.0.1',
+		'localhost',
+		'app.localhost',
+		'printer.local',
+		'192.168.1.5',
+		'10.0.0.8',
+		'172.16.0.1',
+		'[::1]',
+		'169.254.1.1',
+	):
+		assert is_local_host(host), host
+	for host in ('example.com', '8.8.8.8', '172.32.0.1', '93.184.216.34', ''):
+		assert not is_local_host(host), host

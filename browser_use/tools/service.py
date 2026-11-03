@@ -7,10 +7,9 @@ from typing import Generic, TypeVar
 
 import anyio
 
-try:
-	from lmnr import Laminar  # type: ignore
-except ImportError:
-	Laminar = None  # type: ignore
+from browser_use.observability import load_laminar
+
+Laminar = load_laminar()  # None unless tracing is enabled (importing lmnr costs seconds)
 from pydantic import BaseModel
 
 from browser_use.agent.views import ActionModel, ActionResult

@@ -86,4 +86,41 @@ follows every World's Hardest Game dot with its speed, and the model playing is 
 looking at the same picture: what it lacks is time (what moved, which way, how fast), which is what the eyes add. A
 detector would have to be trained on these games to earn its place; that is not done.
 
-The five games are being played again on the new eyes; results follow below.
+## Third runs: the eyes read from the video stream (`3454931`)
+
+Same five games, same playbooks and turn cap, the eyes reading each turn from the compositor's stream. Obstacles cleared
+over obstacles met, from each model's log:
+
+| Game | Result | Cleared |
+|---|---|---|
+| World's Hardest Game | Level 1 with 0 deaths; 3 deaths on level 2's crossing columns | 4 of 7 |
+| Moto X3M | Level 2 finished (12.40 s game time), level 4 reached past its checkpoint | 9 of 9, 1 unclear |
+| Neon Challenge Legends | 86% of level 1, no crashes; the tab went blank once mid-run (cause not found) | 12 of 12, 1 unclear |
+| Level Devil | The sliding pit cleared after two deaths; the door's splash hung the page again | 3 of 5, 1 unclear |
+| QWOP | No result: step mode stopped the game's script on every keyed turn (below) | none |
+
+28 of 33 (85%), no better than the first eyes runs: the 98% asked for is still not reached. What the models said, and
+what was done (each fixed test first):
+
+- **QWOP was stopped as if it hung.** On this loaded machine a QWOP frame took seconds; the clock gave a page that drew
+  no frame 1 s to answer, then stopped its script, so the game never moved again (three tabs). A page that answers,
+  however late, is now slow, not stuck: it gets 12 s, and a frame's late budget is checked the same way.
+- **World's Hardest Game, level 2: "the positions of groups look wrong".** Columns of dots sweep past each other; over a
+  short step a dot covers the middle of its path in about half the frames, so the median keeps a ghost of it, and
+  where the dot had gone the ghost read as a group of five moving sideways at 180 px/s. A group that stands out more
+  in the still picture than in the frame is now a ghost; half a thing that moved half its size is kept (found when the
+  first version dropped a rising player).
+- **Moto X3M and Neon: "many false movers at 1000-4000 px/s around saws".** A spinning saw's teeth came out as a dozen
+  movers. Pieces of something spinning jump back and forth: a track whose legs (half its size or more) turn back on a
+  quarter or more of them is a piece, and the place is said once, "changes in place (spinning or animating)", circled
+  on the picture. On a synthetic pair of saws: 10-20 phantom movers before, none at 360 and 720 degrees a second over
+  400 ms; three slow pieces remain at 180 degrees a second at 30 fps, and steps under ~5 legs still cannot tell.
+- **Neon and Level Devil: "too short to see what moves" at 100-150 ms.** Game time stands still between steps, so the
+  last 300 ms of the step before is now read with a short step, when no game time passed between them.
+- **`retinat_key` refused `hold_ms` "250".** The models' client had the tool's schema from before `hold_ms` existed and
+  sent numbers as text; numbers and lists given as text are read as what they say.
+- A thing that leaves no difference for a frame or two (as slow as it is small) is followed across the gap.
+
+Not found: why Neon's tab went blank (the browser reset once before, in Moto X3M, also unexplained).
+
+The five games are played again on these eyes; results follow below.

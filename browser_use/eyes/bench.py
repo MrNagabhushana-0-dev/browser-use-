@@ -592,7 +592,7 @@ async def run(
 				page_path = f'/{task.name}-{seed}-{mode}'
 				serve(page_path, task.page(media_path), media_path, task.media)
 				if mode == 'retina' and not task.needle:
-					await eyes.open()  # before the page loads, as retinat_open does: the first moments count
+					await eyes.open()  # before the page loads, as eye_open does: the first moments count
 				await session.navigate_to(base_url + page_path)
 				if mode == 'screenshots':
 					await asyncio.sleep(0.5)

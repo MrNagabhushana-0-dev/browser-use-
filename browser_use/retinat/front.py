@@ -21,14 +21,14 @@ if TYPE_CHECKING:
 
 def tool_list() -> list[types.Tool]:
 	"""What Retinat serves, as `RetinatServer` lists it."""
-	return [*_tools(), *network_tools('retinat')]
+	return [*_tools(), *network_tools('eye')]
 
 
 class RetinatFront(Front):
 	"""The MCP server a client talks to. It answers the handshake and the tool list itself, and hands each tool call to
 	the `RetinatServer` it loads in the background."""
 
-	name = 'retinat'
+	name = 'eye-mcp-unlimited'
 	label = 'Retinat'
 	module = 'browser_use.retinat.server'
 	inner: 'RetinatServer | None'
@@ -61,7 +61,7 @@ async def main(cdp_url: str | None = None, network: NetworkRouter | None = None,
 
 def cli() -> None:
 	parser = argparse.ArgumentParser(
-		prog='retinat', description='Retinat MCP server: continuous image/video perception for LLMs (stdio).'
+		prog='eye-mcp-unlimited', description='Retinat MCP server: continuous image/video perception for LLMs (stdio).'
 	)
 	parser.add_argument(
 		'--cdp-url', default=os.environ.get('RETINAT_CDP_URL'), help='attach to a Chrome you started with --remote-debugging-port'

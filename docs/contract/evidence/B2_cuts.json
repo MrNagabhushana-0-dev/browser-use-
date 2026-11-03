@@ -1,0 +1,373 @@
+{
+ "tool": "ground_truth.py cuts",
+ "script_version": "01644c5f2e87",
+ "recording": "/root/.config/browseruse/recordings/retinat-20261022-192004.mp4",
+ "recording_sha256": "4eade45cc8f8f7cd866d4f7b373fa4047951a90b70c394c93a0257b538a22e55",
+ "frames": 1558,
+ "fps": 8.0,
+ "span_s": [
+  0.0,
+  194.625
+ ],
+ "source_size": [
+  1200,
+  736
+ ],
+ "roi": {
+  "x": 120,
+  "y": 98,
+  "w": 960,
+  "h": 540
+ },
+ "roi_from": "auto (moving region)",
+ "params": {
+  "min_score": 0.12,
+  "ratio": 5.0,
+  "window_s": 1.0,
+  "min_gap_s": 0.375,
+  "score": "(luma 16x9 grid MAD/255 + RGB 64-bin total variation) / 2, frame i vs i-1, inside roi"
+ },
+ "unchanged_frames_share": 0.403,
+ "unchanged_stretches_s": [
+  [
+   0.0,
+   6.125
+  ],
+  [
+   7.0,
+   9.875
+  ],
+  [
+   11.25,
+   12.5
+  ],
+  [
+   31.875,
+   33.875
+  ],
+  [
+   69.75,
+   71.375
+  ],
+  [
+   80.125,
+   82.125
+  ],
+  [
+   95.125,
+   96.375
+  ],
+  [
+   102.75,
+   103.75
+  ],
+  [
+   103.875,
+   105.0
+  ],
+  [
+   110.5,
+   112.125
+  ],
+  [
+   157.375,
+   159.875
+  ],
+  [
+   167.75,
+   169.0
+  ]
+ ],
+ "n_cuts": 36,
+ "cuts": [
+  {
+   "rec_s": 6.625,
+   "score": 0.7497,
+   "ratio": 16.2,
+   "luma": 0.4995,
+   "colour": 1.0,
+   "unchanged_before_s": 0.25
+  },
+  {
+   "rec_s": 22.625,
+   "score": 0.3949,
+   "ratio": 88.0,
+   "luma": 0.2385,
+   "colour": 0.5513,
+   "unchanged_before_s": 0.375
+  },
+  {
+   "rec_s": 26.5,
+   "score": 0.4627,
+   "ratio": 74.7,
+   "luma": 0.2281,
+   "colour": 0.6973,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 34.0,
+   "score": 0.5691,
+   "ratio": 264.0,
+   "luma": 0.3197,
+   "colour": 0.8184,
+   "unchanged_before_s": 2.0
+  },
+  {
+   "rec_s": 46.25,
+   "score": 0.2688,
+   "ratio": 75.9,
+   "luma": 0.1885,
+   "colour": 0.3491,
+   "unchanged_before_s": 0.25
+  },
+  {
+   "rec_s": 58.625,
+   "score": 0.3652,
+   "ratio": 60.4,
+   "luma": 0.2501,
+   "colour": 0.4804,
+   "unchanged_before_s": 0.25
+  },
+  {
+   "rec_s": 66.875,
+   "score": 0.577,
+   "ratio": 38.8,
+   "luma": 0.291,
+   "colour": 0.8629,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 71.5,
+   "score": 0.3927,
+   "ratio": 55.0,
+   "luma": 0.1826,
+   "colour": 0.6027,
+   "unchanged_before_s": 1.625
+  },
+  {
+   "rec_s": 74.625,
+   "score": 0.3507,
+   "ratio": 48.9,
+   "luma": 0.2588,
+   "colour": 0.4426,
+   "unchanged_before_s": 0.125
+  },
+  {
+   "rec_s": 80.125,
+   "score": 0.4396,
+   "ratio": 21.2,
+   "luma": 0.2565,
+   "colour": 0.6228,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 82.25,
+   "score": 0.5087,
+   "ratio": 175.1,
+   "luma": 0.3235,
+   "colour": 0.6939,
+   "unchanged_before_s": 2.0
+  },
+  {
+   "rec_s": 84.25,
+   "score": 0.4262,
+   "ratio": 52.9,
+   "luma": 0.2214,
+   "colour": 0.6309,
+   "unchanged_before_s": 0.375
+  },
+  {
+   "rec_s": 86.375,
+   "score": 0.3491,
+   "ratio": 10.1,
+   "luma": 0.2012,
+   "colour": 0.497,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 90.75,
+   "score": 0.4868,
+   "ratio": 20.1,
+   "luma": 0.296,
+   "colour": 0.6777,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 100.5,
+   "score": 0.386,
+   "ratio": 111.3,
+   "luma": 0.28,
+   "colour": 0.492,
+   "unchanged_before_s": 0.125
+  },
+  {
+   "rec_s": 102.25,
+   "score": 0.3806,
+   "ratio": 103.3,
+   "luma": 0.2795,
+   "colour": 0.4817,
+   "unchanged_before_s": 0.5
+  },
+  {
+   "rec_s": 110.5,
+   "score": 0.5418,
+   "ratio": 197.6,
+   "luma": 0.3384,
+   "colour": 0.7453,
+   "unchanged_before_s": 0.625
+  },
+  {
+   "rec_s": 112.75,
+   "score": 0.1865,
+   "ratio": 18.8,
+   "luma": 0.1123,
+   "colour": 0.2608,
+   "unchanged_before_s": 0.125
+  },
+  {
+   "rec_s": 114.875,
+   "score": 0.5155,
+   "ratio": 64.9,
+   "luma": 0.2706,
+   "colour": 0.7603,
+   "unchanged_before_s": 0.375
+  },
+  {
+   "rec_s": 123.5,
+   "score": 0.3184,
+   "ratio": 7.5,
+   "luma": 0.128,
+   "colour": 0.5088,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 128.875,
+   "score": 0.2789,
+   "ratio": 16.5,
+   "luma": 0.2206,
+   "colour": 0.3371,
+   "unchanged_before_s": 0.125
+  },
+  {
+   "rec_s": 131.75,
+   "score": 0.3029,
+   "ratio": 17.3,
+   "luma": 0.2093,
+   "colour": 0.3965,
+   "unchanged_before_s": 0.125
+  },
+  {
+   "rec_s": 134.25,
+   "score": 0.2609,
+   "ratio": 21.9,
+   "luma": 0.1538,
+   "colour": 0.368,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 137.75,
+   "score": 0.2825,
+   "ratio": 29.9,
+   "luma": 0.1676,
+   "colour": 0.3974,
+   "unchanged_before_s": 0.25
+  },
+  {
+   "rec_s": 157.25,
+   "score": 0.4097,
+   "ratio": 133.6,
+   "luma": 0.1727,
+   "colour": 0.6468,
+   "unchanged_before_s": 0.375
+  },
+  {
+   "rec_s": 160.0,
+   "score": 0.444,
+   "ratio": 180.4,
+   "luma": 0.1834,
+   "colour": 0.7045,
+   "unchanged_before_s": 2.5
+  },
+  {
+   "rec_s": 166.875,
+   "score": 0.3443,
+   "ratio": 69.8,
+   "luma": 0.1777,
+   "colour": 0.5109,
+   "unchanged_before_s": 0.125
+  },
+  {
+   "rec_s": 171.625,
+   "score": 0.343,
+   "ratio": 51.9,
+   "luma": 0.1721,
+   "colour": 0.514,
+   "unchanged_before_s": 0.125
+  },
+  {
+   "rec_s": 173.125,
+   "score": 0.4208,
+   "ratio": 10.5,
+   "luma": 0.2373,
+   "colour": 0.6044,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 174.125,
+   "score": 0.4416,
+   "ratio": 11.8,
+   "luma": 0.2506,
+   "colour": 0.6327,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 177.125,
+   "score": 0.4476,
+   "ratio": 64.1,
+   "luma": 0.2533,
+   "colour": 0.6419,
+   "unchanged_before_s": 0.375
+  },
+  {
+   "rec_s": 178.875,
+   "score": 0.4464,
+   "ratio": 60.7,
+   "luma": 0.2649,
+   "colour": 0.628,
+   "unchanged_before_s": 0.375
+  },
+  {
+   "rec_s": 180.375,
+   "score": 0.4514,
+   "ratio": 21.0,
+   "luma": 0.2659,
+   "colour": 0.6368,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 187.0,
+   "score": 0.4367,
+   "ratio": 18.8,
+   "luma": 0.2519,
+   "colour": 0.6214,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 188.625,
+   "score": 0.3877,
+   "ratio": 25.6,
+   "luma": 0.2062,
+   "colour": 0.5692,
+   "unchanged_before_s": 0.0
+  },
+  {
+   "rec_s": 191.5,
+   "score": 0.3845,
+   "ratio": 35.6,
+   "luma": 0.205,
+   "colour": 0.5639,
+   "unchanged_before_s": 0.125
+  }
+ ],
+ "runtime_s": 11.6
+}

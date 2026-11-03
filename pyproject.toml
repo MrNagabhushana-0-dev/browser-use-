@@ -3,7 +3,7 @@ name = "browser-use"
 description = "Make websites accessible for AI agents"
 authors = [{ name = "Gregor Zunic" }]
 version = "0.13.10"
-readme = "README.md"
+readme = "PACKAGE_README.md"
 requires-python = ">=3.11,<4.0"
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -122,7 +122,7 @@ build-backend = "hatchling.build"
 
 
 [tool.codespell]
-ignore-words-list = "bu,wit,dont,cant,wont,re-use,re-used,re-using,re-usable,thats,doesnt,doubleclick,finaly,finalY,iterm"
+ignore-words-list = "bu,wit,dont,cant,wont,re-use,re-used,re-using,re-usable,thats,doesnt,doubleclick,finaly,finalY,iterm,ist"
 skip = "*.json"
 
 [tool.ruff]

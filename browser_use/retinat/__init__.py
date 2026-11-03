@@ -2,7 +2,13 @@
 
 Imported lazily: the front answers a client's handshake from light modules before the server is loaded."""
 
-__all__ = ['RetinatServer', 'cli', 'main']  # type: ignore
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # the real names for the type checker; at run time they load on first use, below
+	from browser_use.retinat.front import cli
+	from browser_use.retinat.server import RetinatServer, main
+
+__all__ = ['RetinatServer', 'cli', 'main']
 
 
 def __getattr__(name):

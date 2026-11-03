@@ -15,7 +15,7 @@ Register it in `.claude/settings.json` (hooks run `python -m browser_use.eyes.ho
     }}
 
 Hooks can only add text, not images; the pictures still come from `eyes_watch` (and frames from a
-moment already seen, from `retinat_recall`). A reading older than `STALE_S` is not reported: a stale
+moment already seen, from `eye_recall`). A reading older than `STALE_S` is not reported: a stale
 eye is worse than none.
 
 The eyes also keep a journal of what *changed* (`journal.jsonl` next to `now.json`): a new item, a
@@ -161,7 +161,7 @@ def main() -> int:
 		return 0
 	parts = []
 	if changes:
-		parts.append('Since your last turn (browser-use eyes; frames via retinat_recall):\n' + '\n'.join(changes))
+		parts.append('Since your last turn (browser-use eyes; frames via eye_recall):\n' + '\n'.join(changes))
 	if line is not None:
 		parts.append(f'What the browser shows right now: {line}')
 	name = event.get('hook_event_name') or 'UserPromptSubmit'

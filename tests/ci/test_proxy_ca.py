@@ -228,7 +228,7 @@ async def test_a_ca_that_did_not_sign_what_the_browser_was_shown_is_never_learne
 
 
 async def test_the_first_open_on_such_a_network_succeeds_through_the_mcp_server(https_site, a_certificate, tmp_path, monkeypatch):
-	"""An agent should not have to know any of this: Retinat's first retinat_open learns the CA, restarts its browser
+	"""An agent should not have to know any of this: Retinat's first eye_open learns the CA, restarts its browser
 	and opens the page in the same call."""
 	from browser_use.mcp.server import types
 	from browser_use.retinat.server import RetinatServer
@@ -242,7 +242,7 @@ async def test_the_first_open_on_such_a_network_succeeds_through_the_mcp_server(
 	assert handler is not None
 	try:
 		url = https_site.url_for('/').replace('http://', 'https://')
-		opened = await handler.handler(None, types.CallToolRequestParams(name='retinat_open', arguments={'url': url}))  # type: ignore[arg-type]
+		opened = await handler.handler(None, types.CallToolRequestParams(name='eye_open', arguments={'url': url}))  # type: ignore[arg-type]
 		assert isinstance(opened, types.CallToolResult)
 		said = ' '.join(b.text for b in opened.content if isinstance(b, types.TextContent))
 		assert not opened.is_error and 'proxy CA' in said, said

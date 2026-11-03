@@ -10,6 +10,18 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 cd "$SCRIPT_DIR/.." || exit 1
 
+# A machine's own switches for the servers (untracked): \`python -m browser_use.bridge setup\` writes RETINAT_BRIDGE here,
+# so Retinat starts in bridge mode on the person's laptop.
+if [ -f .retinat.env ]; then
+	. ./.retinat.env
+fi
+# A measured run pins the code to one commit: RETINAT_CODE_DIR is a worktree of it, run with this checkout's venv.
+if [ -n "$RETINAT_CODE_DIR" ]; then
+	VENV_PY="$PWD/.venv/bin/python"
+	cd "$RETINAT_CODE_DIR" || exit 1
+	exec "$VENV_PY" -m "$@"
+fi
+
 for installed in .venv/lib/python3*/site-packages/browser_use-*.dist-info; do
 	if [ -e "$installed" ]; then
 		exec uv run --no-sync python -m "$@"

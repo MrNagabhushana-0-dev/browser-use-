@@ -61,6 +61,7 @@ from browser_use.eyes.percept import (
 	render_strip,
 )
 from browser_use.eyes.requests import RequestLog, told_as_page_failure
+from browser_use.eyes.reservoir import Reservoir
 from browser_use.eyes.retina import AudioHop, FrameSample, Retina, RetinaEvent
 from browser_use.eyes.views import (
 	ASR_REALTIME_X,
@@ -93,7 +94,7 @@ BORED_WINDOW_S = 2.0
 # cross-origin page), 2 s ended 72% and 30% of the watches while more shots were coming within them, losing ~6 shots
 # each; 8 s ended none early, and stopped only in end credits.
 BORED_LONG_WINDOW_S = 8.0
-# Longer than this is longer than any watch (retinat_watch takes 90 s at most).
+# Longer than this is longer than any watch (eye_watch takes 90 s at most).
 LONG_FORM_S = 90.0
 # Discrete sounds this recent (beeps, knocks, notifications) keep a still picture worth watching.
 BORED_SOUND_S = 4.0
@@ -168,7 +169,8 @@ class Eyes:
 		self._meaning = None  # MeaningIndex over the archive, made on first search
 		self._last_now = 0.0
 		self._items_seen = 0
-		self._reported: dict[int, float] = {}  # item id -> when a percept last covered it
+		# INV-2: per item, the last sample a percept committed; the next watch commits from there (eyes/reservoir.py)
+		self.reservoir = Reservoir(backfill_max_s=BACKFILL_MAX_S)
 		self._last_percept_end = 0.0
 		self._sounds_noted: dict[int, str] = {}  # item id -> the distinct-sounds line last journaled for it
 		self._pages = None
@@ -205,12 +207,9 @@ class Eyes:
 		"""Where a watch of item `vid` starting at `start` picks up: the end of the last percept of it, or where it
 		began, up to BACKFILL_MAX_S back. Starting at the call would leave the caller's latency as a blind gap: a beep
 		or a toast between opening a page and the first watch would never be reported."""
-		if not vid:
-			return start
-		walls = [f.wall for f in self.retina.frames if f.vid == vid] + [h.wall for h in self.retina.hops if h.vid == vid]
-		if not walls:
-			return start
-		return min(start, max(min(walls), self._reported.get(vid, 0.0), self.retina.page_since, start - BACKFILL_MAX_S))
+		return self.reservoir.start(
+			start, vid, (self.retina.frames, self.retina.hops), self.retina.page_since, evicted=self.retina.evicted
+		)
 
 	def _text_since(self, start: float) -> float:
 		"""Text that appeared after the last percept, on this page, up to BACKFILL_MAX_S back, is still news."""
@@ -357,6 +356,10 @@ class Eyes:
 				break
 		if hold:
 			await self._hold()
+		# Where this percept's samples end, per item: the next watch picks up from there. Picking up from when this
+		# percept was done left out what played while it was built (0.2-0.5 s a call, measured: real cuts fell there)
+		taken_frames, taken_hops, _ = self._since(since)
+		erased = self.reservoir.last_erased_s
 		percept = await self.perceive(
 			since=since,
 			detail=detail,
@@ -371,9 +374,10 @@ class Eyes:
 		percept.stop_reason = reason
 		percept.started_at, percept.ended_at = start, time.monotonic()
 		self._last_percept_end = percept.ended_at
-		for item in percept.items:
-			self._reported[item.vid] = percept.ended_at
+		self.reservoir.commit([*taken_frames, *taken_hops], [item.vid for item in percept.items], percept.ended_at)
 		percept.text = percept.text.replace('{REASON}', reason)
+		if erased > 0:
+			percept.text += f"\n    evidence erased: {erased:.1f}s played past the eyes' memory before this watch, never seen"
 		return percept
 
 	async def perceive(
@@ -477,7 +481,7 @@ class Eyes:
 					keyframes=[Keyframe(f[i].t, f[i].seq, j) for i, j in zip(selection.indices, jpegs)],
 					coverage=selection.coverage,
 					watched_s=_watched_time([x.wall for x in f] or [x.wall for x in h]),
-					earlier=vid in self._reported,
+					earlier=vid in self.reservoir.cursor,
 					muted=muted_by_vid.get(vid),
 					tainted=vid in tainted,
 					motion=motion.track(f),
@@ -853,7 +857,7 @@ class Eyes:
 			f'{head}: best {len(got)} of {len(index)} archived frames'
 			+ (f' ({added} newly indexed)' if added else '')
 			+ f': {listing}\n~{tokens + 30} tokens (strip {w}x{h} ~{tokens}; estimates). '
-			+ 'Use retinat_recall around a time for more frames of that moment.'
+			+ 'Use eye_recall around a time for more frames of that moment.'
 		)
 		return Percept([], text, jpeg, (w, h), tokens, len(text) // 4, frames=[(t, j) for t, j, _, _ in got])
 
@@ -1267,7 +1271,7 @@ class Eyes:
 	def note_sounds(self) -> None:
 		"""Journal the current item's distinct sounds now if they changed since last noted.
 
-		For a reader asking between pauses (retinat_changes): the pause that would have noted them can come late
+		For a reader asking between pauses (eye_changes): the pause that would have noted them can come late
 		or not be seen at all, and the count should not depend on catching that transition.
 		"""
 		vid = self.retina.attended.get('vid') or self._journaled.get('vid')

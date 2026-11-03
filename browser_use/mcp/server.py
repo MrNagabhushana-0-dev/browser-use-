@@ -131,6 +131,7 @@ BROWSER_TOOLS = frozenset(
 # A handler's text that is really a failure (see handle_call_tool).
 TEXT_FAILURES = ('Error:', 'Error closing session', 'Refused:', 'Element with index ')
 from browser_use.net import NetworkPolicyError, NetworkRouter, Outcome, classify_navigation
+from browser_use.net.policy import is_local_host
 from browser_use.tools.service import Tools
 
 logger = logging.getLogger(__name__)
@@ -230,7 +231,7 @@ def get_parent_process_cmdline() -> str | None:
 class BrowserUseServer:
 	"""MCP Server for browser-use capabilities."""
 
-	def __init__(self, session_timeout_minutes: int = 10, network: NetworkRouter | None = None):
+	def __init__(self, session_timeout_minutes: float = 10, network: NetworkRouter | None = None):
 		# Ensure all logging goes to stderr (in case new loggers were created)
 		_ensure_all_loggers_use_stderr()
 
@@ -804,8 +805,8 @@ class BrowserUseServer:
 			note = " (the browser restarted to trust this network's proxy CA, learned from the refused page)"
 		outcome = classify_navigation(str(error)) if error else await self._page_outcome()
 		self.network.note_outcome(outcome)
-		if self.network.wants_fallback(outcome) and not self.cdp_url:
-			host = urlparse(url).hostname or url
+		host = urlparse(url).hostname or url
+		if self.network.wants_fallback(outcome) and not self.cdp_url and not is_local_host(host):
 			if await self.network.engage(f'{outcome} at {host}'):
 				await self._drop_browser_session()
 				await self._init_browser_session()
@@ -1507,7 +1508,7 @@ def _is_secret_field(attributes: dict[str, str]) -> bool:
 	)
 
 
-from browser_use.serving import _close_everything, _log_stopped_by_signal, serve_until_stopped  # noqa: E402,F401
+from browser_use.serving import _close_everything, _log_stopped_by_signal, serve_until_stopped  # noqa: E402, F401
 
 
 async def main(session_timeout_minutes: int = 10):

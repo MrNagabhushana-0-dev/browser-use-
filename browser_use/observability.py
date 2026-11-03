@@ -39,11 +39,31 @@ def _is_debug_mode() -> bool:
 	return False
 
 
-# Try to import lmnr observe
+def tracing_enabled() -> bool:
+	"""Whether to load lmnr at all. lmnr is slow to import (about 7 s on a cold disk, measured) and exports nothing
+	without a Laminar key, so a local run without one skips it. Set LMNR_PROJECT_API_KEY, or BROWSER_USE_TRACING=1."""
+	return bool(os.environ.get('LMNR_PROJECT_API_KEY')) or os.environ.get('BROWSER_USE_TRACING', '').lower() in ('1', 'true')
+
+
+def load_laminar() -> Any:
+	"""The Laminar class when tracing is enabled and lmnr is installed, else None."""
+	if not tracing_enabled():
+		return None
+	try:
+		from lmnr import Laminar  # type: ignore
+
+		return Laminar
+	except ImportError:
+		return None
+
+
+# Try to import lmnr observe (only when tracing is enabled)
 _LMNR_AVAILABLE = False
 _lmnr_observe = None
 
 try:
+	if not tracing_enabled():
+		raise ImportError('tracing is off: no LMNR_PROJECT_API_KEY and no BROWSER_USE_TRACING')
 	from lmnr import observe as _lmnr_observe  # type: ignore
 
 	if os.environ.get('BROWSER_USE_VERBOSE_OBSERVABILITY', 'false').lower() == 'true':

@@ -312,9 +312,11 @@ def render_strip(frames: list[tuple[float, bytes]], height: int = 320, gap: int 
 	return out.getvalue(), width, height
 
 
-def render_sheet(items: list[ItemPercept], detail: str = 'glance', max_width: int = 1400) -> tuple[bytes, int, int] | None:
+def render_sheet(items: list[ItemPercept], detail: str = 'glance', max_width: int | None = None) -> tuple[bytes, int, int] | None:
 	"""One JPEG: a keyframe row plus a sound strip per item. None if there is nothing to show."""
 	assert detail in DETAIL_HEIGHT, f'detail must be one of {list(DETAIL_HEIGHT)}'
+	if max_width is None:
+		max_width = 1400
 	rows: list[Image.Image] = []
 	for item in items:
 		frames = [Image.open(io.BytesIO(k.jpeg)).convert('RGB') for k in item.keyframes if k.jpeg]
