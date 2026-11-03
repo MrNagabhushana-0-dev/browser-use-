@@ -446,3 +446,13 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   test_both_servers_offer_the_route_tools. Also found: test_bridge.py hung after its last test (py-spy: a single-threaded test
   server blocked on a socket the browser preconnected and never used, stopped before the browser); main has the same hang;
   fixed by stopping those servers after the browser. Not run: the tests/ci files this branch does not touch.
+- 2026-11-03 THE REST OF tests/ci FOR THE COMBINED PR (MEASURED; the 100 files the branch had not touched, each in its own pytest
+  process; failures re-run alone and as whole files on this branch and on main, main from its own worktree): 96 files passed
+  (994 tests, 1 skipped). test_browser_use_skill_install_docs failed: it read README.md (already one line on main, so it failed
+  there too, then deleted on the owner's order); it now reads the readme pyproject names, and PACKAGE_README documents
+  `browser-use skill install`: 5 passed. test_screenrec (a 2 s recording came out 0.4 s) and test_site_synthesis (one test hit
+  the 300 s timeout) failed once in the long run; each passed alone and as a whole file on this branch and on main (6 and 34);
+  cause not established; the branch does not touch browser_use/vision, synthesis or browser. test_cobrowse:
+  test_the_signed_in_profile_survives_closing_the_browser and test_the_full_handover_round_trip (Input.dispatchMouseEvent did
+  not respond in 60 s) fail on main as well, the other 5 pass on both: not this branch's, not fixed here.
+  TOTAL on the PR head, all 110 files: 1,351 passed, 1 skipped, 2 failed (both failing on main too).
