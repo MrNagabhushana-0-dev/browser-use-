@@ -386,3 +386,21 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   otherwise; the truly cold state cannot be reproduced from inside the guest, so the post-fix cold figure is NOT measured.
   What remains: the MCP library about 0.9 s, model clients about 0.3 s. After the change the server answers initialize
   and lists 28 eye_* tools in 1.5 s (warm). Behaviour change: without a Laminar key, tracing spans are not created.
+- 2026-11-03 AGENT MEMORY BUILT, FREE AND LOCAL (owner: automatic, not forced store/retrieve; use what is free):
+  scripts/memory/{memd.py, hook.py, install.py}. Mem0 (mem0ai 2.2.1) + fastembed (BAAI/bge-small-en-v1.5, CPU, no key) +
+  embedded Qdrant, in ~/agent-memory, outside the repo. memd is a loopback daemon behind a bearer token; hook.py recalls on
+  every prompt (UserPromptSubmit), stores every finished turn with secrets redacted (Stop), starts the daemon at
+  SessionStart; any error exits 0 silently; EYES_MEMORY=off disables. Hooks are in .claude/settings.local.json (git-ignored).
+  MEASURED: store then semantic recall returned the right memory for both of two queries; auth: 401 without the token;
+  redaction turned an sk-... key into [redacted] in the stored text; a dead daemon gives no output and exit 0.
+  CALIBRATION (MEASURED, 7 prompts, 3 memories): the embedder alone cannot separate a relevant short memory from an
+  irrelevant one (0.408 for "what was the MCP server renamed to" against 0.407 for "how do I bake sourdough bread"), so
+  recall also needs a shared content word unless the score is >= 0.65. With that gate, 3 of 3 relevant prompts recalled
+  the right memory and 4 of 4 unrelated or ambiguous prompts recalled nothing. A sanity check, not a benchmark.
+  LIMITS: stored text is the raw turn (infer=False), not extracted facts: extraction needs an LLM and none is configured.
+  The store lives in the container and is lost when the container is reclaimed; it is NOT committed (the repo is public).
+  The hook injects recalled text into context, labelled as data; if web content is ever stored it could carry
+  instructions: nothing but the owner's own conversation is stored today.
+  NOTE: tests/ci/test_retinat.py::test_no_tool_offers_a_wait_longer_than_a_client_waits_for_a_call now passes vacuously
+  (it reads schema maxima, which were removed on 2026-10-30); the budget tests (test_every_tool_that_can_run_long_is_under_
+  the_call_budget and the long scan and browse tests) are the real guard and passed.
