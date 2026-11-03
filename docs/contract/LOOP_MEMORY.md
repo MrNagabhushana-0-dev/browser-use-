@@ -427,3 +427,12 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   after its result. eye_recall of 9-12 s returned 3 stored frames at full size without replaying (about 774 tokens).
   Recording: /root/.config/browseruse/recordings/retinat-20261103-095914.mp4 (21.1 MB). Found and fixed on first use: the Tor
   fallback on a refused local address (entry above).
+- 2026-11-03 MAIN MERGED INTO THE BRANCH (owner's order: "Rebase from the remote repo & raise mega pr"; MEASURED by git): PR #13 had
+  been merged (fde304f) and main then carried the owner's one-line README.md (5327137). A rebase was made locally, but pushing it needs
+  a force push, which the session's permission policy refused; main was merged instead (e1aef61). Same final code; every commit hash
+  cited in this log and in M2_CLOSEOUT.md stays on the branch. Only conflict: README.md (modified on main, deleted here), kept deleted
+  per the owner's later order.
+- 2026-11-03 COUNTER CHANGE, TYPING ONLY (scripts/contract/measure_watch.py, in the CI clean-up commit; MEASURED): a transcript line
+  with no timestamp is now skipped instead of carrying None into the timeline (pyright). None of the 8 measured transcripts has an
+  assistant or user line without a timestamp; the counter's output is byte-identical before and after on all 8, with and without
+  --edits tests/ci/assets/big_buck_bunny/edits.json. No reported number changes.
