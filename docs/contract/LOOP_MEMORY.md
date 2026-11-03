@@ -417,3 +417,13 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   MEASURED after: the same dead-port navigation on fresh server code answers plain ERR_CONNECTION_REFUSED, no Tor mention;
   13 address cases checked; regression test test_local_and_private_addresses_never_fall_back_to_tor passes.
   The running session server still has the old code until it restarts.
+- 2026-11-03 LIVE DEMONSTRATION THROUGH THIS SESSION'S OWN EYE TOOLS (the server reconnected; MEASURED, NOT a scored run: the watcher
+  was the main agent, there is no verifier, the token counts are the tool's own estimates): eye_open the local film page,
+  eye_record start, eye_find the play button by its text (found at (960,542), no screenshot or DOM dump), eye_click with
+  expect="▶" (refused if the target did not say it; it did), then 3 eye_watch windows of up to 12 s, until=event, glance,
+  live narration. Windows covered 0.0-6.6 s, 6.4-14.4 s, 14.2-21.8 s: continuous, 0.2 s overlaps, no gap. The film's cut at
+  20.167 s was reported as "stopped: cut at 20.2s". Result sizes (estimated): about 590, 546 and 582 tokens, about 1,720 for
+  21.8 s of film. All 3 results were narrated (2 on the next watch call, the last by eye_narrate); narration came a median 6.0 s
+  after its result. eye_recall of 9-12 s returned 3 stored frames at full size without replaying (about 774 tokens).
+  Recording: /root/.config/browseruse/recordings/retinat-20261103-095914.mp4 (21.1 MB). Found and fixed on first use: the Tor
+  fallback on a refused local address (entry above).
