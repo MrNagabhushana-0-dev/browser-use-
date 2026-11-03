@@ -436,3 +436,13 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   with no timestamp is now skipped instead of carrying None into the timeline (pyright). None of the 8 measured transcripts has an
   assistant or user line without a timestamp; the counter's output is byte-identical before and after on all 8, with and without
   --edits tests/ci/assets/big_buck_bunny/edits.json. No reported number changes.
+- 2026-11-03 EVERY TEST FILE THIS BRANCH TOUCHES, RUN FOR THE COMBINED PR (MEASURED; each file in its own pytest process, as CI
+  runs them; code identical to the PR head): test_bridge 36, test_clock 21, test_desktop_control 13, test_desktop_eyes 3,
+  test_eyes 99, test_mcp_lifecycle 8, test_network 33, test_proxy_ca 10, test_reflex 19, test_retinat 65: 307 passed, 0 failed.
+  CORRECTION: three tests were broken by my own earlier changes and nothing had run them; the 65-of-65 smoke result above
+  covered test_retinat.py only. The Tor fix (98c7b26) broke two test_network tests that expected a refused loopback connection
+  and a geo block on a localhost server to try Tor (both reproduced failing; the first now checks the fix end to end, the
+  second reaches its server through a non-local name). The rename left a bare 'retinat' prefix in
+  test_both_servers_offer_the_route_tools. Also found: test_bridge.py hung after its last test (py-spy: a single-threaded test
+  server blocked on a socket the browser preconnected and never used, stopped before the browser); main has the same hang;
+  fixed by stopping those servers after the browser. Not run: the tests/ci files this branch does not touch.
