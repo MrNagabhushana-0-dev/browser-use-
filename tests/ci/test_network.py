@@ -206,6 +206,9 @@ GEO = '<!doctype html><title>Video unavailable</title><body>This video is not av
 WALL = '<!doctype html><title>Just a moment...</title><body>Checking your browser before accessing the site.</body>'
 
 
+ABROAD = 'geo-blocked.test'  # not a local name: the browser maps it to the test server
+
+
 @pytest.fixture(scope='module')
 def site():
 	server = HTTPServer()
@@ -293,7 +296,10 @@ async def test_a_normal_page_opens_direct_with_no_route_note(retinat, site):
 
 @no_tor
 async def test_a_geo_block_in_auto_tries_tor_and_says_plainly_that_there_is_none(retinat, site):
-	opened = _text(await _call(retinat, 'eye_open', {'url': site.url_for('/geo')}))
+	"""Through a name that is not local (the browser maps it to the test server): a local address is never sent
+	through Tor, so the geo-block path needs a host that would be."""
+	retinat.config['browser_profile'].setdefault('args', []).append(f'--host-resolver-rules=MAP {ABROAD} 127.0.0.1')
+	opened = _text(await _call(retinat, 'eye_open', {'url': f'http://{ABROAD}:{site.port}/geo'}))
 	assert 'Tor fallback unavailable' in opened and 'Install Tor' in opened, opened
 	assert retinat.network.last_outcome == 'geo_blocked' and retinat.network.route == 'direct'
 
@@ -310,15 +316,17 @@ async def test_a_bot_wall_is_reported_and_never_sent_through_tor(retinat, site):
 	assert retinat.network.last_outcome == 'walled' and retinat.network.route == 'direct'
 
 
-@no_tor
-async def test_a_refused_connection_in_auto_reports_the_error_and_the_missing_tor(retinat):
+async def test_a_refused_local_connection_reports_the_error_and_is_never_sent_through_tor(retinat):
+	"""Found live: eye_open on a loopback port with nothing listening answered "Tor fallback unavailable". Nothing
+	listening there is not censorship, and Tor would send a local address to an exit node: the error is plain."""
 	with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
 		sock.bind(('127.0.0.1', 0))
 		closed_port = sock.getsockname()[1]
 	result = await _call(retinat, 'eye_open', {'url': f'http://127.0.0.1:{closed_port}/'})
 	assert result.is_error
 	text = _text(result)
-	assert 'ERR_CONNECTION_REFUSED' in text and 'Tor fallback unavailable' in text, text
+	assert 'ERR_CONNECTION_REFUSED' in text and 'Tor' not in text, text
+	assert retinat.network.route == 'direct'
 
 
 # --- Chromium against a real SOCKS5 proxy: what the Tor route relies on -----------

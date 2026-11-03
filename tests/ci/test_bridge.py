@@ -151,8 +151,11 @@ def bank():
 
 
 @pytest.fixture(scope='module')
-async def bridge(display, site, mail, bank, tmp_path_factory):
-	"""A relay plus a person's browser that shares /shared* (by the always-share setting) and not the mail tab."""
+async def bridge(display, site, mail, bank, elsewhere, tmp_path_factory):
+	"""A relay plus a person's browser that shares /shared* (by the always-share setting) and not the mail tab.
+
+	It takes `elsewhere` so those servers start before the browser and stop after it: the browser opens connections it
+	may never send on (preconnects), and a stopping single-threaded server waits for the request on one forever."""
 	relay = await BridgeRelay(port=0).start()
 	proc = _person_browser(
 		tmp_path_factory.mktemp('person'),

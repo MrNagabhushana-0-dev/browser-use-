@@ -10,7 +10,7 @@ the record shows (docs/contract/LOOP_MEMORY.md, M2_CLOSEOUT.md). "Unmeasured" me
 - **Eye core** (`browser_use/eyes`): the retina (frame and sound sampling in the page), motion, clock, hearing and
   speech, keyframe sheets, frame archive, recall and search, the event gate, the reservoir (retroactive commit of
   what played). Status: the reservoir (E4) and the narration are measured; the gate (E5) was reverted on C2.
-- **Watch tools for video**: `eye_watch` (seconds up to the call budget, until time/event/bored/item/gate). Measured.
+- **Watch tools for video**: `eye_watch` (seconds up to the call budget, until time/event/bored/item). Measured.
 
 ## Browser extension bridge (P2: your own Chrome)
 - **Bridge** (`browser_use/bridge`, extension in `browser_use/bridge/extension`): drives tabs you share, through a
@@ -42,6 +42,10 @@ the record shows (docs/contract/LOOP_MEMORY.md, M2_CLOSEOUT.md). "Unmeasured" me
   routes that worked on a site), **skills** (`browser_use/skills`), **sandbox** (`browser_use/sandbox`), **beta**
   (`browser_use/beta`), **integrations** (`browser_use/integrations`). Inherited from upstream browser-use; their
   quality here is unmeasured.
+
+- **Automatic agent memory** (`scripts/memory`): Mem0 + fastembed + embedded Qdrant behind a loopback daemon; Claude
+  Code hooks recall on each prompt and store each finished turn (secrets redacted). Local only, never committed.
+  Sanity check, not a benchmark: 7 prompts, 3 of 3 relevant recalled, 4 of 4 unrelated not. Stores raw turns only.
 
 ## Contract and evidence (not a product)
 - `docs/contract/`: the operating contract, the milestone record, the evidence, the install checklist.
