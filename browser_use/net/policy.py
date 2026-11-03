@@ -67,6 +67,24 @@ class NetworkPolicyError(RuntimeError):
 	"""A request the current network policy refuses, or a setting it can't honour."""
 
 
+def is_local_host(host: str) -> bool:
+	"""Whether `host` is this machine or a private network: localhost, *.localhost, *.local, loopback, private,
+	link-local and unique-local addresses. A refused connection there means nothing is listening, not censorship, so
+	it is never retried through Tor (which would also send a local address to an exit node)."""
+	import ipaddress
+
+	host = (host or '').strip().strip('[]').lower().rstrip('.')
+	if not host:
+		return False
+	if host == 'localhost' or host.endswith(('.localhost', '.local')):
+		return True
+	try:
+		ip = ipaddress.ip_address(host)
+	except ValueError:
+		return False
+	return ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified
+
+
 def classify_navigation(
 	error_text: str = '',
 	*,

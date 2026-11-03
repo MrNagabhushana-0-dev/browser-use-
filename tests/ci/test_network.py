@@ -435,3 +435,24 @@ async def test_nothing_is_typed_into_a_password_field_while_routed_through_tor(r
 
 	ordinary = await _focus_and_type(retinat, 'user', 'hello')
 	assert not ordinary.is_error, _text(ordinary)
+
+
+def test_local_and_private_addresses_never_fall_back_to_tor():
+	"""Found live: a refused connection to http://127.0.0.1:8765 (nothing listening) was retried through Tor. A local
+	address is not censored, and Tor would send it to an exit node."""
+	from browser_use.net.policy import is_local_host
+
+	for host in (
+		'127.0.0.1',
+		'localhost',
+		'app.localhost',
+		'printer.local',
+		'192.168.1.5',
+		'10.0.0.8',
+		'172.16.0.1',
+		'[::1]',
+		'169.254.1.1',
+	):
+		assert is_local_host(host), host
+	for host in ('example.com', '8.8.8.8', '172.32.0.1', '93.184.216.34', ''):
+		assert not is_local_host(host), host

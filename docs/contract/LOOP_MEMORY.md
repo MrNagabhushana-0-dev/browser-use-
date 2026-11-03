@@ -410,3 +410,10 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   CORRECTION: I guessed the earlier hang came from the deleted .retinat.env forcing bridge mode. That is wrong: the hang
   came after the file was deleted. Not isolated. Candidate causes, unproven: the cold start of a freshly resumed VM (the
   same state that timed out the MCP connect), and CPU contention from memory tests I ran during run 1.
+- 2026-11-03 BUG FOUND LIVE AND FIXED (first use of the eye tools in this session): eye_open to http://127.0.0.1:8765 with nothing
+  listening answered "Tor fallback unavailable: Tor is enabled but no Tor is running". A refused local connection was treated as a
+  network block and retried through Tor (which would also send a local address to an exit node). FIX: is_local_host() in
+  browser_use/net/policy.py; the server never engages Tor for localhost, *.local, loopback, private or link-local hosts.
+  MEASURED after: the same dead-port navigation on fresh server code answers plain ERR_CONNECTION_REFUSED, no Tor mention;
+  13 address cases checked; regression test test_local_and_private_addresses_never_fall_back_to_tor passes.
+  The running session server still has the old code until it restarts.
