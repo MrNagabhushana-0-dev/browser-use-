@@ -244,7 +244,7 @@ def _text(result) -> str:
 async def test_both_servers_offer_the_route_tools(retinat):
 	from browser_use.mcp.server import BrowserUseServer
 
-	for server, prefix in ((retinat, 'retinat'), (BrowserUseServer(), 'browser')):
+	for server, prefix in ((retinat, 'eye'), (BrowserUseServer(), 'browser')):
 		handler = server.server.get_request_handler('tools/list')
 		assert handler is not None
 		listed = await handler.handler(None, types.PaginatedRequestParams())  # type: ignore[arg-type]
