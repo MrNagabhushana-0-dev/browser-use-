@@ -91,10 +91,9 @@ logger = logging.getLogger(__name__)
 TERMINAL_INSTALL_COMMAND = 'curl -fsSL https://browser-use.com/terminal/install.sh | sh'
 AGENT_TOOLS_DIR_ENV = 'BUT_AGENT_TOOLS_DIR'
 
-try:
-	from lmnr import Laminar  # type: ignore
-except ImportError:
-	Laminar = None  # type: ignore
+from browser_use.observability import load_laminar
+
+Laminar = load_laminar()  # None unless tracing is enabled (importing lmnr costs seconds)
 
 
 class BetaAgentError(RuntimeError):

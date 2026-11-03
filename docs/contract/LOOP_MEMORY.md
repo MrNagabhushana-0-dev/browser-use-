@@ -378,3 +378,11 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   installed in a separate venv, ~/agent-memory, outside the repo (MEASURED: import ok). Chosen because it extracts
   memories from conversation on its own. NOT tested: it needs an LLM key and an embedding model, neither configured.
   Vendor benchmark numbers disagree; no independent comparison decided it (search, 2026-10-30).
+- 2026-11-03 STARTUP SLIMMING (owner: kill the connect timeout): the Laminar tracing library (lmnr) is now loaded only
+  when LMNR_PROJECT_API_KEY or BROWSER_USE_TRACING=1 is set (browser_use/observability.py, tools/service.py,
+  beta/service.py). MEASURED: on a freshly resumed VM (cold host disk) the server's imports took 18.3 s cumulative, of which
+  lmnr 6.9 s (python -X importtime). With the guest page cache dropped (cold guest, warm host) the gain is small: 3.1-3.2 s
+  without vs 3.5-3.9 s with lmnr; warm 2.5 s vs 2.7-2.8 s. So the saving is about 7 s on a truly cold VM and 0.3-0.8 s
+  otherwise; the truly cold state cannot be reproduced from inside the guest, so the post-fix cold figure is NOT measured.
+  What remains: the MCP library about 0.9 s, model clients about 0.3 s. After the change the server answers initialize
+  and lists 28 eye_* tools in 1.5 s (warm). Behaviour change: without a Laminar key, tracing spans are not created.
