@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,7 +49,9 @@ def _fake_browser_harness_tools(tmp_path: Path, skill_text: str) -> Path:
 
 
 def test_docs_install_browser_use_skill_from_package_alias():
-	readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+	# the package's own readme, whichever file pyproject names (README.md was replaced by PACKAGE_README.md)
+	readme_name = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))['project']['readme']
+	readme = (ROOT / readme_name).read_text(encoding='utf-8')
 
 	assert 'run `browser-use skill install` to register the skill' in readme
 	assert 'mkdir -p ~/.claude/skills/browser-use' not in readme

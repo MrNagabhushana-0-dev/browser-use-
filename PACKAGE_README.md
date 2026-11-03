@@ -42,6 +42,8 @@ the record shows (docs/contract/LOOP_MEMORY.md, M2_CLOSEOUT.md). "Unmeasured" me
   routes that worked on a site), **skills** (`browser_use/skills`), **sandbox** (`browser_use/sandbox`), **beta**
   (`browser_use/beta`), **integrations** (`browser_use/integrations`). Inherited from upstream browser-use; their
   quality here is unmeasured.
+  To use browser-use from a coding agent, run `browser-use skill install` to register the skill (it writes the skill's
+  SKILL.md into the skill folders of Claude Code, Codex, Cursor, Gemini, Copilot, OpenCode and others).
 
 - **Automatic agent memory** (`scripts/memory`): Mem0 + fastembed + embedded Qdrant behind a loopback daemon; Claude
   Code hooks recall on each prompt and store each finished turn (secrets redacted). Local only, never committed.
