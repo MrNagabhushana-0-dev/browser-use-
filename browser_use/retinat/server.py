@@ -59,11 +59,10 @@ if TYPE_CHECKING:
 	from browser_use.eyes.clock import PageClock
 
 TOOL_PREFIX = 'eye_'
-# Said on what a seeing tool returns when it was asked while a eye_wait was pending: a client may send both at
+# Said on what a seeing tool returns when it was asked while an eye_wait was pending: a client may send both at
 # once, and the answer is then from before what the wait is for (found live: read as a stale picture for an hour)
 _WAIT_PENDING_NOTE = (
-	'\n⏳ asked while a eye_wait was still waiting: this is from before what that wait is for. '
-	'Ask again after the wait returns.'
+	'\n⏳ asked while an eye_wait was still waiting: this is from before what that wait is for. Ask again after the wait returns.'
 )
 # Tools that send input, navigate, scroll or play: refused up front while the person holds the wheel.
 ACTING = frozenset(
@@ -88,9 +87,7 @@ ACTING = frozenset(
 # Tools that can run long (a count of screens, items, pages or seconds): each keeps to the call's budget by itself.
 # Every tool, these or not, is stopped BACKSTOP_GRACE_S past the budget if it has not ended (the client's 60 s minus
 # room for the answer)
-LONG_TOOLS = frozenset(
-	{'eye_scan', 'eye_browse', 'eye_watch', 'eye_explore', 'eye_desktop_watch', 'eye_step'}
-)
+LONG_TOOLS = frozenset({'eye_scan', 'eye_browse', 'eye_watch', 'eye_explore', 'eye_desktop_watch', 'eye_step'})
 # Tools whose eyes run on the page's own timers, which stand still on a page paused by eye_step: they would report
 # a frozen page as it is, so they are refused there with the reason
 NEEDS_PAGE_TIME = frozenset(
@@ -198,7 +195,7 @@ class RetinatServer(BrowserUseServer):
 	def __init__(
 		self,
 		cdp_url: str | None = None,
-		session_timeout_minutes: int = 30,
+		session_timeout_minutes: float = 30,
 		network: NetworkRouter | None = None,
 		bridge: 'BridgeRelay | None' = None,
 		call_budget_s: float | None = None,

@@ -167,4 +167,3 @@ extension had gone with the rig; the rig was restarted, and the E6 run was not r
   label file frozen while its recording is absent from the machine carries no recording hash (freeze prints that).
 - Measurement confidence: no reported M2 number changes. The cut detector, the alignment and the cuts files are
   unchanged; the labels are unchanged; the scores in LOOP_MEMORY stand.
-

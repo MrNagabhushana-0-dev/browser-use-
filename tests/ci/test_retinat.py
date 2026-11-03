@@ -855,7 +855,7 @@ def test_every_tool_that_can_run_long_is_under_the_call_budget():
 
 	long_params = {'max_screens', 'items', 'max_pages', 'seconds', 'max_seconds'}
 	tools = [*_browser_tools(), *_desktop_tools(), *_control_tools()]
-	long = {t.name for t in tools if long_params & set((t.input_schema.get('properties') or {}))}
+	long = {t.name for t in tools if long_params & set(t.input_schema.get('properties') or {})}
 	assert long and long <= LONG_TOOLS, sorted(long - LONG_TOOLS)
 
 

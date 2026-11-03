@@ -231,7 +231,7 @@ def get_parent_process_cmdline() -> str | None:
 class BrowserUseServer:
 	"""MCP Server for browser-use capabilities."""
 
-	def __init__(self, session_timeout_minutes: int = 10, network: NetworkRouter | None = None):
+	def __init__(self, session_timeout_minutes: float = 10, network: NetworkRouter | None = None):
 		# Ensure all logging goes to stderr (in case new loggers were created)
 		_ensure_all_loggers_use_stderr()
 
@@ -1508,7 +1508,7 @@ def _is_secret_field(attributes: dict[str, str]) -> bool:
 	)
 
 
-from browser_use.serving import _close_everything, _log_stopped_by_signal, serve_until_stopped  # noqa: E402,F401
+from browser_use.serving import _close_everything, _log_stopped_by_signal, serve_until_stopped  # noqa: E402, F401
 
 
 async def main(session_timeout_minutes: int = 10):

@@ -50,8 +50,10 @@ def measure(path: str, tool: str, edits: str | None = None) -> dict:
 	results: list[tuple[float, float, str]] = []  # (call issued, result received, result text)
 	for line in lines:
 		msg = line.get('message') or {}
-		when = _ts(line['timestamp']) if line.get('timestamp') else None
-		if last_id and when is not None and msg.get('id') != last_id and last_id not in done:
+		if not line.get('timestamp'):
+			continue  # a line with no time cannot be placed on the timeline (the measured runs have none)
+		when = _ts(line['timestamp'])
+		if last_id and msg.get('id') != last_id and last_id not in done:
 			done[last_id] = when
 		# correction 4: a synthetic message (an API error the harness wrote, zero usage) is not a turn of the watcher
 		real = msg.get('model') != '<synthetic>' and any(

@@ -29,7 +29,7 @@ MAX_BODY = 1_000_000
 
 
 def make_memory(home: Path):
-	from mem0 import Memory
+	from mem0 import Memory  # type: ignore  # installed in the memory venv (scripts/memory/install.py), not this one
 
 	os.environ.setdefault('MEM0_DIR', str(home / 'data'))
 	config = {

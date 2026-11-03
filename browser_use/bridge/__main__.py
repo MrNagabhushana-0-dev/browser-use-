@@ -152,7 +152,7 @@ def _log_result(t: SelfTest, port: int) -> str:
 		)
 	else:
 		lines.append(
-			'To retry: run this command again. It opens the self-test tab itself; do not share the relay\'s own\n'
+			"To retry: run this command again. It opens the self-test tab itself; do not share the relay's own\n"
 			'          address by hand (the bridge refuses that).'
 		)
 	return '\n'.join(lines)

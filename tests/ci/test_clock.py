@@ -12,6 +12,7 @@ Real browser, real canvas games served by pytest-httpserver; nothing mocked.
 import asyncio
 import json
 import time
+from typing import Any
 
 import pytest
 from pytest_httpserver import HTTPServer
@@ -502,7 +503,7 @@ async def test_a_page_that_writes_itself_anew_keeps_its_beat(session, games):
 		await pc.close()
 
 
-async def _value(session: BrowserSession, expression: str):
+async def _value(session: BrowserSession, expression: str) -> Any:
 	cdp = await session.get_or_create_cdp_session(focus=False)
 	r = await cdp.cdp_client.send.Runtime.evaluate(
 		params={'expression': expression, 'returnByValue': True}, session_id=cdp.session_id

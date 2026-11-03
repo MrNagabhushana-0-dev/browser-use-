@@ -280,7 +280,7 @@ and real key or mouse input goes out within a few milliseconds. Then `eye_wait` 
   and handed over whole, so it costs: on Temple Run 2, 480 gave pictures 160 ms old (72-117 at 240), and 960 gave
   510 ms.
 - **Look after `eye_wait` returns, not alongside it.** A client may send both at once, and the look then runs
-  straight away, before what you are waiting for. Such a look says so ("asked while a eye_wait was still
+  straight away, before what you are waiting for. Such a look says so ("asked while an eye_wait was still
   waiting").
 
 ## Step mode: playing it yourself, turn by turn
