@@ -376,3 +376,28 @@ def test_the_front_passes_an_uncached_protocol_version_through(tmp_path):
 		assert init['result']['serverInfo']['name'] == 'eye-mcp-unlimited', init
 	finally:
 		second.close()
+
+
+def test_an_answer_to_what_the_client_asked_before_a_cached_handshake_never_reaches_it(tmp_path):
+	"""Found live on a freshly booted machine: Claude Code probed with `server/discover`, gave up on it while the real
+	server was still starting, and connected with the cached `initialize`. The real server answered the probe 25 s
+	later, the client met "a response for an unknown message", and dropped the connection."""
+	first = _FrontProcess(tmp_path)
+	try:
+		first.handshake(timeout=120)
+	finally:
+		first.close()
+
+	front = _FrontProcess(tmp_path, child_prefix='sleep 4; ')
+	try:
+		front.send({'jsonrpc': '2.0', 'id': 'probe', 'method': 'server/discover', 'params': {}})
+		init_at, init, _, _ = front.handshake(timeout=2)
+		assert init_at < 2 and init['result']['serverInfo']['name'] == 'eye-mcp-unlimited'
+		later = front.drain(12)  # the real server starts after 4 s and answers everything it was sent, the probe too
+		assert not [m for m in later if m.get('id') == 'probe'], later
+		# and the real server is there behind the front: a request made now is answered by it
+		front.send({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/list'})
+		_, tools = front.response(3, timeout=60)
+		assert any(t['name'] == 'eye_network_status' for t in tools['result']['tools'])
+	finally:
+		front.close()

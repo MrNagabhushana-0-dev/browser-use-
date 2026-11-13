@@ -516,3 +516,13 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   NEXT RUN: check the eye server is in bridge mode, `rig_v2b.py up --stim <scratchpad>/stim`, run the E7 watcher (same
   model as E4's, low effort, that prompt) once, measure_watch.py + measure_narration.py, then a fresh scorer against the
   frozen labels, apply the declared rule, delete .retinat.env, rig down.
+- 2026-11-13 (run 5) A BUG IN THE FRONT, FOUND ON A REAL BOOT AND FIXED; E7 STILL NOT RUN. MEASURED from the client log: both
+  servers connected in 4.5 s (third boot in a row through the front), then both connections were dropped after 25-29 s and
+  the client reconnected. Cause: the client probed with `server/discover` before `initialize`, gave up on the probe while the
+  real server was starting, connected with the cached `initialize`, and then got the real server's late answer to the probe
+  ("Received a response for an unknown message"). The two earlier boots skipped the probe (the client remembered the server
+  as a legacy peer), so they did not show it. FIX: what the client asked before a cached `initialize` and the real server has
+  not yet answered is never passed on. Regression test (a probe, then the handshake, a real server 4 s late): fails on the old
+  front, passes on the new; tests/ci/test_mcp_lifecycle.py 12 passed. NOT MEASURED: the fix on a real boot (next run's log).
+  E7 was not started: one slice per run. .retinat.env (bridge mode) is still in place for it.
+  NEXT RUN: read the connect log (no drop expected), then E7 as written above.

@@ -55,6 +55,7 @@ class Front:
 		self.state_lock = threading.Lock()
 		self.swallow: dict[tuple, tuple[str, str | None]] = {}  # id -> (kind, protocolVersion)
 		self.store: dict[tuple, tuple[str, str | None]] = {}  # pass-through id -> (kind, protocolVersion)
+		self.pending: set[tuple] = set()  # requests the child has not answered yet
 		self.child_ready = False
 		self.served_tools: list | None = None
 		self.stopping = False
@@ -108,11 +109,20 @@ class Front:
 		if isinstance(msg, dict) and 'id' in msg and isinstance(msg.get('method'), str):
 			params = msg.get('params') if isinstance(msg.get('params'), dict) else {}
 			key = _key(msg['id'])
+			with self.state_lock:
+				self.pending.add(key)
 			if msg['method'] == 'initialize':
 				version = params.get('protocolVersion')
 				cached = self.cache['initialize'].get(version) if isinstance(version, str) else None
 				with self.state_lock:
 					if cached is not None:
+						# Found live: a client probes with `server/discover` first, gives up on it while the real server is
+						# still starting, and connects with this cached `initialize`; the real server's late answer to the
+						# probe ("a response for an unknown message") then made the client drop the connection. What was
+						# asked before a cached `initialize` and is still unanswered is never passed on.
+						for early in self.pending - {key}:
+							self.store.pop(early, None)
+							self.swallow.setdefault(early, ('early', None))
 						self.swallow[key] = ('initialize', version)
 					else:
 						self.store[key] = ('initialize', version if isinstance(version, str) else None)
@@ -177,8 +187,8 @@ class Front:
 				swallowed = self.swallow.pop(key, None)
 				stored = self.store.pop(key, None)
 				kind, version = swallowed or stored or (None, None)
-				if kind == 'initialize':
-					self.child_ready = True
+				self.pending.discard(key)
+				self.child_ready = True
 				if result is not None and kind == 'initialize' and version is not None:
 					self.cache['initialize'][version] = result
 					self._save_cache()
