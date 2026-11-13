@@ -569,3 +569,22 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   is inside 2,000-8,600.
   .retinat.env (RETINAT_BRIDGE=9333) is back in place for the next boot; removed right after E8.
   NEXT RUN: rig up, run the E8 watcher once, measure, score if A passes, apply the rule, clean up.
+- 2026-11-13 (run 8) CONNECT: 16.5 s, connected, no drop (MEASURED; probe skipped).
+- 2026-11-13 E8 RUN: VOID, THE CHANGE WAS NEVER APPLIED (MEASURED; transcript subagents/agent-afdd38fd10d196bae.jsonl;
+  recording /root/.config/browseruse/recordings/retinat-20261113-214515.mp4; narration log narration/20261113-214354.jsonl;
+  product commit: the branch head before this entry). The watcher sent "min_seconds": "8" on all 26 watch calls, and windows
+  still ended at 4.0 s, 7.0 s and 5.8 s. Cause, read in the code: eye_watch neither declares nor passes min_seconds
+  (browser_use/retinat/server.py calls eyes.watch(seconds, until, detail, hold, deadline)); the parameter in tools.py belongs
+  to eye_browse. The server ignored the unknown argument without a word. MY ERROR: E8's declaration said "a parameter the
+  tool already has"; I had read eye_browse's schema and the service's signature, not eye_watch's.
+  WHAT THE RUN IS INSTEAD: an unplanned repeat of E4's conditions at normal effort on today's code. 26 calls in 179.0 s,
+  film covered 180.8 s, gaps 0, cuts 32/32, A_unique 10,760/min (E4: 10,691, +0.6%), B lower bound 3.0/6.52 s (n=35),
+  narrated 26/26, B_narr 7.38/10.81 s, 6 thinking blocks, mean output 283. So run-to-run noise on A at these conditions is
+  at least 0.6% (n=2 runs: one pair, no more than that), and E7's +5% over E4 was not noise of this size.
+  Not scored (nothing was changed; no decision to make). No keep, no revert.
+  TWO DEFECTS FOUND: (1) eye_watch cannot be given a minimum window; (2) the server accepts an argument a tool does not
+  declare and drops it silently, which is how this run measured nothing new.
+  CLEAN-UP: rig down, .retinat.env removed.
+  NEXT RUN (product change, test-first, committed before any measurement): eye_watch takes min_seconds and passes it to the
+  eyes (default unchanged); a tool call with an argument the tool does not declare is refused with the names it does take.
+  THEN: E8 again, as declared.
