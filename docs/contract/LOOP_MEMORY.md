@@ -485,3 +485,24 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   NOT MEASURED: a cold boot. The only real test is the next scheduled runs' client logs; a tool CALL still waits for the real
   server, so a slow boot now shows as a slow first call, not a missing server. Untested: SIGTERM handling, the changed-list
   notice. NEXT: read the next run's connect log; then item b (attribute the unexplained tokens, declare one M3 candidate).
+- 2026-11-13 (run 3) THE FRONT ON A COLD BOOT (MEASURED, client log, n=1): both servers connected in 15.1 s. The front
+  (stdlib python) was started at boot and its child (uv) only 15 s later: for the first 15 s after boot the machine runs
+  nothing of ours, not even a bare python3. So about 15 s is the floor on this VM, and the front answered as soon as it ran;
+  before the front, uv and the imports came on top of that floor (two timeouts, one 7.1 s connect). One boot proves nothing
+  about the rate; later runs' logs will.
+- 2026-11-13 (run 3) E4's TOKENS ATTRIBUTED FURTHER (MEASURED from transcript agent-a3c40ff79ae867c31; no new run). The watcher
+  made 25 thinking blocks in its 25 watch turns. Its output per turn (about 370 tokens) is about 130 narration (13,205 chars
+  over 25 calls, chars/4, INFERRED), about 30 call arguments, and the rest, about 200, thinking (INFERRED: output minus the
+  visible parts). Each thinking block also leaves a signature of about 1,100 characters that is read back as input on the
+  next turn; that is the likeliest home of most of the 300 tokens per turn I could not place (INFERRED, not proven: the
+  harness's own per-turn attachment is only about 25 tokens). Per-turn harness text: total_tokens_reminder, 31 lines, 2,914 chars.
+  So thinking the watcher does between watches is plausibly 300-500 of each turn's 1,300 new tokens, more than the pictures (426).
+- 2026-11-13 E7 DECLARED BEFORE MEASURING (M3 candidate 1). Baseline: E4 (10,691 tok/min, C1 0.941, C2 strict 31.5%, gaps 0,
+  cuts 34/34). Protocol v2b, same film, same watcher prompt and model as E4, product code unchanged at the branch head. ONE
+  change: the watcher subagent runs at low reasoning effort, so it narrates what the sheet shows without deliberating.
+  This is a setting of the consumer, not of the product: if kept, it becomes the product's stated guidance for watchers
+  (and the tool's own text), and the report says so. Keep rule: A strictly below E4 AND C1 not worse than E4 by more than
+  the scorer's noise (0.02) AND C2 strict not worse (<= 31.5% + the 23-47% judgement range note stays) AND gaps 0 AND every
+  result narrated. Scored against the frozen labels (sha256 23db2c52...) by a fresh scorer. If the rig (film server, Xvfb,
+  bridge browser) cannot be brought up, E7 is logged blocked, not guessed.
+  NEXT: bring up the v2b rig, run E7 once, score, apply the rule.
