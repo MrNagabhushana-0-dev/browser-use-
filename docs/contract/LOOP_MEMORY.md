@@ -526,3 +526,26 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   front, passes on the new; tests/ci/test_mcp_lifecycle.py 12 passed. NOT MEASURED: the fix on a real boot (next run's log).
   E7 was not started: one slice per run. .retinat.env (bridge mode) is still in place for it.
   NEXT RUN: read the connect log (no drop expected), then E7 as written above.
+- 2026-11-13 (run 6) CONNECT: 4.0 s, both servers, no drop (MEASURED; the client skipped its probe on this boot, so the probe
+  fix itself is still not seen live).
+- 2026-11-13 E7 MEASURED (protocol v2b, product at branch head 0e-series after f151994, watcher = E4's prompt with tool names
+  renamed, same model family as E4's watcher, LOW reasoning effort; transcript subagents/agent-a32c658932e4f6ea9.jsonl;
+  recording /root/.config/browseruse/recordings/retinat-20261113-160859.mp4 (109 MB, local); narration log
+  narration/20261113-160708.jsonl; counter measure_watch.py unchanged): 29 calls in 179.6 s, film covered 181.2 s, gaps 0,
+  cuts 32/32, evidence erased none reported, A_unique 11,252/min, B lower bound 3.0/5.09 s (n=34), narrated 29/29 (28 on the
+  next watch call, the last by eye_narrate; E4 lost its last one), narration 3.22 s after its result (median), B_narr
+  7.08/10.12 s. Watcher: 2 thinking blocks (E4: 25), mean output 239 tokens a turn (E4: 370), new tokens per watch turn about
+  1,090-1,200 (E4: about 1,300).
+  DECISION BY THE DECLARED RULE: NOT KEPT. A must be strictly below E4's 10,691 and is 11,252. C1 and C2 were not scored: the
+  rule already fails on A, and a scorer costs tokens. Nothing in the product changed, so there is nothing to revert.
+  CORRECTION of my estimate: I put the watcher's thinking at 300-500 of each turn's 1,300 tokens. Measured, removing it saved
+  about 150 a turn (about 12%). And the watcher, answering faster, made 29 calls instead of 25 over the same film (a call
+  every 6.2 s against 7.4 s), so tokens per MINUTE went up. What sets A is calls per minute times about 1,100 a call; at
+  1,100 a call the band's top (8,600) allows at most 7.8 calls a minute, a call no more often than every 7.7 s.
+  Faster narration is a real gain on B (3.0/5.09 s against 3.9/6.92 s; B_narr 7.08 against 9.32 s), reported, not a keep.
+  CLEAN-UP: rig down; .retinat.env removed (the eye tools are back to their own browser from the next boot).
+  NEXT (to declare before measuring): the lever is the cost of a call that carries little, not the watcher. In E4 and E7
+  a watch returns at every cut (until=event), so a 3 s shot costs a whole call. Candidate E8: a floor on the window
+  (min_seconds, already a parameter of eye_watch) so a call is not returned before about 8 s unless the film stops, with
+  the sheet's frame count unchanged per film second. E5 did this through the gate and lost C2; before declaring E8, read
+  E5's scorer notes to see whether it lost C2 to fewer frames per second or to the wake policy.
