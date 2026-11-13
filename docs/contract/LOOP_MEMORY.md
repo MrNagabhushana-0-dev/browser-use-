@@ -506,3 +506,13 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   result narrated. Scored against the frozen labels (sha256 23db2c52...) by a fresh scorer. If the rig (film server, Xvfb,
   bridge browser) cannot be brought up, E7 is logged blocked, not guessed.
   NEXT: bring up the v2b rig, run E7 once, score, apply the rule.
+- 2026-11-13 (run 4) E7 PREPARED, NOT RUN. Eye server connected in 9.6 s on this boot through the front (MEASURED; second boot
+  with the front, both connected). v2b needs the eye server in bridge mode from its start, and every scheduled run begins on a
+  freshly booted machine whose processes are gone, so the switch has to be in place before the boot: the untracked
+  .retinat.env now holds RETINAT_BRIDGE=9333 (no RETINAT_CODE_DIR: the product is the branch head). SIDE EFFECT until E7 is
+  done: in this checkout the eye tools see only tabs shared through the bridge; the file is removed right after E7.
+  E4's watcher prompt was taken verbatim from its transcript (1,664 chars); E7's is the same text with the tool names
+  renamed (retinat_ -> eye_, the server prefix), no other word changed; both are in the session scratchpad.
+  NEXT RUN: check the eye server is in bridge mode, `rig_v2b.py up --stim <scratchpad>/stim`, run the E7 watcher (same
+  model as E4's, low effort, that prompt) once, measure_watch.py + measure_narration.py, then a fresh scorer against the
+  frozen labels, apply the declared rule, delete .retinat.env, rig down.
