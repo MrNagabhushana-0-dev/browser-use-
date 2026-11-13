@@ -549,3 +549,4 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   (min_seconds, already a parameter of eye_watch) so a call is not returned before about 8 s unless the film stops, with
   the sheet's frame count unchanged per film second. E5 did this through the gate and lost C2; before declaring E8, read
   E5's scorer notes to see whether it lost C2 to fewer frames per second or to the wake policy.
+- 2026-11-13 CORRECTION to the E7 entry: "0e-series" is not a commit. E7's product commit is 698dedb (the branch head when it ran).
