@@ -6,9 +6,15 @@ a client stops it.
 """
 
 import asyncio
+import json
 import os
+import queue
 import signal
+import subprocess
 import sys
+import threading
+import time
+from pathlib import Path
 
 import psutil
 import pytest
@@ -240,3 +246,133 @@ async def test_a_server_that_failed_to_load_says_so_and_loads_again_on_the_next_
 				assert not sessions.is_error, sessions
 	finally:
 		held.close()
+
+
+# --- bin/mcp-front.py: answers the handshake from a cache while the real server starts ---
+
+FRONT = Path(__file__).resolve().parents[2] / 'bin' / 'mcp-front.py'
+INIT = {
+	'jsonrpc': '2.0',
+	'id': 1,
+	'method': 'initialize',
+	'params': {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 'test', 'version': '0'}},
+}
+
+
+class _FrontProcess:
+	"""The front over real stdio, in front of a real Retinat; lines the front writes land in a queue as they arrive."""
+
+	def __init__(self, tmp_path: Path, child_prefix: str = '') -> None:
+		env = {
+			**os.environ,
+			'MCP_FRONT_CACHE_DIR': str(tmp_path / 'cache'),
+			'MCP_FRONT_CHILD': f'{child_prefix}exec {sys.executable} -m browser_use.retinat --network off',
+			'BROWSER_USE_EYES_NOW': str(tmp_path / 'now.json'),
+			'BROWSER_USE_CONFIG_DIR': str(tmp_path / 'config'),
+		}
+		self.started = time.monotonic()
+		self.proc = subprocess.Popen(
+			[sys.executable, str(FRONT), 'browser_use.retinat'],
+			stdin=subprocess.PIPE,
+			stdout=subprocess.PIPE,
+			env=env,
+		)
+		self.lines: queue.Queue[tuple[float, dict]] = queue.Queue()
+		threading.Thread(target=self._read, daemon=True).start()
+
+	def _read(self) -> None:
+		assert self.proc.stdout is not None
+		for raw in self.proc.stdout:
+			self.lines.put((time.monotonic() - self.started, json.loads(raw)))
+
+	def send(self, message: dict) -> None:
+		assert self.proc.stdin is not None
+		self.proc.stdin.write(json.dumps(message).encode() + b'\n')
+		self.proc.stdin.flush()
+
+	def response(self, msg_id, timeout: float) -> tuple[float, dict]:
+		deadline = time.monotonic() + timeout
+		while True:
+			at, msg = self.lines.get(timeout=max(0.01, deadline - time.monotonic()))
+			if msg.get('id') == msg_id and 'method' not in msg:
+				return at, msg
+
+	def drain(self, seconds: float) -> list[dict]:
+		time.sleep(seconds)
+		out = []
+		while not self.lines.empty():
+			out.append(self.lines.get()[1])
+		return out
+
+	def handshake(self, timeout: float, version: str = '2025-06-18') -> tuple[float, dict, float, dict]:
+		self.send({**INIT, 'params': {**INIT['params'], 'protocolVersion': version}})
+		init_at, init = self.response(1, timeout)
+		self.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+		self.send({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
+		tools_at, tools = self.response(2, timeout)
+		return init_at, init, tools_at, tools
+
+	def close(self) -> int:
+		assert self.proc.stdin is not None
+		self.proc.stdin.close()
+		try:
+			return self.proc.wait(timeout=20)
+		except subprocess.TimeoutExpired:
+			self.proc.kill()
+			raise
+
+
+def test_the_front_passes_the_first_handshake_through_and_caches_it(tmp_path):
+	front = _FrontProcess(tmp_path)
+	try:
+		_, init, _, tools = front.handshake(timeout=120)
+	finally:
+		front.close()
+	assert init['result']['serverInfo']['name'] == 'eye-mcp-unlimited', init
+	assert any(t['name'] == 'eye_network_status' for t in tools['result']['tools']), tools
+	(cache_file,) = (tmp_path / 'cache').glob('browser_use.retinat-*.json')
+	cached = json.loads(cache_file.read_text())
+	assert cached['initialize'] == {'2025-06-18': init['result']}
+	assert cached['tools'] == tools['result']
+
+
+def test_the_front_answers_from_its_cache_before_the_server_exists(tmp_path):
+	first = _FrontProcess(tmp_path)
+	try:
+		_, init1, _, tools1 = first.handshake(timeout=120)
+	finally:
+		first.close()
+
+	second = _FrontProcess(tmp_path, child_prefix='sleep 4; ')
+	try:
+		init_at, init2, tools_at, tools2 = second.handshake(timeout=10)
+		assert init_at < 2 and tools_at < 2, (init_at, tools_at)
+		assert init2['result']['serverInfo']['name'] == 'eye-mcp-unlimited'
+		assert [t['name'] for t in tools2['result']['tools']] == [t['name'] for t in tools1['result']['tools']]
+		# the real server answers the same requests later; the client must not see them twice
+		later = second.drain(8)
+		assert not [m for m in later if m.get('id') in (1, 2)], later
+		second.send(
+			{'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'eye_network_status', 'arguments': {}}}
+		)
+		_, called = second.response(3, timeout=60)
+		assert 'result' in called, called
+	finally:
+		second.close()
+
+
+def test_the_front_passes_an_uncached_protocol_version_through(tmp_path):
+	first = _FrontProcess(tmp_path)
+	try:
+		first.handshake(timeout=120)
+	finally:
+		first.close()
+
+	second = _FrontProcess(tmp_path, child_prefix='sleep 3; ')
+	try:
+		second.send({**INIT, 'params': {**INIT['params'], 'protocolVersion': '2024-11-05'}})
+		at, init = second.response(1, timeout=60)
+		assert at >= 3, f'answered at {at:.1f} s, before the child could have'
+		assert init['result']['serverInfo']['name'] == 'eye-mcp-unlimited', init
+	finally:
+		second.close()

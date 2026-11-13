@@ -472,3 +472,16 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   (thinking or tool-call overhead in the watcher), then declare ONE M3 candidate against E4 on protocol v2b with the keep rule
   A strictly lower, C2 not worse, gaps 0. Candidates in view: a watcher prompt that spends no output beyond the narration; a
   sheet no wider than its frames need. Not candidates: fewer frames per film second (E5 lost C2 that way).
+- 2026-11-13 (run 2) CONNECT TIMEOUT AGAIN, AND A STDLIB FRONT FOR THE HANDSHAKE. MEASURED from the client log: both servers were
+  started at 03:43:06, the same second the VM booted, and both timed out at 30 s (run 1 today connected in 7.1 s: intermittent).
+  CHANGE: bin/mcp-front.py, standard library only, is now what .mcp.json starts. It spawns the real server (bin/mcp-serve.sh),
+  answers `initialize` and the first `tools/list` from what the real server answered last time (cache in
+  ~/.cache/browseruse/mcp-front, per protocol version), forwards every request to the real server, swallows its duplicate
+  answers, refreshes the cache from them and announces a changed tool list. No cache or an unknown version: plain pass-through.
+  MEASURED warm: initialize through the front with a filled cache 0.02 s (both servers), against 0.69-0.78 s on the first,
+  uncached run; tools/list 0.02-0.03 s, 28 and 27 tools. tests/ci/test_mcp_lifecycle.py 11 passed (3 new: pass-through fills
+  the cache; a child that starts 4 s late is answered for in under 2 s with no duplicate ids and a real tool call then works;
+  an uncached version passes through). The cache was pre-filled for five protocol versions.
+  NOT MEASURED: a cold boot. The only real test is the next scheduled runs' client logs; a tool CALL still waits for the real
+  server, so a slow boot now shows as a slow first call, not a missing server. Untested: SIGTERM handling, the changed-list
+  notice. NEXT: read the next run's connect log; then item b (attribute the unexplained tokens, declare one M3 candidate).
