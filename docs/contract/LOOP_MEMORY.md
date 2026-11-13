@@ -456,3 +456,19 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   test_the_signed_in_profile_survives_closing_the_browser and test_the_full_handover_round_trip (Input.dispatchMouseEvent did
   not respond in 60 s) fail on main as well, the other 5 pass on both: not this branch's, not fixed here.
   TOTAL on the PR head, all 110 files: 1,351 passed, 1 skipped, 2 failed (both failing on main too).
+- 2026-11-13 LOOP RESTARTED (owner's order: scheduled run every 3 h, small slices, cheaper models for labour). Branch restarted from
+  main after PR #14 was merged (f151994). Eye server connect on this run's cold VM: 7.1 s (client log, MEASURED); on 2026-11-03 and
+  2026-11-12 it timed out at 30 s. Intermittent, not fixed; the owner was asked to set MCP_TIMEOUT=120000 on the environment.
+- 2026-11-13 M3 PRE-DECLARATION ANALYSIS: WHERE E4's TOKENS GO (MEASURED from the E4 watcher transcript agent-a3c40ff79ae867c31,
+  no new run; the counter is unchanged). CORRECTION of my own plan: I proposed "choose keyframes by change instead of even
+  spacing". The code already does that (sight.select_keyframes is greedy facility location, up to 2k frames when shots need it),
+  so that experiment would have changed nothing. Breakdown: 25 watch results in 185.7 s, one every 7.4 s. Each watch turn adds
+  about 1,300 new tokens (per-turn cache_creation 1,071-1,514), which is A = 10,691/min. Of the 1,300: the keyframe sheet about
+  426 (21 of 25 sheets are 1400x238 px; pixels/750, INFERRED from the image size), the result's text about 205 (chars/4,
+  INFERRED), the model's own previous turn about 370 (output_tokens, MEASURED; the narration itself is only about 126 of it,
+  12,616 chars over 25 calls), and about 300 not yet attributed (call framing, reminders; UNVERIFIED). To enter the band
+  (below 8,600/min) at this call rate a turn must add at most about 1,060.
+  NEXT (not started, nothing declared yet): attribute the unexplained 300 and the 244 non-narration output tokens per turn
+  (thinking or tool-call overhead in the watcher), then declare ONE M3 candidate against E4 on protocol v2b with the keep rule
+  A strictly lower, C2 not worse, gaps 0. Candidates in view: a watcher prompt that spends no output beyond the narration; a
+  sheet no wider than its frames need. Not candidates: fewer frames per film second (E5 lost C2 that way).
