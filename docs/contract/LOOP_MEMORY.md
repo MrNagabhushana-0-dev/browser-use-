@@ -550,3 +550,22 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   the sheet's frame count unchanged per film second. E5 did this through the gate and lost C2; before declaring E8, read
   E5's scorer notes to see whether it lost C2 to fewer frames per second or to the wake policy.
 - 2026-11-13 CORRECTION to the E7 entry: "0e-series" is not a commit. E7's product commit is 698dedb (the branch head when it ran).
+- 2026-11-13 (run 7) CONNECT: 16.4 s, connected, no drop (MEASURED; probe skipped again).
+- 2026-11-13 WHY E5 LOST C2, READ BEFORE DECLARING E8 (from the E5 entries above, no new run): E5 kept the frame density
+  (84 keyframes, 0.45 per film second, B2 0.465) and still missed 49.7% strict against E4's 31.5%, with C1 down to 0.79.
+  So it was not fewer frames per second. Its windows ran about 20 s with 8 or more frames on one sheet and one narration
+  for all of it: the loss came with long windows (INFERRED: the scorer's notes name stale and wrong detail in the
+  gate-woken windows; no run isolates window length from the gate). My note in run 1 ("E5 lost C2 by fewer frames per film
+  second") was wrong and is corrected here.
+- 2026-11-13 E8 DECLARED BEFORE MEASURING (M3 candidate 2). Baseline E4 (10,691 tok/min, 25 calls, C1 0.941, C2 strict
+  31.5%, gaps 0). Protocol v2b, same film, product code unchanged at the branch head, the watcher at its normal effort
+  (as E4, not E7's low effort). ONE change: every eye_watch call carries "min_seconds": 8 (a parameter the tool already
+  has; default 3), so a watch stopped by a cut is not returned before 8 s of it have passed; seconds stays 12 and
+  until stays "event". The prompt is E7's text with that one argument added in both call forms (2 places), nothing else.
+  Expected, to be tested not assumed: windows of 8-12 s instead of E4's 7.4 s mean, so about 6 calls a minute.
+  Keep rule: A strictly below E4 AND gaps 0 AND every result narrated AND cuts reached not worse AND, scored by a fresh
+  scorer against the frozen labels (sha256 23db2c52...), C1 not below E4 by more than 0.02 AND C2 strict not above 31.5%.
+  If A fails, C is not scored. Reported beside it whatever the outcome: B (it should rise; that is the trade) and whether A
+  is inside 2,000-8,600.
+  .retinat.env (RETINAT_BRIDGE=9333) is back in place for the next boot; removed right after E8.
+  NEXT RUN: rig up, run the E8 watcher once, measure, score if A passes, apply the rule, clean up.
