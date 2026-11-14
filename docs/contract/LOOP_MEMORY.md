@@ -606,3 +606,15 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   This run went far over its 30 minutes for that reason.
   .retinat.env (RETINAT_BRIDGE=9333) is back in place for the next boot.
   NEXT RUN: E8 again, as declared (min_seconds 8 now reaches the eyes); score only if A passes.
+- 2026-11-14 (run 10) CONNECT: 0.8 s, connected, no drop (MEASURED; probe skipped).
+- 2026-11-14 E8 MEASURED (protocol v2b, product commit 9864427, watcher prompt as declared with min_seconds 8, normal effort;
+  transcript subagents/agent-a5ad72f9b857a15c6.jsonl; recording /root/.config/browseruse/recordings/retinat-20261114-034440.mp4
+  (113 MB, local); narration log narration/20261114-034310.jsonl; counter unchanged): 15 calls in 186.4 s (E4: 25), windows
+  of about 12.5 s (0.0-13.5, 13.3-25.5, 25.3-38.3, 38.1-50.5 ...), film covered 187.7 s, gaps 0, cuts 34/34, evidence erased
+  none reported, no refused call, A_unique 6,222/min (E4 10,691: -42%; inside 2,000-8,600), B lower bound 7.6/11.56 s
+  (n=35; E4 3.9/6.92: the declared trade), narrated 15/15 (14 on the next watch, the last by eye_narrate), narration 3.42 s
+  after its result (median), B_narr 11.9/15.32 s (E4 9.32/13.74). New tokens per watch turn about 1,100-1,300, as before:
+  the saving is fewer calls, not smaller ones. Sheets stayed 1400x238 (about 450 tokens) though each now covers about
+  12.5 s instead of 7.4 s: fewer frames per film second reach the model, which is exactly what C2 must judge.
+  A passes the rule. C1 and C2: scorer running (same instructions as E4's scorer, paths changed; labels sha256 checked first).
+  No decision until it reports. CLEAN-UP: rig down, .retinat.env removed.
