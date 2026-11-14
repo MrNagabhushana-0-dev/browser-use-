@@ -618,3 +618,24 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   12.5 s instead of 7.4 s: fewer frames per film second reach the model, which is exactly what C2 must judge.
   A passes the rule. C1 and C2: scorer running (same instructions as E4's scorer, paths changed; labels sha256 checked first).
   No decision until it reports. CLEAN-UP: rig down, .retinat.env removed.
+- 2026-11-14 E8 SCORED (MEASURED + VERIFIED, scorer a142f2415f51b009d, E4's scorer instructions with paths changed, labels
+  sha256 checked first; offset 3.458 s, ALIGNED 34/36, median residual 0.021 s; every counter number recomputed by the
+  scorer's own code and identical). C1 59/63 = 0.937 (E4 0.941; 0.873 if four borderline lines are counted false).
+  C2 strict 72/143 missed = 50.3% (E4 31.5%); with two simultaneous pairs merged 70/141 = 49.6%; lenient 1/143 = 0.7%.
+  By kind, strict: cuts 3 of 37 missed, actions 55 of 79, appear 12 of 22, disappear 2 of 5. The scorer's reading: one
+  narration line per 3-5 s shot, landing on the cut; actions inside a shot mostly not described. Sensitivity: 12 loose
+  matches excluded would make strict 58.7%.
+  E8 DECISION BY THE DECLARED RULE: NOT KEPT. A strictly lower: yes (6,222, in band). Gaps 0: yes. All narrated: yes. Cuts
+  not worse: yes (34/34). C1 within 0.02 of E4: yes. C2 strict not above 31.5%: NO (50.3%). The watcher guidance
+  "min_seconds 8" is not adopted. What stays in the product: eye_watch's min_seconds parameter at its old default and the
+  refusal of undeclared arguments (both are fixes, neither changes a default behaviour that was measured).
+  WHAT TWO RUNS NOW SAY (E5 and E8, INFERRED from two runs, not isolated): halving the calls costs the same C2 (49.7%,
+  50.3%) whether the frames per film second were kept (E5) or halved (E8), and cuts stay covered in both. E8's watcher
+  wrote 63 lines in 15 results (4.2 a result); E4's wrote about 100 in 25 (about 4 a result). The watcher writes about
+  four lines per result whatever the result spans, so lines per film minute fall with the calls, and it is the actions
+  inside shots, which need their own lines, that go missing. The limiter looks like narration lines per result, not
+  frames and not the window as such.
+  NEXT (to declare before measuring): E9 = E8's 8 s minimum window plus a sheet that keeps E4's frames per film second
+  (more frames on a longer window) plus a watcher instruction to write one line per frame row of the timeline, so lines per
+  film minute stay at E4's level. That is two changes at once against the one-change rule: declare it as such, or split it
+  (E9a frames only, E9b lines only) and spend two runs. Decide at declaration.
