@@ -312,8 +312,26 @@ def render_strip(frames: list[tuple[float, bytes]], height: int = 320, gap: int 
 	return out.getvalue(), width, height
 
 
-def render_sheet(items: list[ItemPercept], detail: str = 'glance', max_width: int | None = None) -> tuple[bytes, int, int] | None:
-	"""One JPEG: a keyframe row plus a sound strip per item. None if there is nothing to show."""
+WRAP_SLACK = 1.05  # how far over max_width a wrapped row may be before a tile moves to the next row
+
+
+def _wrap_rows(widths: list[int], max_width: int) -> list[list[int]]:
+	"""Indices of tiles per row: as few rows as fit max_width, with an equal count per row except the last."""
+	assert widths, 'nothing to wrap'
+	per_row = 1
+	while per_row < len(widths):
+		widest = max(sum(widths[i : i + per_row + 1]) + GAP * per_row for i in range(0, len(widths), per_row + 1))
+		if widest > max_width:
+			break
+		per_row += 1
+	return [list(range(i, min(i + per_row, len(widths)))) for i in range(0, len(widths), per_row)]
+
+
+def render_sheet(
+	items: list[ItemPercept], detail: str = 'glance', max_width: int | None = None, wrap: bool = False
+) -> tuple[bytes, int, int] | None:
+	"""One JPEG: a keyframe row plus a sound strip per item. None if there is nothing to show.
+	With `wrap`, tiles keep their size and fill as many rows as it takes to stay within max_width."""
 	assert detail in DETAIL_HEIGHT, f'detail must be one of {list(DETAIL_HEIGHT)}'
 	if max_width is None:
 		max_width = 1400
@@ -325,28 +343,44 @@ def render_sheet(items: list[ItemPercept], detail: str = 'glance', max_width: in
 		h = DETAIL_HEIGHT[detail]
 		tiles = [f.resize((max(1, round(f.width * h / f.height)), h), Image.Resampling.LANCZOS) for f in frames]
 		strip_w = sum(t.width for t in tiles) + GAP * max(0, len(tiles) - 1)
-		# Keep the row within max_width by shrinking the tiles, not by dropping keyframes.
-		if strip_w > max_width and tiles:
+		# Keep the row within max_width by shrinking the tiles, not by dropping keyframes (or, wrapping, by more rows).
+		tile_rows = [tiles]
+		if wrap and strip_w > max_width:
+			# A row may be a little over (WRAP_SLACK): its tiles are then shrunk that little, as a default row of four
+			# 16:9 glance frames always has been (1436 px into 1400), so a wrapped row shows frames at the size a
+			# default sheet does and not one frame fewer.
+			layout = _wrap_rows([t.width for t in tiles], int(max_width * WRAP_SLACK))
+			widest = max(sum(tiles[i].width for i in r) + GAP * (len(r) - 1) for r in layout)
+			if widest > max_width:
+				k = (max_width - GAP * (max(len(r) for r in layout) - 1)) / (widest - GAP * (max(len(r) for r in layout) - 1))
+				tiles = [t.resize((max(1, int(t.width * k)), max(1, int(t.height * k))), Image.Resampling.LANCZOS) for t in tiles]
+			tile_rows = [[tiles[i] for i in r] for r in layout]
+		elif strip_w > max_width and tiles:
 			k = (max_width - GAP * (len(tiles) - 1)) / sum(t.width for t in tiles)
 			tiles = [t.resize((max(1, int(t.width * k)), max(1, int(t.height * k))), Image.Resampling.LANCZOS) for t in tiles]
-			strip_w = sum(t.width for t in tiles) + GAP * (len(tiles) - 1)
-		strip_w = max(strip_w, 360)
+			tile_rows = [tiles]
+		strip_w = max([sum(t.width for t in r) + GAP * (len(r) - 1) for r in tile_rows] + [360])
 		tile_h = tiles[0].height if tiles else 0
+		picture_h = len(tile_rows) * tile_h + GAP * (len(tile_rows) - 1)
 		spec_h = SPECTRUM_HEIGHT[detail] if item.hops else 0
-		row = Image.new('RGB', (strip_w, tile_h + (GAP + spec_h if spec_h else 0)), (24, 24, 24))
+		row = Image.new('RGB', (strip_w, picture_h + (GAP + spec_h if spec_h else 0)), (24, 24, 24))
 		draw = ImageDraw.Draw(row)
 		font_size = 13 if detail == 'glance' else 16
-		x = 0
-		for n, (tile, kf) in enumerate(zip(tiles, [k for k in item.keyframes if k.jpeg])):
-			row.paste(tile, (x, 0))
-			_label(draw, (x + 4, 3), f'{item.index}.{n + 1} {_fmt(kf.t)}', font_size)
-			x += tile.width + GAP
+		kept = [k for k in item.keyframes if k.jpeg]
+		n = 0
+		for r, line in enumerate(tile_rows):
+			x = 0
+			for tile in line[: len(kept) - n]:
+				row.paste(tile, (x, r * (tile_h + GAP)))
+				_label(draw, (x + 4, r * (tile_h + GAP) + 3), f'{item.index}.{n + 1} {_fmt(kept[n].t)}', font_size)
+				x += tile.width + GAP
+				n += 1
 		if spec_h:
 			t0, t1 = item.t_span
 			spec = spectrogram(item.hops, t0, t1, strip_w, spec_h)
-			y = tile_h + GAP
+			y = picture_h + GAP
 			row.paste(spec, (0, y))
-			for n, kf in enumerate([k for k in item.keyframes if k.jpeg]):
+			for n, kf in enumerate(kept if len(tile_rows) == 1 else []):  # ticks only mean something on one row
 				if t1 > t0:
 					px = int((kf.t - t0) / (t1 - t0) * (strip_w - 1))
 					draw.line((px, y, px, y + spec_h), fill=(120, 220, 255), width=1)
@@ -370,11 +404,16 @@ def render_sheet(items: list[ItemPercept], detail: str = 'glance', max_width: in
 
 
 def assemble(
-	items: list[ItemPercept], header: str, detail: str = 'glance', footer: str = '', empty: str = '(no video was on screen)'
+	items: list[ItemPercept],
+	header: str,
+	detail: str = 'glance',
+	footer: str = '',
+	empty: str = '(no video was on screen)',
+	wrap: bool = False,
 ) -> Percept:
 	"""Text + sheet + token accounting for a list of items."""
 	body = '\n'.join(describe_item(i) for i in items) if items else f'    {empty}'
-	sheet = render_sheet(items, detail)
+	sheet = render_sheet(items, detail, wrap=wrap)
 	image, size, image_tokens = None, None, 0
 	if sheet:
 		image, w, h = sheet

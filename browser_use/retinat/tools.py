@@ -194,6 +194,12 @@ def _browser_tools() -> list['types.Tool']:
 					'seconds': {'type': 'number', 'default': 12, 'minimum': 1},
 					'until': {'type': 'string', 'enum': ['bored', 'event', 'time', 'item'], 'default': 'bored'},
 					'detail': _DETAIL,
+					'keyframes': {
+						'type': 'integer',
+						'minimum': 1,
+						'description': 'How many frames the sheet shows. Default: by detail (glance 4, look 6, study 8). '
+						'Given explicitly, the frames keep their size and wrap onto more rows instead of shrinking.',
+					},
 					'hold': {'type': 'boolean', 'default': True, 'description': 'Pause when done so nothing plays unseen.'},
 					'min_seconds': {
 						'type': 'number',

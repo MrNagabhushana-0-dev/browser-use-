@@ -657,3 +657,27 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   to 0.79; E8 kept the frame size and halved the frames, and its C1 held at 0.937. So the candidate is E8's 8 s window with
   frames per film second AND frame size both kept (a taller sheet): picture tokens per film second stay as in E4, and the
   saving is only the per-call overhead (about 870 of E4's 1,300 a call), roughly a quarter off A if C2 holds.
+- 2026-11-14 (run 12) CONNECT: 2.6 s and no drop in the 40 s after (MEASURED): the first boot since the lists fix, and the
+  client asked for its lists as before. One boot.
+- 2026-11-14 PRODUCT CHANGE FOR E9, TEST-FIRST, COMMITTED BEFORE ANY MEASUREMENT. Read in the code first: a sheet is one row,
+  and frames that do not fit 1,400 px are shrunk; four 16:9 glance frames are 1,436 px, so E4's sheets were four frames of
+  346x194. E8's sheets were the same four frames for a window 1.7 times as long (0.32 frames per film second against
+  E4's 0.54). CHANGE: eye_watch takes `keyframes`; given explicitly, the sheet shows exactly that many frames (no stretch to
+  twice the count) and wraps them onto rows of the size a default sheet has (a row may be shrunk by up to 5%, as the default
+  row of four always was) instead of shrinking them further. Nothing changes when `keyframes` is not given. Seven frames:
+  rows of 4 and 3 at 346x194, a sheet 1400x392 plus the sound strip. TESTS: tests/ci/test_eyes.py 100 passed (the sheet test
+  rewritten for four-a-row), tests/ci/test_retinat.py 67 passed in one full run. NOT TESTED: a wrapped sheet through
+  eye_watch on a real moving video (the fixture clip is a still picture with sound, one distinct frame); E9 is that test.
+- 2026-11-14 E9 DECLARED BEFORE MEASURING (M3 candidate 3). Baseline E4 (10,691 tok/min, C1 0.941, C2 strict 31.5%).
+  Protocol v2b, same film, normal watcher effort, product at this commit. Against E8 (the last measured configuration) ONE
+  change: every eye_watch call also carries "keyframes": 7, so a 12.5 s window shows 0.56 frames per film second at E4's
+  frame size. Against E4 that makes two differences together (min_seconds 8, keyframes 7); E8 already measured the first
+  alone. Prompt: E8's with that argument added in both call forms, nothing else.
+  Expected, to be tested: about 15 calls; a sheet of about 815 picture tokens (1400x436) against 450, so about 1,650 new
+  tokens a call and A near 8,000/min: at the top of the band or just over it. If so the gain over E4 is about a quarter,
+  all of it per-call overhead, and E9 says whether C2 follows frames per second when the frame size is kept.
+  Keep rule (unchanged): A strictly below E4 AND gaps 0 AND every result narrated AND cuts reached not worse AND, by a fresh
+  scorer against the frozen labels (sha256 23db2c52...), C1 not below E4 by more than 0.02 AND C2 strict not above 31.5%.
+  If A fails, C is not scored. Whether A is inside 2,000-8,600 is reported, not part of the rule.
+  .retinat.env (RETINAT_BRIDGE=9333) is in place for the next boot; removed right after E9.
+  NEXT RUN: rig up, E9 watcher once, measure, score if A passes, apply the rule, clean up.

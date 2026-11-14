@@ -354,6 +354,7 @@ async def test_find_says_where_text_is_and_zoom_magnifies_small_print(retinat, s
 	assert images, _text(zoomed)
 	import base64
 	import io
+	import re
 
 	from PIL import Image
 
@@ -1713,3 +1714,31 @@ async def test_a_watch_can_be_given_a_minimum_window_and_an_argument_no_tool_tak
 	text = _text(refused)
 	assert refused.is_error and 'min_secs' in text and 'min_seconds' in text, text
 	assert (refused.structured_content or {}).get('effect_state') == 'none', text
+
+
+async def test_a_watch_given_a_frame_count_is_accepted_and_wraps_a_longer_sheet(retinat, site, beeps):
+	"""eye_watch takes `keyframes`: the sheet then carries that many frames at their own size, in more rows."""
+	import io
+	import re
+
+	from PIL import Image
+
+	def sheet_size(result) -> tuple[int, int]:
+		images = [b for b in result.content if isinstance(b, types.ImageContent)]
+		assert images, _text(result)
+		import base64
+
+		return Image.open(io.BytesIO(base64.b64decode(images[0].data))).size
+
+	await _open_started(retinat, site.url_for('/beeps'))
+	plain = await _call(retinat, 'eye_watch', {'seconds': 3, 'until': 'time'})
+	assert not plain.is_error, _text(plain)
+	await _call(retinat, 'eye_open', {'url': site.url_for('/beeps')})
+	asked = await _call(retinat, 'eye_watch', {'seconds': 3, 'until': 'time', 'keyframes': 7})
+	assert not asked.is_error, _text(asked)
+	text = _text(asked)
+	assert 'sheet row 1:' in text and 'tokens for this percept (sheet' in text, text
+	# The beeps clip is a still picture with sound, so it yields one distinct frame: a wrap needs at least five.
+	shown = re.search(r'sheet row 1: (\d+) keyframes', text)
+	if shown and int(shown.group(1)) >= 5:
+		assert sheet_size(asked)[1] > sheet_size(plain)[1], (sheet_size(plain), sheet_size(asked))

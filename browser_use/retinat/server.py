@@ -534,6 +534,7 @@ class RetinatServer(BrowserUseServer):
 					until=args.get('until', 'bored'),
 					min_seconds=float(args.get('min_seconds', 1.5)),
 					detail=detail,
+					keyframes=int(args['keyframes']) if args.get('keyframes') else None,
 					hold=bool(args.get('hold', True)),
 					deadline=deadline,
 				)

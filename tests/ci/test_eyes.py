@@ -2366,3 +2366,44 @@ async def test_a_look_after_an_animation_stops_shows_where_it_stopped(eyes, sess
 	with Image.open(io.BytesIO(p.image)) as img:
 		now = img.convert('RGB').getpixel((img.width // 2, img.height // 2))
 	assert now[1] > 120 and now[0] < 100, f'the animation ended green; the look showed {now}: {p.text}'
+
+
+def test_a_sheet_asked_for_wraps_its_frames_onto_rows_instead_of_shrinking_them():
+	"""Seven 16:9 frames at glance are 356 px wide at their own size: seven in a row (2516 px) do not fit 1400 px. By
+	default the row shrinks them to 196 px wide; wrapped, they fill rows of four at the size a default sheet of four
+	frames has (1436 px shrunk into 1400: 346x194), so a longer watch can carry more frames no smaller than a short one's."""
+	from browser_use.eyes.percept import GAP, ItemPercept, Keyframe, render_sheet
+
+	def jpeg(n: int) -> bytes:
+		out = io.BytesIO()
+		Image.new('RGB', (640, 360), (30 * n, 255 - 30 * n, 90)).save(out, 'JPEG')
+		return out.getvalue()
+
+	item = ItemPercept(
+		1, 1, {}, [], [], sight.read([]), hearing.listen([]), keyframes=[Keyframe(float(n), n, jpeg(n)) for n in range(7)]
+	)
+
+	shrunk = render_sheet([item], 'glance')
+	assert shrunk is not None
+	_, width, height = shrunk
+	assert width <= 1400 and height < 200, f'one shrunken row, as before: {width}x{height}'
+
+	wrapped = render_sheet([item], 'glance', wrap=True)
+	assert wrapped is not None
+	data, width, height = wrapped
+	assert width <= 1400, width
+	assert height == 2 * 194 + GAP, f'rows of 4 and 3 frames, 194 px high: {width}x{height}'
+	four = render_sheet(
+		[ItemPercept(1, 1, {}, [], [], sight.read([]), hearing.listen([]), keyframes=item.keyframes[:4])], 'glance'
+	)
+	assert four is not None and four[2] == 194, 'the default sheet of four frames: the same frame height'
+	assert Image.open(io.BytesIO(data)).size == (width, height)
+
+	few = render_sheet(
+		[ItemPercept(1, 1, {}, [], [], sight.read([]), hearing.listen([]), keyframes=item.keyframes[:3])], 'glance'
+	)
+	few_wrapped = render_sheet(
+		[ItemPercept(1, 1, {}, [], [], sight.read([]), hearing.listen([]), keyframes=item.keyframes[:3])], 'glance', wrap=True
+	)
+	assert few is not None and few_wrapped is not None
+	assert few[0] == few_wrapped[0], 'frames that fit one row are the same sheet wrapped or not'

@@ -459,7 +459,7 @@ class Eyes:
 				)
 			# Every shot deserves a keyframe if the budget can stretch that far (to twice `k`).
 			first_pass = [sh for sh in seen.shots if not sh.after_loop]
-			selection = sight.select_keyframes(f, min(2 * k, max(k, len(first_pass))))
+			selection = sight.select_keyframes(f, k if keyframes else min(2 * k, max(k, len(first_pass))))
 			seqs = [f[i].seq for i in selection.indices]
 			# Once the page has failed to hand over images in this percept, do not wait on it again per item.
 			if trouble:
@@ -500,7 +500,7 @@ class Eyes:
 		head += failed
 		if empty is None:
 			empty = '(no video played)' if failed else '(no video was on screen)'
-		return assemble(items, head, detail, empty=empty)
+		return assemble(items, head, detail, empty=empty, wrap=keyframes is not None)
 
 	async def _page_now(self) -> tuple[bytes | None, str]:
 		"""The page as the compositor draws it now, and how it was got: captured at this moment, else the stream's
