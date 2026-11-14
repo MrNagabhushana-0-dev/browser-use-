@@ -715,3 +715,17 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   line): 20 more lines over the film is about +200 tokens/min, so A should stay near 8,000. If E10 also fails on C2, the
   long-window route is closed on this film and the remaining lever is the per-call overhead itself (the about 870 tokens a
   call that are not picture), at E4's window length.
+- 2026-11-14 (run 14; the worker restarted once during it) CONNECT: see the client log line below in the next entry if it
+  matters; the tools were connected.
+- 2026-11-14 E10 DECLARED BEFORE MEASURING (M3 candidate 4). Baseline E4 (10,691 tok/min, C1 0.941, C2 strict 31.5%).
+  Protocol v2b, same film, normal watcher effort, product code unchanged from E9's. Against E9 ONE change, in the watcher's
+  instruction only: where E9's prompt said "one line per visual event you see in that result's pictures and timeline",
+  E10's says "at least one line for every frame on that result's sheet, and a line for each change you can see between
+  neighbouring frames (what moved, appeared, left or changed)". Arguments unchanged (min_seconds 8, keyframes 7).
+  Expected, to be tested: about 14 calls, 100 or more lines, A about 8,000/min.
+  Keep rule (unchanged): A strictly below E4 AND gaps 0 AND every result narrated AND cuts reached not worse AND, by a fresh
+  scorer against the frozen labels with the same instructions, C1 not below E4 by more than 0.02 AND C2 strict not above
+  31.5%. If A fails, C is not scored. A RISK NAMED NOW: asked for more lines, a watcher may invent detail; C1 is the guard,
+  and the scorer checks every line on the frames.
+  If E10 fails on C2, the long-window route is closed on this film (declared in the entry above).
+  .retinat.env (RETINAT_BRIDGE=9333) is in place for the next boot; removed right after E10.
