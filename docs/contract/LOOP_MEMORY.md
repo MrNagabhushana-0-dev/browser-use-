@@ -729,3 +729,4 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   and the scorer checks every line on the frames.
   If E10 fails on C2, the long-window route is closed on this film (declared in the entry above).
   .retinat.env (RETINAT_BRIDGE=9333) is in place for the next boot; removed right after E10.
+- 2026-11-14 CORRECTION to the run 14 entry's connect line, which named no number: the eye server connected in 3.9 s on that boot, with no drop or timeout in the client log (MEASURED).
