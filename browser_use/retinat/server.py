@@ -532,6 +532,7 @@ class RetinatServer(BrowserUseServer):
 				eyes.watch(
 					seconds=float(args.get('seconds', 12)),
 					until=args.get('until', 'bored'),
+					min_seconds=float(args.get('min_seconds', 1.5)),
 					detail=detail,
 					hold=bool(args.get('hold', True)),
 					deadline=deadline,

@@ -588,3 +588,21 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   NEXT RUN (product change, test-first, committed before any measurement): eye_watch takes min_seconds and passes it to the
   eyes (default unchanged); a tool call with an argument the tool does not declare is refused with the names it does take.
   THEN: E8 again, as declared.
+- 2026-11-14 (run 9) CONNECT: 12.9 s, connected, no drop (MEASURED; probe skipped).
+- 2026-11-14 TWO DEFECTS FROM THE VOID E8 RUN FIXED, TEST-FIRST (product change, committed before any measurement):
+  (1) eye_watch takes min_seconds (default 1.5, what the eyes used before) and passes it on; (2) a tool call with an argument
+  the tool does not declare is refused before anything runs, naming the arguments the tool takes (both servers; effect
+  "none"). New test test_a_watch_can_be_given_a_minimum_window_and_an_argument_no_tool_takes_is_refused: failed before
+  (a watch asked for 8 s minimum ended at 5.5 s at the first sound change), passes after.
+  TESTS (MEASURED, every tests/ci file that calls tools on either server, each in its own process): test_bridge 36,
+  test_desktop_control 13, test_desktop_eyes 3, test_eyes 99, test_mcp_lifecycle 12, test_mcp_page_tools 9,
+  test_mcp_tool_annotations 5, test_network 33, test_proxy_ca 10, test_webmcp 18: all passed. test_retinat.py: 66 of 66 on the
+  third full run. NOT CLEAN: on the first two full runs with the change, test_a_step_says_when_the_whole_view_scrolls failed
+  (it read 157 px/s where 200 +-10% is expected); it passed alone with and without the change, and one full run without
+  the change passed 65 of 65. So: with the change 1 pass in 3 full runs, without it 1 in 1. I see no path from this change
+  to that test (it sends only arguments eye_step declares; the watch default is unchanged), and the third run passing shows
+  it is not deterministic, but two failures in three is not nothing: UNEXPLAINED, a timing-sensitive test to look at.
+  One attempt to isolate it (the test with its ten predecessors, three times) was built wrong and timed out with no result.
+  This run went far over its 30 minutes for that reason.
+  .retinat.env (RETINAT_BRIDGE=9333) is back in place for the next boot.
+  NEXT RUN: E8 again, as declared (min_seconds 8 now reaches the eyes); score only if A passes.

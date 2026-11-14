@@ -195,6 +195,12 @@ def _browser_tools() -> list['types.Tool']:
 					'until': {'type': 'string', 'enum': ['bored', 'event', 'time', 'item'], 'default': 'bored'},
 					'detail': _DETAIL,
 					'hold': {'type': 'boolean', 'default': True, 'description': 'Pause when done so nothing plays unseen.'},
+					'min_seconds': {
+						'type': 'number',
+						'default': 1.5,
+						'minimum': 0.5,
+						'description': 'Watch at least this long before an event, boredom or a new item may end the watch.',
+					},
 					'narrate': {
 						'type': 'boolean',
 						'default': False,

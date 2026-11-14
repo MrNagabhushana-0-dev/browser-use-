@@ -55,6 +55,15 @@ def check_arguments(schema: dict[str, Any] | None, arguments: dict[str, Any]) ->
 	missing = [name for name in (schema or {}).get('required', []) if name not in arguments]
 	if missing:
 		raise Refused(f'missing required argument{"s" if len(missing) > 1 else ""}: {", ".join(missing)}')
+	# An argument the tool does not declare is refused too, not dropped: a measured run sent `min_seconds` to a tool
+	# without it 26 times, nothing said so, and the run measured nothing.
+	declared = (schema or {}).get('properties')
+	unknown = [name for name in arguments if name not in declared] if isinstance(declared, dict) else []
+	if unknown:
+		raise Refused(
+			f'unknown argument{"s" if len(unknown) > 1 else ""}: {", ".join(unknown)}. '
+			f'This tool takes: {", ".join(declared) or "no arguments"}'
+		)
 
 
 async def act(step: Awaitable[T]) -> T:

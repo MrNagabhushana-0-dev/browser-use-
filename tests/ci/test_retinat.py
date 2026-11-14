@@ -1689,3 +1689,27 @@ async def test_a_browser_in_use_is_not_closed_as_idle(site, tmp_path, monkeypatc
 		assert server.browser_session is session, 'the browser in use was closed as idle'
 	finally:
 		await server._close_all_sessions()
+
+
+async def test_a_watch_can_be_given_a_minimum_window_and_an_argument_no_tool_takes_is_refused(retinat, site, beeps):
+	"""Found by a measured run that measured nothing: the watcher sent `min_seconds` on 26 eye_watch calls, eye_watch did
+	not take it, and the server dropped it without a word, so every watch still ended at the first cut. A watch takes a
+	minimum window now, and an argument a tool does not declare is refused with the ones it does."""
+	import time
+
+	await _open_started(retinat, site.url_for('/beeps'))
+	started = time.monotonic()
+	early = _text(await _call(retinat, 'eye_watch', {'seconds': 9, 'until': 'event', 'hold': False}))
+	early_s = time.monotonic() - started
+	assert 'stopped: sound changed' in early and early_s < 7, (early_s, early)
+
+	await _call(retinat, 'eye_open', {'url': site.url_for('/beeps')})  # the 12 s clip from its start again
+	started = time.monotonic()
+	held = _text(await _call(retinat, 'eye_watch', {'seconds': 9, 'until': 'event', 'hold': False, 'min_seconds': 8}))
+	held_s = time.monotonic() - started
+	assert held_s >= 8, f'the watch ended after {held_s:.1f}s of its 8 s minimum: {held}'
+
+	refused = await _call(retinat, 'eye_watch', {'seconds': 2, 'min_secs': 6})
+	text = _text(refused)
+	assert refused.is_error and 'min_secs' in text and 'min_seconds' in text, text
+	assert (refused.structured_content or {}).get('effect_state') == 'none', text
