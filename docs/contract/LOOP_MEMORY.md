@@ -681,3 +681,15 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   If A fails, C is not scored. Whether A is inside 2,000-8,600 is reported, not part of the rule.
   .retinat.env (RETINAT_BRIDGE=9333) is in place for the next boot; removed right after E9.
   NEXT RUN: rig up, E9 watcher once, measure, score if A passes, apply the rule, clean up.
+- 2026-11-14 (run 13) CONNECT: 16.7 s, connected, no drop (MEASURED).
+- 2026-11-14 E9 MEASURED (protocol v2b, product commit fcf8ddf, watcher prompt as declared with min_seconds 8 and keyframes 7,
+  normal effort; transcript subagents/agent-a0c50223350c4386c.jsonl; recording
+  /root/.config/browseruse/recordings/retinat-20261114-154725.mp4 (112 MB, local); narration log
+  narration/20261114-154541.jsonl; counter unchanged): 14 calls in 189.3 s, windows of about 12.3 s, film covered 190.1 s,
+  gaps 0, cuts 34/34, evidence erased none reported, no refused call, every sheet 1400x436 (about 800 picture tokens, as
+  predicted: 815), A_unique 7,760/min (E4 10,691: -27%; inside 2,000-8,600; predicted "near 8,000"), new tokens per watch
+  turn about 1,580-1,800, B lower bound 7.8/13.26 s (n=35; E4 3.9/6.92: the declared trade), narrated 14/14 (13 on the next
+  watch, the last by eye_narrate), narration 4.79 s after its result (median), B_narr 12.92/18.9 s (E4 9.32/13.74).
+  The wrapped sheet worked through eye_watch on a moving film (the case no test covered).
+  A passes the rule. C1 and C2: scorer running (the same instructions; labels sha256 checked first). No decision until it
+  reports. CLEAN-UP: rig down, .retinat.env removed.
