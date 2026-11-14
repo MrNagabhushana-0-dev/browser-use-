@@ -36,9 +36,18 @@ def _load_cache(path: Path) -> dict:
 		tools = data.get('tools')
 		if not isinstance(init, dict) or not all(isinstance(v, dict) for v in init.values()):
 			init = {}
-		return {'initialize': init, 'tools': tools if isinstance(tools, dict) else None}
+		lists = data.get('lists')
+		if not isinstance(lists, dict) or not all(isinstance(v, dict) for v in lists.values()):
+			lists = {}
+		return {'initialize': init, 'tools': tools if isinstance(tools, dict) else None, 'lists': lists}
 	except Exception:
-		return {'initialize': {}, 'tools': None}
+		return {'initialize': {}, 'tools': None, 'lists': {}}
+
+
+# Asked by a client right after the handshake, with its own 30 s limit: answered from the cache while the real server
+# starts. Found live: the real server answered them after 32 s, the client had given up, and it dropped the connection
+# on the late answers ("a response for an unknown message ID").
+OTHER_LISTS = ('prompts/list', 'resources/list', 'resources/templates/list')
 
 
 def _key(msg_id) -> tuple:
@@ -128,6 +137,12 @@ class Front:
 						self.store[key] = ('initialize', version if isinstance(version, str) else None)
 				if cached is not None:
 					self._to_client(json.dumps({'jsonrpc': '2.0', 'id': msg['id'], 'result': cached}).encode())
+			elif msg['method'] in OTHER_LISTS and 'cursor' not in params:
+				with self.state_lock:
+					cached = None if self.child_ready else self.cache['lists'].get(msg['method'])
+					(self.swallow if cached is not None else self.store)[key] = ('list', msg['method'])
+				if cached is not None:
+					self._to_client(json.dumps({'jsonrpc': '2.0', 'id': msg['id'], 'result': cached}).encode())
 			elif msg['method'] == 'tools/list' and 'cursor' not in params:
 				with self.state_lock:
 					tools = self.cache['tools']
@@ -140,6 +155,14 @@ class Front:
 						serve = None
 				if serve is not None:
 					self._to_client(json.dumps({'jsonrpc': '2.0', 'id': msg['id'], 'result': serve}).encode())
+		elif isinstance(msg, dict) and msg.get('method') == 'notifications/cancelled':
+			# the client gave up on a request: its late answer would be "a response for an unknown message"
+			gave_up = (msg.get('params') or {}).get('requestId') if isinstance(msg.get('params'), dict) else None
+			if gave_up is not None:
+				with self.state_lock:
+					if _key(gave_up) in self.pending:
+						self.store.pop(_key(gave_up), None)
+						self.swallow.setdefault(_key(gave_up), ('cancelled', None))
 		self._to_child(raw)
 
 	def _close_child(self) -> None:
@@ -191,6 +214,9 @@ class Front:
 				self.child_ready = True
 				if result is not None and kind == 'initialize' and version is not None:
 					self.cache['initialize'][version] = result
+					self._save_cache()
+				elif result is not None and kind == 'list' and version is not None and 'nextCursor' not in result:
+					self.cache['lists'][version] = result
 					self._save_cache()
 				elif result is not None and kind == 'tools' and 'nextCursor' not in result:
 					self.cache['tools'] = result

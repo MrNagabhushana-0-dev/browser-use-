@@ -401,3 +401,35 @@ def test_an_answer_to_what_the_client_asked_before_a_cached_handshake_never_reac
 		assert any(t['name'] == 'eye_network_status' for t in tools['result']['tools'])
 	finally:
 		front.close()
+
+
+def test_the_lists_a_client_asks_for_after_the_handshake_are_answered_from_the_cache_and_a_cancelled_one_never_is(tmp_path):
+	"""Found live on a freshly booted machine: after the cached handshake Claude Code asked for prompts/list and
+	resources/list, the real server answered after 32 s, the client had given up at 30 s, and the late answers ("a
+	response for an unknown message ID") dropped the connection."""
+	first = _FrontProcess(tmp_path)
+	try:
+		first.handshake(timeout=120)
+		first.send({'jsonrpc': '2.0', 'id': 10, 'method': 'prompts/list'})
+		first.send({'jsonrpc': '2.0', 'id': 11, 'method': 'resources/list'})
+		_, prompts = first.response(10, timeout=60)
+		_, resources = first.response(11, timeout=60)
+	finally:
+		first.close()
+
+	front = _FrontProcess(tmp_path, child_prefix='sleep 4; ')
+	try:
+		front.handshake(timeout=2)
+		front.send({'jsonrpc': '2.0', 'id': 10, 'method': 'prompts/list'})
+		front.send({'jsonrpc': '2.0', 'id': 11, 'method': 'resources/list'})
+		prompts_at, cached_prompts = front.response(10, timeout=2)
+		resources_at, cached_resources = front.response(11, timeout=2)
+		assert prompts_at < 2 and resources_at < 2, 'answered before the real server exists'
+		assert cached_prompts['result'] == prompts['result'] and cached_resources['result'] == resources['result']
+		# a request the client gives up on while the real server is still starting: its answer must never arrive
+		front.send({'jsonrpc': '2.0', 'id': 12, 'method': 'resources/templates/list'})
+		front.send({'jsonrpc': '2.0', 'method': 'notifications/cancelled', 'params': {'requestId': 12, 'reason': 'timeout'}})
+		later = front.drain(12)  # the real server starts after 4 s and answers all it was sent
+		assert not [m for m in later if m.get('id') in (10, 11, 12)], later
+	finally:
+		front.close()

@@ -639,3 +639,21 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   (more frames on a longer window) plus a watcher instruction to write one line per frame row of the timeline, so lines per
   film minute stay at E4's level. That is two changes at once against the one-change rule: declare it as such, or split it
   (E9a frames only, E9b lines only) and spend two runs. Decide at declaration.
+- 2026-11-14 (run 11; the 06:42 run did not happen: the session's worker was down and its notice arrived 3 h late with the
+  09:46 one, so the two were done as one run) A SECOND WAY THE FRONT LOST THE CONNECTION, FOUND ON A REAL BOOT AND FIXED.
+  MEASURED from the client log: connected in 3.6 s; the client then asked for prompts/list and resources/list, both timed out
+  at 30 s ("Request timed out": the real server was still starting on the cold machine), and when the real server answered
+  at 32 s the client dropped both connections ("Received a response for an unknown message ID") and reconnected.
+  FIX: the front answers prompts/list, resources/list and resources/templates/list from its cache while the real server
+  starts (their real answers refresh the cache and are not passed on twice), and an answer to a request the client cancelled
+  (notifications/cancelled) is never passed on. Regression test (a server 4 s late; the lists answered in under 2 s from the
+  cache, a cancelled request never answered): fails on the old front, passes on the new; tests/ci/test_mcp_lifecycle.py
+  13 passed. The cache was pre-filled with both servers' prompts and resources lists (both empty lists today).
+  NOT MEASURED: the fix on a real boot. STILL OPEN: a first tool CALL made while the real server needs more than the
+  client's limit would be late in the same way; the cancellation rule covers it only if the client sends a cancellation.
+  E9 was not declared this run (one slice). No .retinat.env is in place.
+  NEXT RUN: read the connect log (no drop expected); then declare E9. Thought so far, to be checked against the code before
+  declaring: E5 kept frames per second by putting more frames on one sheet, which makes each frame smaller, and its C1 fell
+  to 0.79; E8 kept the frame size and halved the frames, and its C1 held at 0.937. So the candidate is E8's 8 s window with
+  frames per film second AND frame size both kept (a taller sheet): picture tokens per film second stay as in E4, and the
+  saving is only the per-call overhead (about 870 of E4's 1,300 a call), roughly a quarter off A if C2 holds.
