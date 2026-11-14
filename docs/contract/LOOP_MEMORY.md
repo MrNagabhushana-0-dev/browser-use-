@@ -744,3 +744,32 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   Narration lines: 91 (E9 84; expected "100 or more": NOT reached, the instruction moved the count by 7).
   A passes the rule. C1 and C2: scorer running (the same instructions; labels sha256 checked first). No decision until it
   reports. CLEAN-UP: rig down, .retinat.env removed.
+- 2026-11-14 E10 SCORED (MEASURED + VERIFIED, scorer abb44b80d4c13f2ee, the same instructions, labels sha256 checked first;
+  offset 3.321 s, ALIGNED 34/37, median residual 0.029 s; A, B, gaps, cuts recomputed by the scorer's own code and
+  identical). C1 86/91 = 0.945 (five wrong lines: a push-in read as still, a butterfly called a bird, open eyes called shut,
+  a hand at the chin 5 s early, a nut called a stick). C2 strict 58/143 missed = 40.6% (the scorer's JSON gives "value
+  0.594", which is the hit rate 85/143; missed is 58, the same count as E9); lenient 0/143. By kind, strict missed: cuts 1 of
+  37, actions 48 of 79, appear 7 of 22, disappear 2 of 5.
+  E10 DECISION BY THE DECLARED RULE: NOT KEPT. A strictly lower: yes (7,791, in band). Gaps 0, all narrated, cuts not worse,
+  C1 within 0.02: yes. C2 strict not above 31.5%: NO (40.6%). Asking for a line per frame added 7 lines and no coverage, and
+  brought the first invented details since E5.
+- 2026-11-14 M3 ON THIS FILM, WHERE IT STANDS AFTER E7-E10 (four declared candidates, none kept; every number above is
+  MEASURED, the reading is INFERRED):
+    E4 (kept, baseline)   10,691/min  25 calls  C2 strict 31.5%
+    E7 low-effort watcher 11,252/min  29 calls  not scored (A failed)
+    E8 8 s window          6,222/min  15 calls  50.3%
+    E9 + 7 full-size frames 7,760/min 14 calls  40.6%
+    E10 + a line per frame  7,791/min 14 calls  40.6%
+  The band (2,000-8,600) is reachable only with windows of about 12 s, and at that length about 40% of labelled events go
+  undescribed against 31.5%, cuts excepted (they are covered in every run). More frames helped once (50 -> 41); more words
+  did not. As declared, the long-window route is closed on this film. The honest summary for the owner: on a film with a cut
+  every 5-6 s, this eye costs about 10,700 tokens a minute to describe two thirds of what happens, or about 7,800 to
+  describe three fifths, and it has not been shown to do better. Caveats that cut both ways: one film, one run per
+  configuration, a different scorer each time, and a strict-C2 judgement range the close-out put at 23-47%.
+  Capabilities added on the way and kept (defaults unchanged): eye_watch min_seconds, eye_watch keyframes with a wrapped
+  sheet, refusal of undeclared arguments, the handshake front and its three fixes.
+  NOT TRIED, for the owner to choose: (1) the per-call overhead at E4's window length (about 870 of 1,300 tokens a call are
+  not picture: result text about 205, the watcher's own output about 370, about 300 unplaced); (2) a second film with
+  fewer cuts, where the same eye may sit in the band without any change (the metric is per minute, and this film is dense);
+  (3) scoring E4, E9 and E10 by ONE scorer in one sitting, to learn whether 31.5 against 40.6 is a difference at all.
+  NEXT RUN: item c (the two cobrowse tests that fail on main), unless the owner says otherwise. Item b is paused, not done.
