@@ -730,3 +730,17 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   If E10 fails on C2, the long-window route is closed on this film (declared in the entry above).
   .retinat.env (RETINAT_BRIDGE=9333) is in place for the next boot; removed right after E10.
 - 2026-11-14 CORRECTION to the run 14 entry's connect line, which named no number: the eye server connected in 3.9 s on that boot, with no drop or timeout in the client log (MEASURED).
+- 2026-11-14 (run 15) A BOOT WHERE THE BRIDGE SWITCH WAS NOT READ (MEASURED): the eye server started at 21:42:42 and
+  .retinat.env carries the time 21:43:48, so the file was put back in the checkout after the server had started, and the
+  server ran its own browser (eye_now: about:blank). Not seen on the earlier boots. Remedy used: the real server process was
+  stopped by PID, the front exited with it, the client logged "connection closed (cleanly) ... cleared for reconnection" and
+  reconnected on the next call, now in bridge mode. Why the file came late is UNEXPLAINED (the worker restarted during the
+  previous run). Connect on this boot: the first eye_now took 40 s (the real server still starting behind the front).
+- 2026-11-14 E10 MEASURED (protocol v2b, product commit 588ef36, watcher prompt as declared; transcript
+  subagents/agent-afb9885833bfbd827.jsonl; recording /root/.config/browseruse/recordings/retinat-20261114-214717.mp4 (local);
+  narration log narration/20261114-214655.jsonl; counter unchanged): 14 calls in 189.7 s, film covered 190.1 s, gaps 0, cuts
+  34/34, no refused call, A_unique 7,791/min (E4 10,691: -27%; E9 7,760; inside 2,000-8,600), B lower bound 7.3/12.8 s
+  (n=35), narrated 14/14, narration 4.72 s after its result (median), B_narr 13.0/17.87 s, mean output 360 tokens a turn.
+  Narration lines: 91 (E9 84; expected "100 or more": NOT reached, the instruction moved the count by 7).
+  A passes the rule. C1 and C2: scorer running (the same instructions; labels sha256 checked first). No decision until it
+  reports. CLEAN-UP: rig down, .retinat.env removed.
