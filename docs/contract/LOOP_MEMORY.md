@@ -693,3 +693,25 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   The wrapped sheet worked through eye_watch on a moving film (the case no test covered).
   A passes the rule. C1 and C2: scorer running (the same instructions; labels sha256 checked first). No decision until it
   reports. CLEAN-UP: rig down, .retinat.env removed.
+- 2026-11-14 E9 SCORED (MEASURED + VERIFIED, scorer a35e17a938a91d6a5, the same instructions, labels sha256 checked first;
+  offset 6.067 s, ALIGNED 34/36, median residual 0.029 s; A, B, gaps and cuts recomputed by the scorer's own code and
+  identical; B_narr not recomputed by it). C1 84/84 = 1.0 (the scorer's own caution: the lines are coarse, shot-level, and
+  five borderline ones were kept as true, e.g. "red berries" for apples; treat 1.0 as "no false line found", not as better
+  than E4's 0.941). C2 strict 58/143 missed = 40.6% (E4 31.5%, E8 50.3%); 58/145 = 40.0% with two unlabelled, narrated events
+  added; lenient 0/143. By kind, strict: cuts 1 of 37 missed, actions 46 of 79, appear 9 of 22, disappear 2 of 5.
+  E9 DECISION BY THE DECLARED RULE: NOT KEPT. A strictly lower: yes (7,760, in band). Gaps 0, all narrated, cuts not worse,
+  C1 not worse: yes. C2 strict not above 31.5%: NO (40.6%). CAUTION ON THE COMPARISON, said once and not used to bend the
+  rule: strict C2 is a judgement, each run had a different scorer, and the M2 close-out already put the judgement range at
+  23-47%; 40.6 against 31.5 is inside that range. The rule was declared knowing this, and it fails.
+  What stays in the product: eye_watch's `keyframes` and the wrapped sheet (a capability; defaults unchanged). The guidance
+  "min_seconds 8, keyframes 7" is not adopted.
+  WHAT FOUR RUNS SAY TOGETHER (INFERRED across runs with different scorers; a trend, not a proof): strict misses fall as
+  the watcher's narration lines over the film rise, when frames are not shrunk: E8 63 lines 50.3%, E9 84 lines 40.6%, E4
+  about 100 lines 31.5% (E5: 80 lines but frames shrunk to half size, 49.7%, C1 0.79). Restoring the frames (E8 -> E9)
+  bought 21 lines and 10 points. Cuts are covered everywhere (1-3 of 37 missed); what is missed is actions inside a shot.
+  The watcher wrote 6 lines a result for 7 frames in E9: under one line a frame.
+  NEXT (to declare before measuring): E10 = E9 with ONE change, in the watcher's instruction only: at least one line for
+  every frame on the sheet, and a line for each change between neighbouring frames. Output is cheap (about 30 tokens a
+  line): 20 more lines over the film is about +200 tokens/min, so A should stay near 8,000. If E10 also fails on C2, the
+  long-window route is closed on this film and the remaining lever is the per-call overhead itself (the about 870 tokens a
+  call that are not picture), at E4's window length.
