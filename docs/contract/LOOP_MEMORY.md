@@ -835,3 +835,16 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   CLEAN-UP: .retinat.env removed (this boot's server still has the desktop switches and no display; the next boot is clean).
   NEXT RUN: redo the cut part of item d in one go (Save, read back, the two refusals, a recording with record_display), then
   the fix for the covering window, test-first.
+- 2026-11-15 (run 19) ITEM d DONE AS A FIRST HANDS-ON, RECORDED (MEASURED by my own tool calls, one run, no verifier; notes and
+  the recording are in docs/hands-on/2026-11-15/: desktop-eye.mp4, about 200 KB, 1280x900 at 8 fps). On Xvfb :97 with a notes
+  app granted in full and an xterm granted at the click tier: eye_desktop_look (one image, about 875 tokens, both windows
+  readable), click on the text box, type 33 characters, click Save, click the xterm (allowed), type into the xterm (REFUSED:
+  click tier, effect none), look again (the text box reads what was typed). Seven calls for the whole task.
+  NOT CHECKED: the Save click's result line (below the visible part of the window); a click on an app that was not granted.
+  OPEN DEFECT from run 18, not fixed: the eye server's own browser, on the same display, covers the screen and is masked as
+  "not granted", so a desktop look shows nothing after any browser tool has been used.
+  The eye server on this boot still had the desktop switches from run 18's .retinat.env (read at boot before the file was
+  removed); no .retinat.env exists now.
+  NEXT RUN: the covering-window defect, test-first (tests/ci/test_desktop_eyes.py): with desktop eyes on, the eye's own
+  browser must not hide the person's screen from the look. Decide between starting it headless and leaving its window out
+  of the mask; read how the mask is built first.
