@@ -794,3 +794,22 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   bisecting what attach() and NavigateToUrlEvent set up (auto-attach to targets, download behaviour, injected scripts,
   the watchdogs) with the helper's 5-of-5 reproducer; or read the crash dump. If that takes more than one more run, record
   it as a Chromium shutdown crash with a reproducer and move to item d.
+- 2026-11-15 (run 17) CONNECT: 15.3 s, connected, no drop (MEASURED).
+- 2026-11-15 ITEM c: THE CRASH HAS NO BROWSER-USE CODE IN IT (a helper's bisection, probe11.py and probe12.py in the session
+  scratchpad under cob/, 5 runs a variant; MEASURED by it, not re-run by me). Smallest trigger: attach to the tab the browser
+  was started with, Page.navigate it (to the login page or to about:blank), then Browser.close: SIGSEGV in 3 to 5 of 5 runs
+  with a bare CDP client and nothing else. The same page opened in a NEW tab (Target.createTarget), then Browser.close: clean
+  exit 5 of 5; no navigation: clean 5 of 5. Whether a browser-use session is attached, killed or stopped first makes no
+  difference (crash 4-5 of 5 each way; its kill() does not send Browser.close). Enabling Page/Network or setting the download
+  behaviour on top did not matter beyond noise at n=5; closing the first tab before Browser.close still crashed 2 of 5; waits
+  did not help. Fetch.enable was not tested (the probe hung). No crash dump or Chromium log line names the cause.
+  READING (INFERRED): a shutdown crash in this Chromium build (pw chromium-1194, headless=new, --no-sandbox in a container)
+  after the first tab has been navigated over CDP; the cookie loss follows from the crash, and the product's own close path
+  is already the graceful one. Whether a person's installed Chrome does the same is UNKNOWN and cannot be tested here.
+  DECISION, as declared last run: recorded with a reproducer, not fixed. The test stays as it is (it states the product's
+  promise; it is red when this build crashes, and that is true). An idea NOT tested and not applied: have the session open
+  its own tab instead of navigating the first one; it rests on five raw-CDP runs and would change how every cobrowse
+  session starts, so it needs its own test-first slice and the owner's Chrome to mean anything.
+  test_the_full_handover_round_trip: not investigated; it passed in the helper's one full-file run on 2026-11-15 and timed
+  out on 2026-11-03: intermittent, cause unknown.
+  NEXT RUN: item d, desktop eyes and control on a virtual display (first hands-on check outside the browser, recorded).
