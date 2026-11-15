@@ -813,3 +813,25 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   test_the_full_handover_round_trip: not investigated; it passed in the helper's one full-file run on 2026-11-15 and timed
   out on 2026-11-03: intermittent, cause unknown.
   NEXT RUN: item d, desktop eyes and control on a virtual display (first hands-on check outside the browser, recorded).
+- 2026-11-15 (run 18, CUT SHORT: the session's worker restarted mid-run and the machine rebooted, taking the virtual desktop
+  with it) CONNECT: 3.9 s, no drop (MEASURED).
+  ITEM d, FIRST HANDS-ON OF THE DESKTOP EYE, PARTIAL (MEASURED by my own calls; not recorded on video, no verifier).
+  Setup: Xvfb :97 at 1280x900, a "notes" app (a Chromium --app window with WM_CLASS EyeNotes showing a local page with a text
+  box and a Save button) and an xterm; the eye server restarted with DISPLAY=:97, BROWSER_USE_DESKTOP_CONTROL=1,
+  BROWSER_USE_DESKTOP_EYES=1 and BROWSER_USE_DESKTOP_APPS="eyenotes,xterm:click" (through .retinat.env, stopping the real
+  server by PID; the client reconnected and listed the 11 eye_desktop_* tools).
+  What worked: eye_desktop_status ("Screen 1280x900 on :97 ... Granted apps: eyenotes (full), xterm (click)");
+  eye_desktop_look (one 960x675 image, about 875 tokens, the notes app and the xterm both readable);
+  eye_desktop_click at the text box with expect="Notes" ("Clicked (220, 200) in eyenotes ... Keyboard focus: eyenotes");
+  eye_desktop_type of 33 characters with expect="Notes" ("Typed 33 characters in eyenotes; the screen changed around
+  (8,130)-(311,152)").
+  NOT DONE (the run was cut): pressing Save and looking again to read back what was typed; typing into the xterm (should be
+  refused: click tier); a click on a window that was not granted; a recording.
+  FOUND: with the desktop eye on the same display as the eye server's own browser, that browser opens a window over the
+  whole screen, and since it is not a granted app the look shows a grey screen labelled "hidden: chromium-browser (not
+  granted)". The first look saw nothing until I stopped that browser by PID. On a person's desktop the eye's own browser
+  would cover their screen the same way whenever a browser tool is used first. NOT FIXED: to decide (start that browser
+  headless or minimised when desktop eyes are on, or leave its window out of the mask and say so).
+  CLEAN-UP: .retinat.env removed (this boot's server still has the desktop switches and no display; the next boot is clean).
+  NEXT RUN: redo the cut part of item d in one go (Save, read back, the two refusals, a recording with record_display), then
+  the fix for the covering window, test-first.
