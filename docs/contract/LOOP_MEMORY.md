@@ -773,3 +773,24 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   fewer cuts, where the same eye may sit in the band without any change (the metric is per minute, and this film is dense);
   (3) scoring E4, E9 and E10 by ONE scorer in one sitting, to learn whether 31.5 against 40.6 is a difference at all.
   NEXT RUN: item c (the two cobrowse tests that fail on main), unless the owner says otherwise. Item b is paused, not done.
+- 2026-11-15 (run 16) CONNECT: 10.1 s, connected, no drop (MEASURED). No .retinat.env.
+- 2026-11-15 ITEM c, FIRST TEST: ROOT CAUSE NARROWED, NOT FIXED (a helper's diagnosis with its probe scripts in the session
+  scratchpad under cob/; MEASURED by it, not re-run by me). test_the_signed_in_profile_survives_closing_the_browser fails
+  because the person's browser dies of SIGSEGV (return code -11) about 0.05 s after CDP Browser.close, so the sign-in cookie
+  is never written to disk. Ruled out with evidence: the cookie is persistent (max-age=86400, is_persistent=1 in the Cookies
+  database), the profile directory is the same on both launches, and the stored value decrypts on relaunch (a profile left by
+  a clean exit shows "signed in"). HumanBrowser.close() is already graceful (Browser.close, wait 10 s, then SIGTERM, SIGKILL).
+  What triggers the crash: the full test flow crashed in 7 of 8 runs; attach plus one browser-use NavigateToUrlEvent, no
+  click, crashed 5 of 5; attach with no navigation exited cleanly 5 of 5; a raw CDP Target.createTarget to the same page
+  exited cleanly 5 of 5; raw CDP Storage.setCookies then Browser.close kept the cookie every time. So the crash follows a
+  page navigated through a browser-use session, and it is intermittent at the test level (the test passes in about 2.4 s
+  when the browser happens to exit cleanly: CORRECTION of my earlier "fails every time"; on 2026-11-03 it failed in each of
+  the few runs I made). SIGTERM in place of Browser.close exits cleanly but loses the cookie.
+  Did not help: closing pages first, navigating to about:blank first, sleeping before the close.
+  UNKNOWN: what in a browser-use session makes this Chromium build (pw chromium-1194) crash at shutdown; no crash dump was
+  read. The other test (test_the_full_handover_round_trip) passed in the helper's one full-file run (6 passed, 1 failed).
+  Nothing in the repo was changed.
+  NEXT RUN (item c continued, one bounded step): find which thing the browser-use session does before the crash, by
+  bisecting what attach() and NavigateToUrlEvent set up (auto-attach to targets, download behaviour, injected scripts,
+  the watchdogs) with the helper's 5-of-5 reproducer; or read the crash dump. If that takes more than one more run, record
+  it as a Chromium shutdown crash with a reproducer and move to item d.
