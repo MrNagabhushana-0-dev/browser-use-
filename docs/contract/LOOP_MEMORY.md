@@ -864,3 +864,14 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   already run its browser headless).
   NEXT RUN: item e (hands-on use of the eye tools on public pages and open-licence video), or, if the owner has answered,
   whichever of the three untried M3 routes he picks.
+- 2026-11-16 (run 21; the 03:42, 06:45, 09:42, 12:44 and 15:42 runs did not happen: the worker restarted again and again and
+  their notices came together at 18:43; done as one run. In the last 39 hours 9 scheduled runs were lost this way and 4
+  ran. Cause outside this repo, UNKNOWN; this session is very long, which may be why) CONNECT: 6.1 s, no drop (MEASURED;
+  the client logs show the server also connected at 03:42, 06:45, 09:42, 12:44 and 15:42 with nobody to use it).
+  ITEM e, A FIRST SMALL HANDS-ON ON A PUBLIC PAGE (MEASURED, my own two calls, no verifier): eye_open
+  https://en.wikipedia.org/wiki/Big_Buck_Bunny ("Opened ... Wikipedia", no wall); eye_find "Running time": one match at
+  (1170, 813), in view, with a 2.9x crop that reads "Running time 10 minutes", about 234 tokens for the answer. No look, no
+  page text dump, no screenshot of the page was needed to read one fact. Nothing wrong found in two calls; too little to
+  call the page tools checked.
+  NEXT RUN: item e continued with an open-licence video on a public page (a Wikimedia Commons file page): eye_open, play,
+  two watches, a recall; note anything the eyes get wrong.
