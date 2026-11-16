@@ -875,3 +875,21 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   call the page tools checked.
   NEXT RUN: item e continued with an open-licence video on a public page (a Wikimedia Commons file page): eye_open, play,
   two watches, a recall; note anything the eyes get wrong.
+- 2026-11-16 (run 22) CONNECT: connected, tools answered (connect time not read this run).
+  ITEM e, AN OPEN-LICENCE VIDEO ON A PUBLIC PAGE (MEASURED, my own five calls, no verifier; not recorded):
+  commons.wikimedia.org/wiki/File:Big_Buck_Bunny_small.ogv. eye_open (no wall); eye_look (the page as drawn, about 375
+  tokens, the player's play button visible); eye_click at the button from the look's pixels times the factor it gives
+  ("Clicked (596, 244) on button "Play video""); eye_watch 10 s until=time: "video 240x134, 9:56.5 long, watched 12.6s,
+  covering 0.9s-13.5s", a cut reported at 11.9 s, four keyframes, about 566 tokens; eye_recall 5-8 s: two stored frames at
+  6.4 s and 7.4 s, about 474 tokens, no replay. The picture came from the compositor because the video is cross-origin
+  without CORS, and the result says so, and says its sound cannot be read.
+  FOUND, TWO THINGS:
+  (1) A TOKEN WASTE: the video is 240x134, and the sheet drew its frames 200 px high and the recall 320 px high: enlarged
+  1.5 and 2.4 times, adding no information. The sheet was 1292x200 (about 376 picture tokens) where the frames at their own
+  size would be about 866x134 (about 155): INFERRED from the sizes, about 59% of the picture tokens of a watch of a small
+  video spent on enlargement; the recall likewise (444 for two frames).
+  (2) A LIMIT, stated by the tool itself: no sound from a cross-origin video without CORS. On a film page like this one
+  that means no speech, music or sound-change events. Not a defect of this run; a gap in what the eye hears.
+  The first 0.9 s of the film played before the watch began and is not in "covering"; the tool says 0.9 s, not 0.
+  NEXT RUN: fix (1) test-first: a frame is never drawn larger than it was captured (sheet and recall), with a test that a
+  small video's sheet is no taller than the video. Then measure the same watch again on this page.
