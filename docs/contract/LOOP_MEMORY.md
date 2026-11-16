@@ -848,3 +848,19 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   NEXT RUN: the covering-window defect, test-first (tests/ci/test_desktop_eyes.py): with desktop eyes on, the eye's own
   browser must not hide the person's screen from the look. Decide between starting it headless and leaving its window out
   of the mask; read how the mask is built first.
+- 2026-11-16 (run 20; the 12:42, 15:42, 18:42 and 21:42 runs of 2026-11-15 did not happen: the session's worker kept
+  restarting and their notices arrived together with the 00:46 one, so they were done as one run) CONNECT: 17.4 s, no drop
+  (MEASURED).
+  THE COVERING-WINDOW DEFECT FIXED, TEST-FIRST: with desktop eyes or control on, the eye server starts its own Chromium
+  headless, so it has no window on the person's screen for the look to mask; an explicit BROWSER_USE_HEADLESS keeps the
+  person's choice; with desktop eyes off nothing changes (browser_use/retinat/server.py, _start_session). The mask itself
+  is untouched: windows of apps the person did not grant stay hidden, other Chromium windows included.
+  New test test_the_eyes_own_browser_does_not_cover_the_desktop_look (real Xvfb, a granted app, eye_open on a local page,
+  then eye_desktop_look): before the fix the look was "mostly dark grey" and the pixel over the granted app was the mask
+  colour (58,58,58); after, the app's own colour (238,238,255). tests/ci/test_desktop_eyes.py + test_desktop_control.py:
+  17 passed, re-run by me. In the helper's first full run test_the_ai_asks_on_screen_and_only_the_person_can_answer failed
+  once and passed on its re-runs and in mine: intermittent, not investigated.
+  NOT CHECKED: the eyes' video and sound features in this headless-with-desktop mode beyond eye_open (the server's own tests
+  already run its browser headless).
+  NEXT RUN: item e (hands-on use of the eye tools on public pages and open-licence video), or, if the owner has answered,
+  whichever of the three untried M3 routes he picks.

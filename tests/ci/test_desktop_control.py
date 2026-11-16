@@ -483,3 +483,41 @@ def test_a_window_that_closes_while_it_is_read_is_skipped_not_fatal(screen):
 	done = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=60)
 	assert done.returncode == 0, done.stderr[-800:]
 	assert 'gone None' in done.stdout and 'listed True' in done.stdout, done.stdout + done.stderr[-400:]
+
+
+async def test_the_eyes_own_browser_does_not_cover_the_desktop_look(apps, screen, pages, monkeypatch):
+	"""The server's own Chromium is not a granted app: were it a full-screen headful window, the look would be one grey
+	'hidden: chromium-browser' rectangle. With desktop eyes on it runs without a window of its own."""
+	from base64 import b64decode
+	from io import BytesIO
+
+	import mcp.types as types
+	from PIL import Image
+
+	from browser_use.retinat import RetinatServer
+
+	monkeypatch.setenv('DISPLAY', screen)
+	monkeypatch.setenv('BROWSER_USE_DESKTOP_EYES', '1')
+	monkeypatch.setenv('BROWSER_USE_DESKTOP_CONTROL', '1')
+	monkeypatch.setenv('BROWSER_USE_DESKTOP_APPS', 'testnotes')
+	server = RetinatServer()
+
+	async def call(name: str, arguments: dict) -> types.CallToolResult:
+		handler = server.server.get_request_handler('tools/call')
+		assert handler is not None
+		result = await handler.handler(None, types.CallToolRequestParams(name=name, arguments=arguments))  # type: ignore[arg-type]
+		assert isinstance(result, types.CallToolResult)
+		return result
+
+	try:
+		opened = await call('eye_open', {'url': pages.url_for('/web')})
+		assert not opened.is_error, opened
+		looked = await call('eye_desktop_look', {})
+		assert not looked.is_error, looked
+		image = next(b for b in looked.content if isinstance(b, types.ImageContent))
+		with Image.open(BytesIO(b64decode(image.data))) as img:
+			shot = img.convert('RGB')
+		x, y = shot.width * 500 // 1280, shot.height * 300 // 900
+		assert _close(shot.getpixel((x, y)), (238, 238, 255)), (looked.content[0].text, 'the granted app is still in the look')
+	finally:
+		await server._close_all_sessions()

@@ -368,7 +368,11 @@ class RetinatServer(BrowserUseServer):
 			elif self.cdp_url:
 				await self._init_browser_session(allowed_domains=None, cdp_url=self.cdp_url, start_timeout=START_TIMEOUT_S)
 			else:
-				await self._init_browser_session(start_timeout=START_TIMEOUT_S)
+				# With desktop eyes on, the server's own Chromium must not cover the screen the eyes look at (it is no
+				# granted app, so the look would mask it, and with it everything under it): run it without a window.
+				# (the config's headless is False by default, so only an explicit BROWSER_USE_HEADLESS keeps a window)
+				own = {'headless': True} if _desktop_allowed() and 'BROWSER_USE_HEADLESS' not in os.environ else {}
+				await self._init_browser_session(start_timeout=START_TIMEOUT_S, **own)
 
 	@staticmethod
 	def _content(percept) -> list['types.ContentBlock']:
