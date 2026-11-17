@@ -108,6 +108,11 @@ def media(tmp_path_factory):
 		],
 		str(root / 'speech.webm'),
 	)
+	_run(
+		*['-f', 'lavfi', '-i', 'testsrc2=s=240x134:r=30:d=4'],
+		*['-c:v', 'libvpx-vp9', '-b:v', '100k', '-deadline', 'realtime', '-cpu-used', '8', '-pix_fmt', 'yuv420p'],
+		str(root / 'small.webm'),
+	)
 	# Streaming players keep one SourceBuffer per content type, so the stream is served as separate tracks.
 	for name in ('b', 'c'):
 		for kind in ('a', 'v'):
@@ -670,6 +675,28 @@ async def test_keyframes_are_the_videos_own_pixels_not_a_screenshot(eyes, sessio
 	blues = [c for c in centre if c[2] > 180 and c[0] < 60]
 	assert reds and blues, f'the red and blue shots should both be on the sheet: {centre}'
 	assert p.image and p.image_size and p.image_tokens == estimate_image_tokens(*p.image_size)
+
+
+# A 240x134 film in a 480x400 box: the player letterboxes it (object-fit: contain), the bars are the box's.
+SMALL = '<!doctype html><body style="margin:0;background:#000"><video src="{src}" autoplay muted playsinline style="width:480px;height:400px;object-fit:contain;display:block"></video></body>'
+
+
+async def test_a_keyframe_is_no_wider_than_the_video_and_is_the_picture_not_the_box(eyes, session, site, elsewhere):
+	"""Found on Wikimedia Commons: a 240x134 film came back as 320 px tiles with black bars, enlarged for nothing."""
+	site.expect_request('/small').respond_with_data(SMALL.format(src='/small.webm'), content_type='text/html')
+	site.expect_request('/small-cross').respond_with_data(
+		SMALL.format(src=elsewhere.url_for('/small.webm')), content_type='text/html'
+	)
+	for path, tainted in (('/small', False), ('/small-cross', True)):
+		await _open(eyes, session, site.url_for(path))
+		p = await eyes.watch(seconds=3.0, until='time', detail='glance')
+		item = p.items[0]
+		assert item.tainted == tainted, p.text
+		images = [Image.open(io.BytesIO(k.jpeg)) for k in item.keyframes if k.jpeg]
+		assert images, p.text
+		for img in images:
+			assert img.width <= 240, (path, img.size)
+			assert _near(img.width / img.height, 240 / 134, 0.06), (path, img.size)
 
 
 async def test_the_page_cannot_see_the_retina(eyes, session, site):

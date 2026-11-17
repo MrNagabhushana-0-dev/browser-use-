@@ -221,6 +221,7 @@
 		paused: v.paused,
 		muted: v.muted || v.volume === 0,
 		rect: visible(v).rect,
+		fit: getComputedStyle(v).objectFit || 'fill',
 		text: nearbyText(v),
 		name: nameOf(v),
 		// A video that failed to load (a format this browser cannot decode, a dead source): the browser's own code and

@@ -380,6 +380,24 @@ class Retina:
 				reader.cancel()
 				await asyncio.gather(reader, return_exceptions=True)
 
+	def _compositor_target(self, rect: 'Sequence[float]') -> tuple[list[float], float]:
+		"""The rectangle to cut and the widest keyframe to keep. A keyframe is no wider than the film itself (enlarging
+		a small video is tokens for nothing), and for such a film the cut is the picture, not the player's box: with
+		object-fit letterboxing the bars are the box's, so the picture is worked out from the film's size."""
+		thumb_width = float(self.options.get('thumbWidth') or 320)
+		vw, vh = float(self.attended.get('w') or 0), float(self.attended.get('h') or 0)
+		out = [float(v) for v in rect]
+		if not 0 < vw < thumb_width or vh <= 0:
+			return out, thumb_width
+		if self.attended.get('fit') in ('contain', 'scale-down'):
+			x, y, w, h = out
+			k = min(w / vw, h / vh)
+			if self.attended.get('fit') == 'scale-down':
+				k = min(k, 1.0)
+			pw, ph = vw * k, vh * k
+			out = [x + (w - pw) / 2, y + (h - ph) / 2, pw, ph]
+		return out, vw
+
 	async def _compositor_from(
 		self, vid: int, data: bytes, meta: dict, clock: 'Sequence[tuple[float, float]]' = ()
 	) -> FrameSample | None:
@@ -395,6 +413,7 @@ class Retina:
 		rect = self.attended.get('rect') or []
 		if len(rect) != 4 or rect[2] < 8 or rect[3] < 8:
 			return None
+		rect, thumb_width = self._compositor_target(rect)
 		with Image.open(io.BytesIO(data)) as img:
 			css_w = float(meta.get('deviceWidth') or img.width)
 			css_h = float(meta.get('deviceHeight') or img.height)
@@ -406,9 +425,8 @@ class Retina:
 			off = float(meta.get('offsetTop') or 0.0)
 			box = (round(left * px), round((top + off) * px), round(right * px), round((bottom + off) * px))
 			part = img.convert('RGB').crop(box)
-		thumb_width = int(self.options.get('thumbWidth') or 320)
 		if part.width > thumb_width:
-			part = part.resize((thumb_width, max(1, round(part.height * thumb_width / part.width))), Image.Resampling.BOX)
+			part = part.resize((int(thumb_width), max(1, round(part.height * thumb_width / part.width))), Image.Resampling.BOX)
 		luma = part.convert('L').resize((16, 16), Image.Resampling.BOX).tobytes()
 		colours = part.resize((4, 4), Image.Resampling.BOX).tobytes()
 		mean = part.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
@@ -440,6 +458,7 @@ class Retina:
 		rect = self.attended.get('rect') or []
 		if len(rect) != 4 or rect[2] < 8 or rect[3] < 8:
 			return None
+		rect, thumb_width = self._compositor_target(rect)
 		send = self._cdp.cdp_client.send
 		metrics = await send.Page.getLayoutMetrics(session_id=self._session_id)
 		vp = metrics['cssLayoutViewport']
@@ -448,7 +467,6 @@ class Retina:
 		height = min(float(rect[1] + rect[3]), float(vp['clientHeight'])) - top
 		if width < 8 or height < 8:
 			return None  # scrolled out of view
-		thumb_width = float(self.options.get('thumbWidth') or 320)
 		clip = {
 			'x': vp['pageX'] + left,
 			'y': vp['pageY'] + top,
