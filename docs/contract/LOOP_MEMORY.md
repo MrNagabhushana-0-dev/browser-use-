@@ -902,3 +902,16 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   1292x200, INFERRED from the sizes). The live server in this session still runs the code it loaded at boot.
   Videos 200 px high or more at glance are unaffected, so E4 and the film runs (480 px film) do not change.
   NEXT RUN: repeat run 22's watch and recall on the Commons page with the new code and log the two token figures.
+- 2026-11-17 (run 24) THE ENLARGEMENT FIX MEASURED ON THE PAGE: NO CHANGE (MEASURED, my own calls on the Commons page with
+  the server on commit 0eec08b, started this boot): the same 10 s watch of the 240x134 video returned "sheet 1292x200 ~376",
+  about 572 tokens, exactly as before the fix (566). The picture shows why: each tile carries black bars above and below the
+  film, so the frame the eyes keep is not the 240x134 video but a 320 px wide capture of the player as drawn.
+  MY DIAGNOSIS IN RUN 22 WAS INCOMPLETE: the enlargement happens at capture (the retina keeps keyframes 320 px wide whatever
+  the video's own size: keyframe_width=320 in browser_use/eyes/retina.py), not on the sheet. Run 23's change is correct for
+  what it says (a kept frame is not drawn larger than it is) and its tests pass, but it does not touch this case, and the
+  saving I expected (about 155 picture tokens against 376) did not happen. Not reverted: it is right on its own terms and
+  changes nothing measured.
+  The watch itself: covering 0.1s-12.6s, a fade at 1.4 s and a cut at 12.0 s reported, sound unreadable (cross-origin).
+  NEXT RUN: fix it where it happens, test-first: a keyframe is captured no wider than the video's own width (the page
+  capture and the compositor capture), and the compositor capture is clipped to the picture, not the player box, if the
+  black bars come from the box. Then measure this same watch a third time.
