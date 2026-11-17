@@ -893,3 +893,12 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   The first 0.9 s of the film played before the watch began and is not in "covering"; the tool says 0.9 s, not 0.
   NEXT RUN: fix (1) test-first: a frame is never drawn larger than it was captured (sheet and recall), with a test that a
   small video's sheet is no taller than the video. Then measure the same watch again on this page.
+- 2026-11-17 (run 23) THE ENLARGEMENT FIXED, TEST-FIRST: on a watch sheet and on a recall strip a frame is never drawn
+  larger than it was captured (browser_use/eyes/percept.py, render_sheet and render_strip); a frame larger than the detail's
+  size is still brought down to it, as before. New test test_a_frame_is_never_drawn_larger_than_it_was_captured: before the
+  fix four 240x134 frames made a sheet 1400x193, after 972x134; a recall strip of them is 134 px high, not 320.
+  TESTS (MEASURED, one full run each): tests/ci/test_eyes.py 101 passed, tests/ci/test_retinat.py 67 passed.
+  EXPECTED SAVING, NOT YET MEASURED ON THE PAGE: about 155 picture tokens for that sheet against about 376 (972x134 against
+  1292x200, INFERRED from the sizes). The live server in this session still runs the code it loaded at boot.
+  Videos 200 px high or more at glance are unaffected, so E4 and the film runs (480 px film) do not change.
+  NEXT RUN: repeat run 22's watch and recall on the Commons page with the new code and log the two token figures.

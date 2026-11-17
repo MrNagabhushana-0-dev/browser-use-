@@ -2407,3 +2407,29 @@ def test_a_sheet_asked_for_wraps_its_frames_onto_rows_instead_of_shrinking_them(
 	)
 	assert few is not None and few_wrapped is not None
 	assert few[0] == few_wrapped[0], 'frames that fit one row are the same sheet wrapped or not'
+
+
+def test_a_frame_is_never_drawn_larger_than_it_was_captured():
+	"""Found on a public page: a 240x134 video's frames were drawn 200 px high on the watch sheet and 320 px high on a
+	recall: enlarged 1.5 and 2.4 times, more picture tokens and nothing more to see. A small frame keeps its size."""
+	from browser_use.eyes.percept import ItemPercept, Keyframe, render_sheet, render_strip
+
+	def jpeg(n: int, size: tuple[int, int]) -> bytes:
+		out = io.BytesIO()
+		Image.new('RGB', size, (40 * n, 200 - 40 * n, 90)).save(out, 'JPEG')
+		return out.getvalue()
+
+	small = [Keyframe(float(n), n, jpeg(n, (240, 134))) for n in range(4)]
+	sheet = render_sheet([ItemPercept(1, 1, {}, [], [], sight.read([]), hearing.listen([]), keyframes=small)], 'glance')
+	assert sheet is not None
+	_, width, height = sheet
+	assert height == 134 and width == 4 * 240 + 3 * 4, f'four frames at their own 240x134: {width}x{height}'
+
+	strip = render_strip([(float(n), jpeg(n, (240, 134))) for n in range(2)])
+	assert strip is not None
+	assert strip[2] == 134, f'a recall strip no taller than the frames: {strip[1]}x{strip[2]}'
+
+	# a frame larger than the sheet's size is still brought down to it, as before
+	big = [Keyframe(float(n), n, jpeg(n, (1280, 720))) for n in range(2)]
+	sheet = render_sheet([ItemPercept(1, 1, {}, [], [], sight.read([]), hearing.listen([]), keyframes=big)], 'glance')
+	assert sheet is not None and sheet[2] == 200, sheet[1:]

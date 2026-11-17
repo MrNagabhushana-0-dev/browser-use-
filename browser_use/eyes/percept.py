@@ -292,11 +292,16 @@ def _label(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, size: int)
 
 def render_strip(frames: list[tuple[float, bytes]], height: int = 320, gap: int = 6) -> tuple[bytes, int, int] | None:
 	"""Frames side by side, each labelled with its media time: what `recall` hands back."""
-	images = []
+	opened = []
 	for t, jpeg in frames:
 		with Image.open(io.BytesIO(jpeg)) as img:
-			w = max(1, round(img.width * height / max(1, img.height)))
-			images.append((t, img.convert('RGB').resize((w, height))))
+			opened.append((t, img.convert('RGB')))
+	# never larger than the frames were captured: enlarging adds picture tokens and nothing to see
+	height = min(height, max((img.height for _, img in opened), default=height))
+	images = []
+	for t, img in opened:
+		w = max(1, round(img.width * height / max(1, img.height)))
+		images.append((t, img.resize((w, height))))
 	if not images:
 		return None
 	width = sum(img.width for _, img in images) + gap * (len(images) - 1)
@@ -340,7 +345,8 @@ def render_sheet(
 		frames = [Image.open(io.BytesIO(k.jpeg)).convert('RGB') for k in item.keyframes if k.jpeg]
 		if not frames and not item.hops:
 			continue
-		h = DETAIL_HEIGHT[detail]
+		# the detail's height, but never larger than the frames were captured (found: a 240x134 video drawn 200 px high)
+		h = min(DETAIL_HEIGHT[detail], max((f.height for f in frames), default=DETAIL_HEIGHT[detail]))
 		tiles = [f.resize((max(1, round(f.width * h / f.height)), h), Image.Resampling.LANCZOS) for f in frames]
 		strip_w = sum(t.width for t in tiles) + GAP * max(0, len(tiles) - 1)
 		# Keep the row within max_width by shrinking the tiles, not by dropping keyframes (or, wrapping, by more rows).
