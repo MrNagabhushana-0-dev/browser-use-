@@ -915,3 +915,22 @@ INFERRED (labelled). Entries are never edited; corrections are new entries.
   NEXT RUN: fix it where it happens, test-first: a keyframe is captured no wider than the video's own width (the page
   capture and the compositor capture), and the compositor capture is clipped to the picture, not the player box, if the
   black bars come from the box. Then measure this same watch a third time.
+- 2026-11-17 (run 25, and the owner's "improve more") THE ENLARGEMENT FIXED AT CAPTURE AND MEASURED ON THE PAGE.
+  CHANGE (test-first): a cross-origin video seen from the compositor is captured no wider than the film itself and, where the
+  player's box letterboxes it (object-fit contain or scale-down), cut to the picture, not the box
+  (browser_use/eyes/retina.py _compositor_target; retina.js reports the video's object-fit). Films 320 px wide or wider are
+  captured as before. The page's own capture path already capped at the film's width, so only the compositor path was wrong.
+  New test (a 240x134 film in a letterboxing box, same-origin and cross-origin): before, the cross-origin keyframe was
+  320x267; after, at most 240 wide with the film's own shape. tests/ci/test_eyes.py: 101 passed, 1 failed in the helper's
+  one full run (test_a_scan_shows_nothing_from_before_it_began; it passes alone with and without the change, and with the
+  related tests in my re-run: 4 passed); intermittent, not investigated.
+  MEASURED ON THE COMMONS PAGE (my own calls, the server restarted onto this code; the same 10 s watch as runs 22 and 24):
+  sheet 972x134, about 175 picture tokens, about 397 tokens for the result; before: sheet 1292x200, about 376 and about 572.
+  Picture tokens down 53%, the whole result down 31%. No black bars on the tiles; a fade at 1.5 s and a cut at 12.0 s
+  reported as before. The token figures are the tool's own estimates, one run each.
+  NOT COVERED: object-fit cover/fill/none and an object-position off centre are not clipped; wide letterboxed videos are
+  still cut at the box (left as they were, on purpose).
+  NEXT, in order (told to the owner): (1) the last known way a cold start can drop the eye tools (a first tool call while
+  the real server is still loading); (2) three everyday page tasks done with the eye tools and with plain browser-use tools
+  on the same pages, tokens and success counted: the comparison that does not exist yet; (3) one scorer for E4, E9 and E10 in
+  one sitting.
